@@ -1,0 +1,16 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next
+/.next/
+/out/
+
+# local environment configuration
+.env*
+!.env.example
+
+# system
+.DS_Store
+*.tsbuildinfo
