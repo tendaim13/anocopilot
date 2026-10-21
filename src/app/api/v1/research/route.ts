@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { runMockResearch } from "@/lib/ano/mock-research";
 import { researchInputSchema } from "@/lib/ano/types";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
-import { persistResearchRun, ResearchRunPersistenceError } from "@/server/persistence/research-run-store";
+import { runResearchForWorkspace } from "@/server/domain/research-service";
+import { ResearchRunPersistenceError } from "@/server/persistence/research-run-store";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +30,9 @@ export async function POST(request: Request) {
 
   try {
     const session = await requireWorkspaceSession();
-    // The research itself remains intentionally mock-only. This path adds only
-    // Ano-owned persistence; no provider, Mercury, or model request can run here.
-    const result = await persistResearchRun(session, parsed.data, runMockResearch(parsed.data), idempotencyKey(request));
+    // The runtime is deliberately simulated. Its policy guard is still applied
+    // before any tool, and no provider, Mercury, or model request can run here.
+    const result = await runResearchForWorkspace(session, parsed.data, idempotencyKey(request));
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof WorkspaceSessionError) {

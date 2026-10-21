@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import type { WorkspaceRuntime } from "@/contracts/ano";
 import type { Candidate, PlanItem, ResearchInput, ResearchResult } from "@/lib/ano/types";
@@ -52,6 +53,7 @@ export function AnoWorkbench() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspaceRuntime, setWorkspaceRuntime] = useState<WorkspaceRuntime | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<{ code?: string; error: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -83,9 +85,15 @@ export function AnoWorkbench() {
   useEffect(() => {
     let cancelled = false;
     fetch("/api/v1/workspace")
-      .then(async (response) => ({ response, payload: (await response.json()) as WorkspaceRuntime | { error: string } }))
+      .then(async (response) => ({ response, payload: (await response.json()) as WorkspaceRuntime | { error: string; code?: string } }))
       .then(({ response, payload }) => {
-        if (!cancelled && response.ok && "workspace" in payload) setWorkspaceRuntime(payload);
+        if (cancelled) return;
+        if (response.ok && "workspace" in payload) {
+          setWorkspaceRuntime(payload);
+          setWorkspaceError(null);
+        } else if ("error" in payload) {
+          setWorkspaceError(payload);
+        }
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
@@ -103,8 +111,9 @@ export function AnoWorkbench() {
 
   const shortlistedCount = Object.values(candidateStates).filter((state) => state === "shortlisted").length;
   const liveWorkspace = workspaceRuntime?.mode === "supabase";
-  const workspaceName = workspaceRuntime?.workspace.name ?? "Nerva Studio — demo";
-  const persistenceLabel = liveWorkspace ? "Workspace persistence" : "Browser demo persistence";
+  const signInRequired = workspaceError?.code === "AUTH_REQUIRED";
+  const workspaceName = workspaceRuntime?.workspace.name ?? (signInRequired ? "Sign in required" : "Nerva Studio — demo");
+  const persistenceLabel = liveWorkspace ? "Workspace persistence" : signInRequired ? "Secure workspace access" : "Browser demo persistence";
 
   function update(field: keyof ResearchInput, value: string | number) {
     setInput((current) => ({ ...current, [field]: value }));
@@ -113,6 +122,11 @@ export function AnoWorkbench() {
   async function runResearch() {
     setError(null);
     setClarification(null);
+
+    if (signInRequired) {
+      setError("Sign in before Ano can create a workspace-scoped research run.");
+      return;
+    }
 
     const missing = [
       ["industry", "industry"],
@@ -148,8 +162,23 @@ export function AnoWorkbench() {
     }
   }
 
-  function setCandidateState(candidateId: string, state: CandidateState) {
+  async function setCandidateState(candidateId: string, state: CandidateState) {
+    const previousState = candidateStates[candidateId];
     setCandidateStates((current) => ({ ...current, [candidateId]: state }));
+
+    if (!liveWorkspace || !result?.run.id) return;
+
+    try {
+      const response = await fetch(`/api/v1/candidates/${encodeURIComponent(candidateId)}/state`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: result.run.id, state }),
+      });
+      if (!response.ok) throw new Error("Ano could not save that workspace state.");
+    } catch {
+      setCandidateStates((current) => ({ ...current, [candidateId]: previousState ?? "review" }));
+      setError("Ano could not save that workspace state. Your change was restored locally.");
+    }
   }
 
   return (
@@ -172,7 +201,7 @@ export function AnoWorkbench() {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="safe-mode"><span className="live-dot" /> {liveWorkspace ? "Workspace persistence" : "Local demo workspace"}</div>
+          <div className="safe-mode"><span className="live-dot" /> {liveWorkspace ? "Workspace persistence" : signInRequired ? "Sign in required" : "Local demo workspace"}</div>
           <div className="account-chip"><span className="avatar">TM</span><span>Tendai Midzi</span><span className="chevron">⌄</span></div>
         </div>
       </aside>
@@ -182,6 +211,7 @@ export function AnoWorkbench() {
           <div className="crumbs"><span>Workspace</span><b>/</b><strong>{workspaceName}</strong></div>
           <div className="topbar-actions">
             <span className="mock-badge">{liveWorkspace ? "Simulated data" : "Local demo"}</span>
+            {signInRequired && <Link href="/login" className="topbar-signin">Sign in</Link>}
             <button className="icon-button" type="button" aria-label="Notifications">◌</button>
             <button className="avatar-button" type="button" aria-label="Account">TM</button>
           </div>
@@ -194,7 +224,7 @@ export function AnoWorkbench() {
               <h1>Research workbench</h1>
               <p className="lede">Turn a focused ICP into an evidence-backed shortlist and a practical next-step plan.</p>
             </div>
-            <div className="mode-note"><span>✦</span><div><b>{persistenceLabel}</b><small>{liveWorkspace ? "Server session and records are scoped to this workspace." : "Saved in this browser; use Supabase for team tenancy."}</small></div></div>
+            <div className="mode-note"><span>✦</span><div><b>{persistenceLabel}</b><small>{liveWorkspace ? "Server session and records are scoped to this workspace." : signInRequired ? "Use an approved work email to reach your workspace." : "Saved in this browser; use Supabase for team tenancy."}</small></div></div>
           </section>
 
           <section className="stat-row" aria-label="Research summary">

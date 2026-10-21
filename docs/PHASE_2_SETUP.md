@@ -14,17 +14,18 @@ Phase 2 adds the persistence and tenancy boundary. It does not connect to Mercur
 ## Connect Ano to its own Supabase project
 
 1. Create a dedicated Supabase project for Ano. Do not reuse or connect directly to Mercury’s database.
-2. In that project, run [`20261021_000001_ano_workspace_and_research.sql`](../supabase/migrations/20261021_000001_ano_workspace_and_research.sql).
-3. Copy `.env.example` to `.env.local` and populate only these Ano project values:
+2. Add the project’s private PostgreSQL connection string as `SUPABASE_DB_URL` and set `ANO_DATABASE_LABEL=ano` in `.env.local`. Do not use the service-role key for DDL.
+3. Run `npm run db:apply`, then `npm run db:status`. These commands apply and verify [`20261021_000001_ano_workspace_and_research.sql`](../supabase/migrations/20261021_000001_ano_workspace_and_research.sql) transactionally.
+4. Populate these Ano project public values:
 
    ```text
    NEXT_PUBLIC_SUPABASE_URL=
    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
    ```
 
-4. Configure an approved Supabase Auth sign-in method and its redirect URL for local development.
-5. Create the first workspace through the `create_ano_workspace(name, slug)` SQL function while signed in. This atomically creates its owner membership.
-6. Restart `npm run dev`. The workspace endpoint will now require the server-validated session rather than using the local demo.
+5. Configure an approved Supabase Auth sign-in method and its redirect URL for local development.
+6. Create the first workspace through the `create_ano_workspace(name, slug)` SQL function while signed in. This atomically creates its owner membership.
+7. Restart `npm run dev`. The workspace endpoint will now require the server-validated session rather than using the local demo.
 
 ## Important boundaries
 

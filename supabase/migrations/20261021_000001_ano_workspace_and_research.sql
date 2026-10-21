@@ -324,7 +324,6 @@ alter table public.audit_logs enable row level security;
 alter table public.notifications enable row level security;
 
 create policy workspace_read on public.workspaces for select to authenticated using (public.is_ano_workspace_member(id));
-create policy workspace_create on public.workspaces for insert to authenticated with check (created_by = auth.uid());
 create policy workspace_update on public.workspaces for update to authenticated using (public.is_ano_workspace_owner(id)) with check (public.is_ano_workspace_owner(id));
 
 create policy workspace_domain_read on public.workspace_domains for select to authenticated using (public.is_ano_workspace_member(workspace_id));

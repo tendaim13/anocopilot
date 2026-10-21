@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 import type { WorkspaceIdentity, WorkspaceRole, WorkspaceRuntime, WorkspaceSession } from "@/contracts/ano";
+import { getSupabasePublicConfig } from "@/lib/supabase/config";
 
 const demoWorkspace: WorkspaceIdentity = {
   id: "demo-nerva-studio",
@@ -23,14 +24,8 @@ export class WorkspaceSessionError extends Error {
   }
 }
 
-function getSupabaseConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  return url && key ? { url, key } : null;
-}
-
 export function isSupabaseConfigured() {
-  return Boolean(getSupabaseConfig());
+  return Boolean(getSupabasePublicConfig());
 }
 
 function canUseLocalDemo() {
@@ -46,7 +41,7 @@ function emailDomain(email: string) {
 }
 
 export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
-  const config = getSupabaseConfig();
+  const config = getSupabasePublicConfig();
 
   if (!config) {
     if (canUseLocalDemo()) {
@@ -66,7 +61,7 @@ export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
   }
 
   const cookieStore = await cookies();
-  const client = createServerClient(config.url, config.key, {
+  const client = createServerClient(config.url, config.publishableKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
