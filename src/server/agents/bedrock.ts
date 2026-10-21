@@ -7,7 +7,7 @@ import {
 
 import { BedrockAdapterError, type BedrockConverse, type BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
 
-export type AnoAgentMode = "mock" | "bedrock";
+export type AnoAgentMode = "disabled" | "bedrock";
 export { BedrockAdapterError } from "@/server/agents/bedrock-contracts";
 export type { BedrockConverse, BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
 
@@ -22,12 +22,12 @@ function value(name: "AWS_REGION" | "BEDROCK_MODEL_ID" | "BEDROCK_GUARDRAIL_ID" 
   return process.env[name]?.trim() ?? "";
 }
 
-/** Defaults to mock when unset so development never consumes model capacity by accident. */
+/** Defaults to disabled so Ano never substitutes simulated research for real work. */
 export function getAnoAgentMode(): AnoAgentMode {
   const configured = process.env.ANO_AGENT_MODE?.trim().toLowerCase();
-  if (!configured || configured === "mock") return "mock";
+  if (!configured || configured === "disabled") return "disabled";
   if (configured === "bedrock") return "bedrock";
-  throw new BedrockConfigurationError("ANO_AGENT_MODE must be either mock or bedrock.");
+  throw new BedrockConfigurationError("ANO_AGENT_MODE must be either disabled or bedrock.");
 }
 
 export function getBedrockPlannerConfig(): BedrockPlannerConfig {
@@ -64,7 +64,7 @@ export function createBedrockConverse(config: BedrockPlannerConfig): BedrockConv
         modelId: config.modelId,
         messages,
         system,
-        toolConfig,
+        ...(toolConfig ? { toolConfig } : {}),
         guardrailConfig: {
           guardrailIdentifier: config.guardrailIdentifier,
           guardrailVersion: config.guardrailVersion,
@@ -76,6 +76,16 @@ export function createBedrockConverse(config: BedrockPlannerConfig): BedrockConv
     } catch (error) {
       if (controller.signal.aborted) {
         throw new BedrockAdapterError("Bedrock planning exceeded Ano’s configured runtime limit.", "TIMEOUT");
+      }
+      const name = error instanceof Error ? error.name : "";
+      if (name === "CredentialsProviderError") {
+        throw new BedrockAdapterError("Ano’s server has no AWS credentials. Configure a server-side IAM role, profile, or AWS access-key pair before using Bedrock.", "CREDENTIALS_UNAVAILABLE");
+      }
+      if (name === "AccessDeniedException" || name === "UnauthorizedException") {
+        throw new BedrockAdapterError("Ano’s AWS identity is not allowed to invoke the configured Bedrock model or guardrail.", "ACCESS_DENIED");
+      }
+      if (name === "ResourceNotFoundException" || name === "ValidationException") {
+        throw new BedrockAdapterError("Ano’s configured Bedrock model or guardrail could not be used in this AWS region.", "INVALID_CONFIGURATION");
       }
       throw new BedrockAdapterError("Bedrock planning is unavailable. No Ano connector or external action was attempted.", "UNAVAILABLE");
     } finally {

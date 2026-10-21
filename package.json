@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:phase4a": "tsx --test tests/phase4a-runtime.test.ts",
     "test:phase4b": "tsx --test tests/phase4b-bedrock-runtime.test.ts",
+    "test:standalone": "tsx --test tests/standalone-brief-runtime.test.ts",
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
     "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs"
   },

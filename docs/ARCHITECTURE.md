@@ -44,9 +44,9 @@ Every table is protected by RLS. A signed-in member can only read its workspace.
 
 | Tool category | Current policy | Execution state |
 | --- | --- | --- |
-| Simulated company/contact/evidence research | Allow | Implemented through the Phase 4A bounded mock loop; no network or credits. |
-| Deterministic scoring and Ano plan creation | Allow | Implemented and validated before results are returned. |
-| User shortlist, dismiss, review | Allow only if user-initiated | Implemented through Ano-owned state route. |
+| Standalone workspace brief | Allow only with a signed-in Ano workspace | User enters account and context; Bedrock creates a single source-constrained brief and plan. |
+| Workspace evidence and readiness | Allow | Only manual record labels (`M-###`) are persisted; readiness measures context completeness, not buying intent. |
+| Simulated company/contact/evidence research | Retired from public path | Internal test harness only; no public route or interface invokes it. |
 | Mercury reads | Deny until connector Phase 3 | Adapter skeleton only; no database or API access. |
 | Provider search/enrichment | Ask plus budget controls | Adapter skeleton only; no provider call. |
 | Mercury proposals | Ask | Contract only; no write path. |
@@ -54,11 +54,11 @@ Every table is protected by RLS. A signed-in member can only read its workspace.
 
 ## Current runtime boundary
 
-Phase 4A is an application-controlled mock executor. It executes five predefined registered tools in order, evaluates the policy before each tool, records a structured result, stops at its configured tool/turn/evidence/time limits, and writes Ano-owned audit records through the existing RLS session. The workbench displays the resulting tool trace and usage counters.
+The public runtime is a one-turn, server-only Bedrock workspace-brief call. It receives a structured record supplied by a signed-in workspace member: account, optional contact, account context, and objective. Ano creates `M-###` manual-evidence labels before the model call. Bedrock receives no tool schema, no connector, no browser/HTTP capability, and no database access. Its JSON response must cite only these evidence IDs; any unknown citation, URL, malformed JSON, guardrail intervention, timeout, or incomplete response is rejected. Ano never substitutes a simulated result.
 
-Phase 4B optionally places a server-only Bedrock Converse planner in front of that executor. It is enabled only when `ANO_AGENT_MODE=bedrock` and complete model/guardrail configuration is available. The planner receives only five no-argument mock tool schemas. Each `toolUse` must match the approved sequence, has its input independently validated, and receives a structured result with the matching `toolUseId`. Guardrail interventions, malformed output, timeouts, incomplete plans, and over-limit runs stop safely. The model’s final JSON answer is only displayed when every cited evidence ID is present in the Ano result; otherwise Ano provides a deterministic fallback.
+The earlier Phase 4A/4B mock-tool loop remains covered by regression tests but is retired from the public interface and `/api/v1/research` returns `410` rather than running it.
 
-Bedrock never gains direct access to persistence, Mercury, providers, email, calls, browser/HTTP, SQL, or any external action. Guardrails do not inspect tool arguments or returned tool results, so Ano validates and labels those values independently.
+Bedrock never gains direct access to persistence, Mercury, providers, email, calls, browser/HTTP, SQL, or any external action. The server requires standard AWS IAM credentials—not a Bedrock API key—and exposes only safe error categories such as missing credentials, access denied, or invalid model/guardrail configuration. Guardrails do not inspect tool arguments or returned tool results, so Ano independently constrains all model inputs and validates the returned evidence labels.
 
 ## Durable-run contract
 
@@ -66,7 +66,7 @@ A research request includes a client idempotency UUID. `research_runs` has a uni
 
 ## Database operation
 
-The schema lives in [`supabase/migrations/20261021_000001_ano_workspace_and_research.sql`](../supabase/migrations/20261021_000001_ano_workspace_and_research.sql). The application’s service-role key is intentionally insufficient to run DDL.
+The schema lives in [`supabase/migrations/20261021_000001_ano_workspace_and_research.sql`](../supabase/migrations/20261021_000001_ano_workspace_and_research.sql), with the standalone manual-record update in [`supabase/migrations/20261021_000002_manual_workspace_records.sql`](../supabase/migrations/20261021_000002_manual_workspace_records.sql). The application’s service-role key is intentionally insufficient to run DDL.
 
 To apply the schema, add these private values to `.env.local`:
 

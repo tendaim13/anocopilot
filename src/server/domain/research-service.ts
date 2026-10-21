@@ -11,12 +11,11 @@ export async function runResearchForWorkspace(session: WorkspaceSession, input: 
   let agentRun: ResearchAgentResult;
   try {
     const mode = getAnoAgentMode();
-    if (mode === "bedrock") {
-      const config = getBedrockPlannerConfig();
-      agentRun = await runBedrockSalesResearch({ input, idempotencyKey }, config, createBedrockConverse(config));
-    } else {
-      agentRun = runSimulatedSalesResearch({ input, idempotencyKey });
+    if (mode !== "bedrock") {
+      throw new BedrockConfigurationError("Ano’s simulated research runtime has been retired. Use the standalone workspace brief flow instead.");
     }
+    const config = getBedrockPlannerConfig();
+    agentRun = await runBedrockSalesResearch({ input, idempotencyKey }, config, createBedrockConverse(config));
   } catch (error) {
     if (error instanceof BedrockConfigurationError) {
       throw new AgentRuntimeError(error.message, "BEDROCK_CONFIGURATION", createCheckpoint("failed", 0, 0));

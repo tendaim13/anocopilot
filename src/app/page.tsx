@@ -1,5 +1,5 @@
-import { AnoWorkbench } from "@/components/ano-workbench";
+import { StandaloneWorkbench } from "@/components/standalone-workbench";
 
 export default function HomePage() {
-  return <AnoWorkbench />;
+  return <StandaloneWorkbench />;
 }

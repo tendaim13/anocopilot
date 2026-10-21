@@ -264,6 +264,8 @@ Exit criteria:
 
 **Phase 4B — implemented:** A server-only Bedrock Converse adapter is available only with explicit complete configuration. It has five no-argument mock/deterministic tool schemas, a bounded multi-turn protocol, matching `toolUseId` result blocks, independently validated tool inputs/results, configured guardrails, safe stop handling, and validated final evidence citations. The application-owned executor remains the sole authority for tool validation, bounded execution, persistence, and approval boundaries.
 
+**Phase 4C — implemented (standalone core):** The public product now starts with a signed-in workspace member entering an account, optional contact, account context, and objective. Ano labels those supplied records as manual `M-###` evidence, calculates an information-readiness score, and asks Bedrock for one strict JSON brief, human-review outreach draft, and plan. The response must cite only manual evidence IDs; it receives no tool schema and cannot fall back to simulated data. The account, evidence, scorecard, brief, plan, and audit event are persisted in Ano’s own workspace. Mercury and provider phases remain deferred.
+
 **Goal:** Turn the workflow into a controlled, multi-step research agent.
 
 Build:

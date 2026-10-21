@@ -14,14 +14,17 @@ export type BedrockPlannerConfig = {
 export type BedrockConverseRequest = {
   messages: Message[];
   system: SystemContentBlock[];
-  toolConfig: ToolConfiguration;
+  toolConfig?: ToolConfiguration;
   timeoutMs: number;
 };
 
 export type BedrockConverse = (request: BedrockConverseRequest) => Promise<ConverseCommandOutput>;
 
 export class BedrockAdapterError extends Error {
-  constructor(message: string, public readonly code: "TIMEOUT" | "UNAVAILABLE") {
+  constructor(
+    message: string,
+    public readonly code: "TIMEOUT" | "CREDENTIALS_UNAVAILABLE" | "ACCESS_DENIED" | "INVALID_CONFIGURATION" | "UNAVAILABLE",
+  ) {
     super(message);
     this.name = "BedrockAdapterError";
   }

@@ -14,6 +14,10 @@ const requiredTables = [
   "account_candidates", "contact_candidates", "evidence_items", "scorecards", "briefs", "work_items",
   "proposals", "approval_decisions", "audit_logs", "notifications", "ano_schema_migrations",
 ];
+const requiredMigrations = [
+  "20261021_000001_ano_workspace_and_research",
+  "20261021_000002_manual_workspace_records",
+];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
 
@@ -43,8 +47,17 @@ try {
   );
   const present = new Set(rows.map((row) => row.table_name));
   const missing = requiredTables.filter((table) => !present.has(table));
-  console.log(JSON.stringify({ migrationReady: missing.length === 0, present: present.size, required: requiredTables.length, missing }));
-  if (missing.length > 0) process.exitCode = 1;
+  const migrationResult = await client.query("select id from public.ano_schema_migrations where id = any($1::text[])", [requiredMigrations]);
+  const appliedMigrations = new Set(migrationResult.rows.map((row) => row.id));
+  const missingMigrations = requiredMigrations.filter((id) => !appliedMigrations.has(id));
+  console.log(JSON.stringify({
+    migrationReady: missing.length === 0 && missingMigrations.length === 0,
+    present: present.size,
+    required: requiredTables.length,
+    missing,
+    missingMigrations,
+  }));
+  if (missing.length > 0 || missingMigrations.length > 0) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

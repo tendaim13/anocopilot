@@ -5,10 +5,16 @@ import { Client } from "pg";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, "..");
-const migration = {
-  id: "20261021_000001_ano_workspace_and_research",
-  file: path.join(projectRoot, "supabase/migrations/20261021_000001_ano_workspace_and_research.sql"),
-};
+const migrations = [
+  {
+    id: "20261021_000001_ano_workspace_and_research",
+    file: path.join(projectRoot, "supabase/migrations/20261021_000001_ano_workspace_and_research.sql"),
+  },
+  {
+    id: "20261021_000002_manual_workspace_records",
+    file: path.join(projectRoot, "supabase/migrations/20261021_000002_manual_workspace_records.sql"),
+  },
+];
 
 function requireAnoDatabaseUrl() {
   if (process.env.ANO_DATABASE_LABEL !== "ano") {
@@ -55,17 +61,19 @@ try {
     )
   `);
 
-  const existing = await client.query("select id from public.ano_schema_migrations where id = $1", [migration.id]);
-  if (existing.rowCount) {
-    await client.query("commit");
-    console.log(`Ano schema is already at ${migration.id}.`);
-  } else {
+  const existing = await client.query("select id from public.ano_schema_migrations where id = any($1::text[])", [migrations.map((migration) => migration.id)]);
+  const applied = new Set(existing.rows.map((row) => row.id));
+  const newMigrations = [];
+
+  for (const migration of migrations) {
+    if (applied.has(migration.id)) continue;
     const sql = await readFile(migration.file, "utf8");
     await client.query(sql);
     await client.query("insert into public.ano_schema_migrations (id) values ($1)", [migration.id]);
-    await client.query("commit");
-    console.log(`Applied Ano-only schema migration ${migration.id}.`);
+    newMigrations.push(migration.id);
   }
+  await client.query("commit");
+  console.log(newMigrations.length ? `Applied Ano-only schema migrations: ${newMigrations.join(", ")}.` : "Ano schema is already current.");
 } catch (error) {
   await client.query("rollback").catch(() => undefined);
   console.error(error instanceof Error ? error.message : "Ano schema application failed.");
