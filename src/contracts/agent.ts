@@ -1,4 +1,4 @@
-import type { MockResearchToolName, ResearchInput, ResearchResult } from "@/lib/ano/types";
+import type { AgentFinalAnswer, MockResearchToolName, ResearchInput, ResearchResult } from "@/lib/ano/types";
 
 export type AgentToolName =
   | "search_companies"
@@ -64,4 +64,13 @@ export type MockToolResult = {
   tool: MockResearchToolName;
   summary: string;
   evidenceItems: number;
+  data: Record<string, unknown>;
+};
+
+export type AgentPlannerResult = {
+  mode: "mock" | "bedrock";
+  modelTurns: number;
+  guardrail: "not_used" | "enabled";
+  finalAnswer: "deterministic" | "validated" | "fallback";
+  agentAnswer?: AgentFinalAnswer;
 };

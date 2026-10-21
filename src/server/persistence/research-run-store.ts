@@ -85,7 +85,7 @@ export async function persistResearchRun(
     workspace_id: workspace.id,
     started_by: actorId,
     status: "running",
-    mode: "mock",
+    mode: result.run.mode === "bedrock_mock_tools" ? "bedrock" : "mock",
     idempotency_key: idempotencyKey,
     input_json: input,
     checkpoint: {
@@ -246,8 +246,9 @@ export async function persistResearchRun(
         event_type: "research.run.started",
         outcome: "completed",
         details_json: {
-          mode: "mock",
+          mode: persisted.run.mode,
           runtime: persisted.run.execution?.engine ?? "legacy_mock_fixture",
+          planner: persisted.run.execution?.planner?.kind ?? "application",
           tool_count: persisted.toolTrail.length,
           evidence_item_count: persisted.run.execution?.usage.evidenceItems ?? 0,
           external_actions: persisted.run.execution?.policy.externalActions ?? "disabled",

@@ -95,6 +95,19 @@ export type ResearchRunExecution = {
     externalActions: "disabled";
     evidence: "simulated";
   };
+  planner?: {
+    kind: "application" | "bedrock";
+    modelTurns: number;
+    guardrail: "not_used" | "enabled";
+    finalAnswer: "deterministic" | "validated" | "fallback";
+  };
+};
+
+export type AgentFinalAnswer = {
+  summary: string;
+  evidenceIds: string[];
+  inferences: string[];
+  source: "bedrock" | "application_fallback";
 };
 
 export type PlanItem = {
@@ -110,10 +123,11 @@ export type ResearchResult = {
   run: {
     id: string;
     status: "completed";
-    mode: "mock";
+    mode: "mock" | "bedrock_mock_tools";
     clarification: string | null;
     message: string;
     execution?: ResearchRunExecution;
+    agentAnswer?: AgentFinalAnswer;
   };
   candidates: Candidate[];
   toolTrail: ToolEvent[];

@@ -112,6 +112,7 @@ export function AnoWorkbench() {
   const workspaceSetupRequired = workspaceError?.code === "WORKSPACE_REQUIRED";
   const workspaceName = workspaceRuntime?.workspace.name ?? (signInRequired ? "Sign in required" : workspaceSetupRequired ? "Set up workspace" : "Nerva Studio — demo");
   const persistenceLabel = liveWorkspace ? "Workspace persistence" : signInRequired ? "Secure workspace access" : workspaceSetupRequired ? "Workspace setup required" : "Browser demo persistence";
+  const bedrockPlanned = result?.run.mode === "bedrock_mock_tools";
 
   function update(field: keyof ResearchInput, value: string | number) {
     setInput((current) => ({ ...current, [field]: value }));
@@ -228,7 +229,7 @@ export function AnoWorkbench() {
           </section>
 
           <section className="stat-row" aria-label="Research summary">
-            <div className="stat-card"><span>Research mode</span><b>Mock only</b><small>Zero credits used</small></div>
+            <div className="stat-card"><span>Research mode</span><b>{bedrockPlanned ? "Bedrock + mock" : "Mock only"}</b><small>{bedrockPlanned ? "Model reasoning · zero provider credits" : "Zero credits used"}</small></div>
             <div className="stat-card"><span>Shortlisted</span><b>{shortlistedCount}</b><small>{liveWorkspace ? "Workspace-scoped records" : "Saved in this browser"}</small></div>
             <div className="stat-card"><span>Tool boundary</span><b>Read-only</b><small>Five permitted mock tools</small></div>
             <div className="stat-card"><span>External writes</span><b>Disabled</b><small>Proposals come later</small></div>
@@ -274,7 +275,7 @@ export function AnoWorkbench() {
             <>
               <section className="results-heading">
                 <div><p className="section-kicker">02 — REVIEW THE RESULTS</p><h2>Ranked opportunities</h2><p>{result.run.message}</p></div>
-                <div className="run-complete"><span>✓</span> {liveWorkspace ? "Workspace run saved" : "Demo run saved locally"}</div>
+                <div className="run-complete"><span>✓</span> {liveWorkspace ? `${bedrockPlanned ? "Bedrock" : "Workspace"} run saved` : "Demo run saved locally"}</div>
               </section>
 
               <AgentRunPanel input={input} result={result} />

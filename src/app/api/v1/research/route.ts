@@ -7,6 +7,7 @@ import { AgentRuntimeError } from "@/server/agents/runtime";
 import { ResearchRunPersistenceError } from "@/server/persistence/research-run-store";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function idempotencyKey(request: Request) {
   const supplied = request.headers.get("x-ano-idempotency-key");
@@ -31,8 +32,9 @@ export async function POST(request: Request) {
 
   try {
     const session = await requireWorkspaceSession();
-    // The runtime is deliberately simulated. Its policy guard is still applied
-    // before any tool, and no provider, Mercury, or model request can run here.
+    // Bedrock mode can reason over the simulated workflow, but Ano's server
+    // validates every tool call before execution. Providers, Mercury, and all
+    // external actions remain unavailable in both modes.
     const result = await runResearchForWorkspace(session, parsed.data, idempotencyKey(request));
     return NextResponse.json(result);
   } catch (error) {

@@ -15,7 +15,7 @@ export function AgentRunPanel({ input, result }: { input: ResearchInput; result:
           <h2>What Ano did, step by step</h2>
           <p>Intent: {input.objective}</p>
         </div>
-        <div className="mock-loop-badge"><span>✓</span> Bounded mock loop</div>
+        <div className="mock-loop-badge"><span>✓</span> {execution?.planner?.kind === "bedrock" ? "Bedrock planner · bounded loop" : "Bounded mock loop"}</div>
       </div>
 
       {execution ? (
@@ -27,6 +27,15 @@ export function AgentRunPanel({ input, result }: { input: ResearchInput; result:
         </div>
       ) : (
         <p className="run-legacy-note">This saved local result predates the bounded-run trace. Run it again to record full execution details.</p>
+      )}
+
+      {result.run.agentAnswer && (
+        <section className="agent-answer" aria-label="Ano final answer">
+          <div className="agent-answer-heading"><span>✦</span><div><b>{result.run.agentAnswer.source === "bedrock" ? "Bedrock answer · citations validated" : "Ano fallback answer"}</b><small>{result.run.agentAnswer.source === "bedrock" ? "The application checked every cited evidence ID." : "The planner output was not usable, so Ano returned a deterministic summary."}</small></div></div>
+          <p>{result.run.agentAnswer.summary}</p>
+          <div className="answer-evidence"><span>Evidence</span>{result.run.agentAnswer.evidenceIds.map((id) => <em key={id}>{id}</em>)}</div>
+          {result.run.agentAnswer.inferences.length > 0 && <div className="answer-inferences"><b>Inferences</b>{result.run.agentAnswer.inferences.map((inference) => <p key={inference}>{inference}</p>)}</div>}
+        </section>
       )}
 
       <div className="run-trace-content">

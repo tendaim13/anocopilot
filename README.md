@@ -22,4 +22,6 @@ Mercury is Ano's first and deepest integration. Ano does **not** share Mercury's
 
 Phase 1’s simulated research workbench runs locally with Turbopack. Phase 2’s Ano-owned workspace/session boundary, RLS migration, idempotent research-run repository, and browser-local demo persistence are implemented and applied to Ano’s dedicated Supabase project.
 
-Phase 3 (the Mercury connector) is intentionally deferred. Phase 4A is implemented: the workbench runs an application-controlled, bounded mock-only tool loop, records each policy-checked step, validates deterministic scores and simulated evidence, persists an audit trail, and exposes the run trace to the user. No Mercury, Bedrock, provider, browser/HTTP, email, call, or external write path exists.
+Phase 3 (the Mercury connector) is intentionally deferred. Phase 4A supplies the application-controlled, bounded mock-only tool loop. Phase 4B adds an optional server-only Bedrock Converse planner: it may request the five mock tools, but Ano validates every request, enforces order and limits, returns the matching structured tool result, validates the final evidence citations, persists the audit trail, and exposes the Run Trace to the user.
+
+Bedrock remains off unless `ANO_AGENT_MODE=bedrock`. Live mode requires `AWS_REGION`, `BEDROCK_MODEL_ID`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`, and standard AWS SDK credentials available to the server. It still uses simulated evidence only: no Mercury, provider, browser/HTTP, email, call, SQL, or external write path exists.

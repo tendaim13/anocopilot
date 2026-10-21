@@ -54,9 +54,11 @@ Every table is protected by RLS. A signed-in member can only read its workspace.
 
 ## Current runtime boundary
 
-Phase 4A is an application-controlled mock executor, not a model invocation. It executes five predefined registered tools in order, evaluates the policy before each tool, records a structured result, stops at its configured tool/turn/evidence/time limits, and writes Ano-owned audit records through the existing RLS session. The workbench displays the resulting tool trace and usage counters.
+Phase 4A is an application-controlled mock executor. It executes five predefined registered tools in order, evaluates the policy before each tool, records a structured result, stops at its configured tool/turn/evidence/time limits, and writes Ano-owned audit records through the existing RLS session. The workbench displays the resulting tool trace and usage counters.
 
-Bedrock is deliberately not invoked in this checkpoint. A future planner may request a registered tool, but it must feed that request into this same executor and cannot bypass the policy, limits, integrity checks, or the absence of Mercury/provider/external-action capabilities.
+Phase 4B optionally places a server-only Bedrock Converse planner in front of that executor. It is enabled only when `ANO_AGENT_MODE=bedrock` and complete model/guardrail configuration is available. The planner receives only five no-argument mock tool schemas. Each `toolUse` must match the approved sequence, has its input independently validated, and receives a structured result with the matching `toolUseId`. Guardrail interventions, malformed output, timeouts, incomplete plans, and over-limit runs stop safely. The model’s final JSON answer is only displayed when every cited evidence ID is present in the Ano result; otherwise Ano provides a deterministic fallback.
+
+Bedrock never gains direct access to persistence, Mercury, providers, email, calls, browser/HTTP, SQL, or any external action. Guardrails do not inspect tool arguments or returned tool results, so Ano validates and labels those values independently.
 
 ## Durable-run contract
 

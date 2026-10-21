@@ -262,15 +262,15 @@ Exit criteria:
 
 **Current checkpoint — Phase 4A:** Implement the application-controlled mock-only loop first. It executes only the five registered mock/deterministic tools, enforces policy and limits before every step, validates evidence and score integrity, persists the run/audit trail, and shows a user-facing Run view. It makes no Bedrock, Mercury, provider, browser, HTTP, SQL, email, call, or external-action request.
 
-**Phase 4B (future):** Add the server-side Bedrock planner only after the mock executor remains the sole authority for tool validation, bounded execution, tool-result handling, persistence, and approval boundaries.
+**Phase 4B — implemented:** A server-only Bedrock Converse adapter is available only with explicit complete configuration. It has five no-argument mock/deterministic tool schemas, a bounded multi-turn protocol, matching `toolUseId` result blocks, independently validated tool inputs/results, configured guardrails, safe stop handling, and validated final evidence citations. The application-owned executor remains the sole authority for tool validation, bounded execution, persistence, and approval boundaries.
 
 **Goal:** Turn the workflow into a controlled, multi-step research agent.
 
 Build:
 
-- Server-side Bedrock adapter with a model configuration boundary.
-- Bounded multi-tool loop using the chosen orchestration runtime.
-- Structured tool-result return protocol and explicit handling of model completion, tool use, guardrail interruption, malformed calls, and timeouts.
+- Server-side Bedrock adapter with a model configuration boundary. **Implemented; disabled unless explicitly configured.**
+- Bounded multi-tool loop using the chosen orchestration runtime. **Implemented over the mock-only executor.**
+- Structured tool-result return protocol and explicit handling of model completion, tool use, guardrail interruption, malformed calls, and timeouts. **Implemented and tested with a fake Converse transcript.**
 - Sales Research & Planning system prompt that forbids unsupported claims and requests clarification when required ICP context is absent.
 - Tool middleware and hooks implementing the policy model in Section 6.
 - Evidence citation enforcement in brief generation.
