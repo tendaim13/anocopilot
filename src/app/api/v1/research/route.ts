@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { researchInputSchema } from "@/lib/ano/types";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
 import { runResearchForWorkspace } from "@/server/domain/research-service";
+import { AgentRuntimeError } from "@/server/agents/runtime";
 import { ResearchRunPersistenceError } from "@/server/persistence/research-run-store";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,9 @@ export async function POST(request: Request) {
     if (error instanceof ResearchRunPersistenceError) {
       const status = error.code === "RUN_IN_PROGRESS" ? 409 : 500;
       return NextResponse.json({ error: error.message, code: error.code }, { status });
+    }
+    if (error instanceof AgentRuntimeError) {
+      return NextResponse.json({ error: error.message, code: error.code, checkpoint: error.checkpoint }, { status: 422 });
     }
 
     return NextResponse.json(

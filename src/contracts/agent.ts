@@ -1,4 +1,4 @@
-import type { ResearchInput, ResearchResult } from "@/lib/ano/types";
+import type { MockResearchToolName, ResearchInput, ResearchResult } from "@/lib/ano/types";
 
 export type AgentToolName =
   | "search_companies"
@@ -58,4 +58,10 @@ export type ResearchAgentResult = {
   result: ResearchResult;
   checkpoint: AgentCheckpoint;
   decisions: Array<{ tool: AgentToolName; decision: GuardDecision }>;
+};
+
+export type MockToolResult = {
+  tool: MockResearchToolName;
+  summary: string;
+  evidenceItems: number;
 };

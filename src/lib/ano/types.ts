@@ -52,11 +52,49 @@ export type Candidate = {
   recommendationReason: string;
 };
 
+export const mockResearchToolNames = [
+  "search_companies",
+  "search_people",
+  "get_account_evidence",
+  "compute_score",
+  "build_today_plan",
+] as const;
+
+export type MockResearchToolName = (typeof mockResearchToolNames)[number];
+
 export type ToolEvent = {
   id: string;
-  tool: "search_companies" | "search_people" | "get_account_evidence" | "compute_score" | "build_today_plan";
+  tool: MockResearchToolName;
   status: "completed";
   summary: string;
+  turn: number;
+  simulated: true;
+};
+
+export type ResearchRunExecution = {
+  engine: "bounded_mock_tool_loop";
+  role: "sales-research-planning";
+  completedAt: string;
+  limits: {
+    maxToolCalls: number;
+    maxTurns: number;
+    maxEvidenceItems: number;
+    maxClarifications: number;
+    maxElapsedMs: number;
+  };
+  usage: {
+    toolCalls: number;
+    turns: number;
+    evidenceItems: number;
+    clarifications: number;
+    elapsedMs: number;
+  };
+  policy: {
+    permittedTools: MockResearchToolName[];
+    externalConnections: "disabled";
+    externalActions: "disabled";
+    evidence: "simulated";
+  };
 };
 
 export type PlanItem = {
@@ -75,6 +113,7 @@ export type ResearchResult = {
     mode: "mock";
     clarification: string | null;
     message: string;
+    execution?: ResearchRunExecution;
   };
   candidates: Candidate[];
   toolTrail: ToolEvent[];

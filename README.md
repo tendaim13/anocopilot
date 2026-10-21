@@ -20,6 +20,6 @@ Mercury is Ano's first and deepest integration. Ano does **not** share Mercury's
 
 ## Current status
 
-Phase 1’s simulated research workbench is implemented and runs locally with Turbopack. Phase 2’s Ano-owned workspace/session boundary, RLS migration, idempotent research-run repository, and browser-local demo persistence are also implemented.
+Phase 1’s simulated research workbench runs locally with Turbopack. Phase 2’s Ano-owned workspace/session boundary, RLS migration, idempotent research-run repository, and browser-local demo persistence are implemented and applied to Ano’s dedicated Supabase project.
 
-The Phase 2 migration is present locally but has **not** been applied to a Supabase project, and no credentials have been copied from another project. Until Ano receives its own Supabase configuration, the UI is intentionally labelled as a local demo. No Mercury, Bedrock, or lead-data provider connection exists.
+Phase 3 (the Mercury connector) is intentionally deferred. Phase 4A is implemented: the workbench runs an application-controlled, bounded mock-only tool loop, records each policy-checked step, validates deterministic scores and simulated evidence, persists an audit trail, and exposes the run trace to the user. No Mercury, Bedrock, provider, browser/HTTP, email, call, or external write path exists.

@@ -44,13 +44,19 @@ Every table is protected by RLS. A signed-in member can only read its workspace.
 
 | Tool category | Current policy | Execution state |
 | --- | --- | --- |
-| Simulated company/contact/evidence research | Allow | Implemented, deterministic mock data only. |
-| Deterministic scoring and Ano plan creation | Allow | Implemented. |
+| Simulated company/contact/evidence research | Allow | Implemented through the Phase 4A bounded mock loop; no network or credits. |
+| Deterministic scoring and Ano plan creation | Allow | Implemented and validated before results are returned. |
 | User shortlist, dismiss, review | Allow only if user-initiated | Implemented through Ano-owned state route. |
 | Mercury reads | Deny until connector Phase 3 | Adapter skeleton only; no database or API access. |
 | Provider search/enrichment | Ask plus budget controls | Adapter skeleton only; no provider call. |
 | Mercury proposals | Ask | Contract only; no write path. |
 | Email, calls, campaign changes, generic browser/HTTP/SQL | Deny | No route or tool exists. |
+
+## Current runtime boundary
+
+Phase 4A is an application-controlled mock executor, not a model invocation. It executes five predefined registered tools in order, evaluates the policy before each tool, records a structured result, stops at its configured tool/turn/evidence/time limits, and writes Ano-owned audit records through the existing RLS session. The workbench displays the resulting tool trace and usage counters.
+
+Bedrock is deliberately not invoked in this checkpoint. A future planner may request a registered tool, but it must feed that request into this same executor and cannot bypass the policy, limits, integrity checks, or the absence of Mercury/provider/external-action capabilities.
 
 ## Durable-run contract
 

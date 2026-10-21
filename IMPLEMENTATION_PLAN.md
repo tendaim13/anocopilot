@@ -234,6 +234,8 @@ Exit criteria:
 
 ### Phase 3 — Mercury connector, read-only
 
+**Status:** Deferred by product decision. Ano remains fully standalone until a future connector phase is explicitly authorised.
+
 **Goal:** Give Ano the context it needs from Mercury without coupling the products.
 
 Build:
@@ -257,6 +259,10 @@ Exit criteria:
 - A disabled or failed Mercury connection cannot break standalone Ano research.
 
 ### Phase 4 — Agent runtime and Bedrock reasoning
+
+**Current checkpoint — Phase 4A:** Implement the application-controlled mock-only loop first. It executes only the five registered mock/deterministic tools, enforces policy and limits before every step, validates evidence and score integrity, persists the run/audit trail, and shows a user-facing Run view. It makes no Bedrock, Mercury, provider, browser, HTTP, SQL, email, call, or external-action request.
+
+**Phase 4B (future):** Add the server-side Bedrock planner only after the mock executor remains the sole authority for tool validation, bounded execution, tool-result handling, persistence, and approval boundaries.
 
 **Goal:** Turn the workflow into a controlled, multi-step research agent.
 

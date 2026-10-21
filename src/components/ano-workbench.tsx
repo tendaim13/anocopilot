@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+import { AgentRunPanel } from "@/components/agent-run-panel";
 import type { WorkspaceRuntime } from "@/contracts/ano";
 import type { Candidate, PlanItem, ResearchInput, ResearchResult } from "@/lib/ano/types";
 
@@ -38,10 +39,6 @@ function scoreTone(score: number) {
   if (score >= 80) return "score-high";
   if (score >= 65) return "score-mid";
   return "score-low";
-}
-
-function toolLabel(tool: string) {
-  return tool.replaceAll("_", " ");
 }
 
 export function AnoWorkbench() {
@@ -280,6 +277,8 @@ export function AnoWorkbench() {
                 <div className="run-complete"><span>✓</span> {liveWorkspace ? "Workspace run saved" : "Demo run saved locally"}</div>
               </section>
 
+              <AgentRunPanel input={input} result={result} />
+
               <section className="results-layout">
                 <div className="candidate-list">
                   {result.candidates.map((candidate, index) => {
@@ -293,7 +292,7 @@ export function AnoWorkbench() {
                   })}
                 </div>
 
-                {activeCandidate && <CandidateBrief candidate={activeCandidate} state={candidateStates[activeCandidate.id]} onStateChange={setCandidateState} toolTrail={result.toolTrail} />}
+                {activeCandidate && <CandidateBrief candidate={activeCandidate} state={candidateStates[activeCandidate.id]} onStateChange={setCandidateState} />}
               </section>
 
               <section className="plan-section panel">
@@ -312,7 +311,7 @@ export function AnoWorkbench() {
   );
 }
 
-function CandidateBrief({ candidate, state, onStateChange, toolTrail }: { candidate: Candidate; state?: CandidateState; onStateChange: (candidateId: string, state: CandidateState) => void; toolTrail: ResearchResult["toolTrail"] }) {
+function CandidateBrief({ candidate, state, onStateChange }: { candidate: Candidate; state?: CandidateState; onStateChange: (candidateId: string, state: CandidateState) => void }) {
   return <aside className="brief-panel">
     <div className="brief-top"><div><p className="section-kicker">ANO BRIEF</p><h2>{candidate.name}</h2><p>{candidate.location} · {candidate.employees}</p></div><span className="confidence-badge">{candidate.confidence} confidence</span></div>
     <div className="brief-score"><div><span>Opportunity score</span><b className={scoreTone(candidate.score)}>{candidate.score}<small>/100</small></b></div><p>Calculated from deterministic factors. Ano can explain this score; it cannot silently change it.</p></div>
@@ -320,7 +319,6 @@ function CandidateBrief({ candidate, state, onStateChange, toolTrail }: { candid
     <section className="score-breakdown"><h3>Scorecard</h3>{candidate.scoreComponents.map((component) => <div className="score-row" key={component.label}><div><span>{component.label}</span><b>{component.score}/{component.maximum}</b></div><div className="progress"><span className={component.tone} style={{ width: `${(component.score / component.maximum) * 100}%` }} /></div><p>{component.explanation}</p></div>)}</section>
     <section className="brief-block contact-block"><h3>Candidate contact</h3><div className="contact-row"><span className="contact-avatar">{candidate.contact.name.split(" ").map((part) => part[0]).join("")}</span><div><b>{candidate.contact.name}</b><p>{candidate.contact.role}</p></div><span className="availability">{candidate.contact.availability}</span></div></section>
     <section className="brief-block"><h3>Evidence used</h3><div className="evidence-list">{candidate.evidence.map((item) => <div className="evidence-item" key={item.id}><span>◌</span><div><b>{item.source} <em>{item.id}</em></b><p>{item.observation}</p><small>Simulated evidence · {item.capturedAt}</small></div></div>)}</div></section>
-    <section className="brief-block"><h3>Tool &amp; evidence trail</h3><div className="tool-trail">{toolTrail.map((event) => <div key={event.id}><span>✓</span><p><b>{toolLabel(event.tool)}</b>{event.summary}</p></div>)}</div></section>
     <div className="review-actions"><p>Review this candidate</p><div><button type="button" className={`secondary-button ${state === "dismissed" ? "selected-action" : ""}`} onClick={() => onStateChange(candidate.id, "dismissed")}>Dismiss</button><button type="button" className={`secondary-button ${state === "review" ? "selected-action" : ""}`} onClick={() => onStateChange(candidate.id, "review")}>Review later</button><button type="button" className={`primary-button compact ${state === "shortlisted" ? "selected-primary" : ""}`} onClick={() => onStateChange(candidate.id, "shortlisted")}>{state === "shortlisted" ? "Shortlisted ✓" : "Shortlist"}</button></div></div>
   </aside>;
 }

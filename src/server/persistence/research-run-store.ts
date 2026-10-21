@@ -1,3 +1,4 @@
+import type { ResearchAgentResult } from "@/contracts/agent";
 import type { WorkspaceSession } from "@/contracts/ano";
 import type { ResearchInput, ResearchResult } from "@/lib/ano/types";
 
@@ -42,6 +43,7 @@ export async function persistResearchRun(
   input: ResearchInput,
   result: ResearchResult,
   idempotencyKey: string,
+  agentRun?: Pick<ResearchAgentResult, "checkpoint" | "decisions">,
 ): Promise<ResearchResult> {
   if (session.kind === "demo") {
     return withPersistedRunId(result, `demo-${idempotencyKey}`);
@@ -86,7 +88,13 @@ export async function persistResearchRun(
     mode: "mock",
     idempotency_key: idempotencyKey,
     input_json: input,
-    checkpoint: { phase: "research", version: 1 },
+    checkpoint: {
+      phase: agentRun?.checkpoint.phase ?? "researching",
+      version: 2,
+      turn: agentRun?.checkpoint.turn ?? 0,
+      tool_calls: agentRun?.checkpoint.toolCalls ?? 0,
+      runtime: result.run.execution?.engine ?? "legacy_mock_fixture",
+    },
     heartbeat_at: now,
   });
 
@@ -237,15 +245,29 @@ export async function persistResearchRun(
         actor_id: actorId,
         event_type: "research.run.started",
         outcome: "completed",
-        details_json: { mode: "mock", tool_count: persisted.toolTrail.length },
+        details_json: {
+          mode: "mock",
+          runtime: persisted.run.execution?.engine ?? "legacy_mock_fixture",
+          tool_count: persisted.toolTrail.length,
+          evidence_item_count: persisted.run.execution?.usage.evidenceItems ?? 0,
+          external_actions: persisted.run.execution?.policy.externalActions ?? "disabled",
+        },
       },
+      ...(agentRun?.decisions ?? []).map(({ tool, decision }) => ({
+        workspace_id: workspace.id,
+        research_run_id: runId,
+        actor_id: actorId,
+        event_type: decision.auditLabel,
+        outcome: decision.disposition,
+        details_json: { tool, reason: decision.reason },
+      })),
       ...persisted.toolTrail.map((tool) => ({
         workspace_id: workspace.id,
         research_run_id: runId,
         actor_id: actorId,
         event_type: `tool.${tool.tool}`,
         outcome: tool.status,
-        details_json: { summary: tool.summary, simulated: true },
+        details_json: { summary: tool.summary, turn: tool.turn, simulated: tool.simulated },
       })),
     ]);
 
@@ -256,7 +278,13 @@ export async function persistResearchRun(
       .update({
         status: "completed",
         result_snapshot: persisted,
-        checkpoint: { phase: "completed", version: 1 },
+        checkpoint: {
+          phase: agentRun?.checkpoint.phase ?? "completed",
+          version: 2,
+          turn: agentRun?.checkpoint.turn ?? persisted.run.execution?.usage.turns ?? persisted.toolTrail.length,
+          tool_calls: agentRun?.checkpoint.toolCalls ?? persisted.run.execution?.usage.toolCalls ?? persisted.toolTrail.length,
+          runtime: persisted.run.execution?.engine ?? "legacy_mock_fixture",
+        },
         heartbeat_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       })

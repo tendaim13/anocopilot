@@ -1,4 +1,4 @@
-import type { Candidate, PlanItem, ResearchInput, ResearchResult, ScoreComponent, ToolEvent } from "@/lib/ano/types";
+import type { Candidate, PlanItem, ResearchInput, ResearchResult, ScoreComponent } from "@/lib/ano/types";
 
 const capturedAt = "21 Oct 2026";
 
@@ -96,7 +96,13 @@ const allCandidates: Omit<Candidate, "score">[] = [
   },
 ];
 
-export function runMockResearch(input: ResearchInput): ResearchResult {
+export type MockResearchFixture = Omit<ResearchResult, "toolTrail">;
+
+/**
+ * Local fixture data only. The bounded runtime owns the actual tool execution
+ * order and produces the trace that is returned to the user.
+ */
+export function runMockResearch(input: ResearchInput): MockResearchFixture {
   const candidates = allCandidates
     .slice(0, input.maxResults)
     .map((candidate) => ({ ...candidate, score: score(candidate.scoreComponents) }))
@@ -111,14 +117,6 @@ export function runMockResearch(input: ResearchInput): ResearchResult {
     reason: candidate.recommendationReason,
   }));
 
-  const toolTrail: ToolEvent[] = [
-    { id: "tool-01", tool: "search_companies", status: "completed", summary: `Matched ${candidates.length} simulated companies against the requested ICP.` },
-    { id: "tool-02", tool: "search_people", status: "completed", summary: `Located role-aligned candidate contacts for each shortlisted account.` },
-    { id: "tool-03", tool: "get_account_evidence", status: "completed", summary: "Collected simulated company, workflow, hiring, and contact observations." },
-    { id: "tool-04", tool: "compute_score", status: "completed", summary: "Calculated deterministic fit, signal, reachability, and timing components." },
-    { id: "tool-05", tool: "build_today_plan", status: "completed", summary: "Ordered research and outreach preparation by impact and readiness." },
-  ];
-
   return {
     run: {
       id: "mock-run-oct21",
@@ -128,7 +126,6 @@ export function runMockResearch(input: ResearchInput): ResearchResult {
       message: `Ano completed a simulated research run for ${input.industry} in ${input.geography}.`,
     },
     candidates,
-    toolTrail,
     plan,
   };
 }

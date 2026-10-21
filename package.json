@@ -7,6 +7,7 @@
     "build": "next build --turbopack",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test:phase4a": "tsx --test tests/phase4a-runtime.test.ts",
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
     "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs"
   },
@@ -23,6 +24,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "pg": "^8.16.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.2"
   }
 }
