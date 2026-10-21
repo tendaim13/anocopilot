@@ -100,10 +100,18 @@ set search_path = public
 as $$
 declare
   created_workspace_id uuid;
+  actor_email text;
+  actor_domain text;
 begin
   if auth.uid() is null then
     raise exception 'Authentication required';
   end if;
+
+  -- A workspace begins with the authenticated owner's email domain. Owners can
+  -- explicitly add domains later, but a newly-created tenant is never open to
+  -- arbitrary signed-in users by default.
+  actor_email := lower(coalesce(auth.jwt() ->> 'email', ''));
+  actor_domain := split_part(actor_email, '@', 2);
 
   insert into public.workspaces (name, slug, created_by)
   values (trim(workspace_name), lower(trim(workspace_slug)), auth.uid())
@@ -111,6 +119,11 @@ begin
 
   insert into public.workspace_members (workspace_id, user_id, role)
   values (created_workspace_id, auth.uid(), 'owner');
+
+  if actor_domain ~ '^[a-z0-9.-]+\.[a-z]{2,}$' then
+    insert into public.workspace_domains (workspace_id, domain)
+    values (created_workspace_id, actor_domain);
+  end if;
 
   return created_workspace_id;
 end;

@@ -112,8 +112,9 @@ export function AnoWorkbench() {
   const shortlistedCount = Object.values(candidateStates).filter((state) => state === "shortlisted").length;
   const liveWorkspace = workspaceRuntime?.mode === "supabase";
   const signInRequired = workspaceError?.code === "AUTH_REQUIRED";
-  const workspaceName = workspaceRuntime?.workspace.name ?? (signInRequired ? "Sign in required" : "Nerva Studio — demo");
-  const persistenceLabel = liveWorkspace ? "Workspace persistence" : signInRequired ? "Secure workspace access" : "Browser demo persistence";
+  const workspaceSetupRequired = workspaceError?.code === "WORKSPACE_REQUIRED";
+  const workspaceName = workspaceRuntime?.workspace.name ?? (signInRequired ? "Sign in required" : workspaceSetupRequired ? "Set up workspace" : "Nerva Studio — demo");
+  const persistenceLabel = liveWorkspace ? "Workspace persistence" : signInRequired ? "Secure workspace access" : workspaceSetupRequired ? "Workspace setup required" : "Browser demo persistence";
 
   function update(field: keyof ResearchInput, value: string | number) {
     setInput((current) => ({ ...current, [field]: value }));
@@ -123,8 +124,9 @@ export function AnoWorkbench() {
     setError(null);
     setClarification(null);
 
-    if (signInRequired) {
+    if (signInRequired || workspaceSetupRequired) {
       setError("Sign in before Ano can create a workspace-scoped research run.");
+      if (workspaceSetupRequired) setError("Create your Ano workspace before starting a workspace-scoped research run.");
       return;
     }
 
@@ -200,8 +202,8 @@ export function AnoWorkbench() {
           ))}
         </nav>
 
-        <div className="sidebar-footer">
-          <div className="safe-mode"><span className="live-dot" /> {liveWorkspace ? "Workspace persistence" : signInRequired ? "Sign in required" : "Local demo workspace"}</div>
+          <div className="sidebar-footer">
+          <div className="safe-mode"><span className="live-dot" /> {liveWorkspace ? "Workspace persistence" : signInRequired ? "Sign in required" : workspaceSetupRequired ? "Workspace setup required" : "Local demo workspace"}</div>
           <div className="account-chip"><span className="avatar">TM</span><span>Tendai Midzi</span><span className="chevron">⌄</span></div>
         </div>
       </aside>
@@ -210,8 +212,9 @@ export function AnoWorkbench() {
         <header className="topbar">
           <div className="crumbs"><span>Workspace</span><b>/</b><strong>{workspaceName}</strong></div>
           <div className="topbar-actions">
-            <span className="mock-badge">{liveWorkspace ? "Simulated data" : "Local demo"}</span>
+            <span className="mock-badge">{liveWorkspace ? "Simulated data" : workspaceSetupRequired ? "Setup required" : "Local demo"}</span>
             {signInRequired && <Link href="/login" className="topbar-signin">Sign in</Link>}
+            {workspaceSetupRequired && <Link href="/onboarding" className="topbar-signin">Create workspace</Link>}
             <button className="icon-button" type="button" aria-label="Notifications">◌</button>
             <button className="avatar-button" type="button" aria-label="Account">TM</button>
           </div>
@@ -224,7 +227,7 @@ export function AnoWorkbench() {
               <h1>Research workbench</h1>
               <p className="lede">Turn a focused ICP into an evidence-backed shortlist and a practical next-step plan.</p>
             </div>
-            <div className="mode-note"><span>✦</span><div><b>{persistenceLabel}</b><small>{liveWorkspace ? "Server session and records are scoped to this workspace." : signInRequired ? "Use an approved work email to reach your workspace." : "Saved in this browser; use Supabase for team tenancy."}</small></div></div>
+            <div className="mode-note"><span>✦</span><div><b>{persistenceLabel}</b><small>{liveWorkspace ? "Server session and records are scoped to this workspace." : signInRequired ? "Use your work email to securely access Ano." : workspaceSetupRequired ? "Your signed-in account can create its first secure workspace." : "Saved in this browser; use Supabase for team tenancy."}</small></div></div>
           </section>
 
           <section className="stat-row" aria-label="Research summary">

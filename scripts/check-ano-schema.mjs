@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 
 if (process.env.ANO_DATABASE_LABEL !== "ano") {
@@ -15,9 +16,23 @@ const requiredTables = [
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
+
+async function databaseSslConfig(url) {
+  if (url.includes("localhost") || url.includes("127.0.0.1")) return false;
+
+  const certificatePath = process.env.SUPABASE_DB_SSL_CA_PATH;
+  if (!certificatePath) return { rejectUnauthorized: true };
+
+  try {
+    return { rejectUnauthorized: true, ca: await readFile(certificatePath, "utf8") };
+  } catch {
+    throw new Error("Ano could not read SUPABASE_DB_SSL_CA_PATH for strict database certificate verification.");
+  }
+}
+
 const client = new Client({
   connectionString: databaseUrl,
-  ssl: databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1") ? false : { rejectUnauthorized: true },
+  ssl: await databaseSslConfig(databaseUrl),
 });
 
 try {

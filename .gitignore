@@ -10,6 +10,7 @@
 # local environment configuration
 .env*
 !.env.example
+/.certs/
 
 # system
 .DS_Store

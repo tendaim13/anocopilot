@@ -21,9 +21,15 @@ export function LoginForm() {
     }
 
     setIsSubmitting(true);
+    const currentUrl = new URL(window.location.href);
+    const requestedNext = currentUrl.searchParams.get("next");
+    const destination = requestedNext?.startsWith("/") ? requestedNext : "/";
+    const callbackUrl = new URL("/auth/callback", window.location.origin);
+    callbackUrl.searchParams.set("next", destination);
+
     const { error } = await client.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      options: { emailRedirectTo: callbackUrl.toString() },
     });
     setIsSubmitting(false);
     setMessage(error ? "Ano could not send a sign-in link. Check the Auth configuration and try again." : "Check your inbox for your Ano sign-in link.");
@@ -41,7 +47,7 @@ export function LoginForm() {
           <button className="primary-button" type="submit" disabled={isSubmitting}>{isSubmitting ? "Sending link…" : "Email me a sign-in link"}<span>→</span></button>
         </form>
         {message && <p className="auth-message" role="status">{message}</p>}
-        <p className="auth-footnote">No workspace yet? An owner must create it first. <Link href="/">Return to Ano</Link></p>
+        <p className="auth-footnote">New to Ano? After signing in, you can create your first secure workspace. <Link href="/">Return to Ano</Link></p>
       </section>
     </main>
   );
