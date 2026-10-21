@@ -1,6 +1,6 @@
 # Ano Copilot
 
-Ano is an independent AI sales-planning copilot. Its standalone core turns the account context a workspace member enters into a reviewable brief, outreach draft, and practical day/week plan. External account discovery and enrichment are future, explicitly approved capabilities.
+Ano is an independent AI sales-planning copilot. Its standalone core turns a workspace member’s offer, market, buyer, and sales-goal context into a reviewable ideal-customer profile (ICP) and research plan. External account discovery and enrichment are future, explicitly approved capabilities.
 
 Mercury is Ano's first and deepest integration. Ano does **not** share Mercury's database, schema, credentials, or internal services. It reads Mercury through a narrow connector and proposes actions for a person to approve.
 
@@ -20,7 +20,9 @@ Mercury is Ano's first and deepest integration. Ano does **not** share Mercury's
 
 ## Current status
 
-Ano has an authenticated, workspace-scoped standalone brief flow. It stores a user-entered account, its supplied context, evidence labels, a readiness score, a Bedrock-generated brief, and review-only work items in Ano’s own Supabase project. The follow-up migration `20261021_000002_manual_workspace_records.sql` adds a truthful `manual` source label and must be applied to Ano’s database before production use.
+Ano has an authenticated, workspace-scoped ICP setup flow. It stores a user-entered offer, target market, locations, ideal-customer definition, buyer roles, objective, and exclusions; then creates evidence labels, an ICP-readiness score, a Bedrock-generated market brief, and review-only research-plan items in Ano’s own Supabase project. The follow-up migrations `20261021_000002_manual_workspace_records.sql` and `20261021_000003_icp_profiles.sql` add truthful manual records and Ano-only ICP storage.
+
+Account briefs are deliberately deferred until a user selects or manually adds a real target account. The starting flow never invents an account, a contact, or outreach.
 
 Phase 3 (the Mercury connector) and all provider adapters are intentionally deferred. The previous simulated research loop is retired from the public application path. Its safety tests remain as an internal reference; it neither runs from the interface nor supplies a fallback result.
 

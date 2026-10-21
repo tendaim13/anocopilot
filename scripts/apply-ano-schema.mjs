@@ -14,6 +14,10 @@ const migrations = [
     id: "20261021_000002_manual_workspace_records",
     file: path.join(projectRoot, "supabase/migrations/20261021_000002_manual_workspace_records.sql"),
   },
+  {
+    id: "20261021_000003_icp_profiles",
+    file: path.join(projectRoot, "supabase/migrations/20261021_000003_icp_profiles.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {

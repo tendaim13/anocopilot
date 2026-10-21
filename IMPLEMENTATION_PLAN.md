@@ -153,6 +153,7 @@ The exact field types and migrations are deferred until the implementation phase
 | ResearchRun | Trigger, input, model mode, status, checkpoint key, start/end, failure state, budget usage. |
 | EvidenceItem | Source, tool, observed claim, timestamp, source URL/reference, simulated/live label, account/contact association. |
 | AccountCandidate and ContactCandidate | Discovery result, source metadata, lifecycle state, and linkage to shortlisted work. |
+| IcpProfile and IcpBrief | The workspace’s own offer, market, buyer, and objective definition plus its source-constrained ICP output. |
 | Scorecard | Versioned deterministic components, score, confidence, exclusions, and score explanation inputs. |
 | Brief | Evidence-backed summary, recommendation, confidence, and review state. |
 | WorkItem | Ano-owned Today/This Week recommendation and its disposition. |
@@ -264,7 +265,7 @@ Exit criteria:
 
 **Phase 4B — implemented:** A server-only Bedrock Converse adapter is available only with explicit complete configuration. It has five no-argument mock/deterministic tool schemas, a bounded multi-turn protocol, matching `toolUseId` result blocks, independently validated tool inputs/results, configured guardrails, safe stop handling, and validated final evidence citations. The application-owned executor remains the sole authority for tool validation, bounded execution, persistence, and approval boundaries.
 
-**Phase 4C — implemented (standalone core):** The public product now starts with a signed-in workspace member entering an account, optional contact, account context, and objective. Ano labels those supplied records as manual `M-###` evidence, calculates an information-readiness score, and asks Bedrock for one strict JSON brief, human-review outreach draft, and plan. The response must cite only manual evidence IDs; it receives no tool schema and cannot fall back to simulated data. The account, evidence, scorecard, brief, plan, and audit event are persisted in Ano’s own workspace. Mercury and provider phases remain deferred.
+**Phase 4C — implemented (standalone ICP core):** The public product now starts with a signed-in workspace member defining the workspace’s own product, value proposition, target market and locations, ideal customer, buyer roles, objective, and optional exclusions/context. Ano labels those supplied records as manual `M-###` evidence, calculates an ICP-readiness score, and asks Bedrock for one strict JSON ICP and future research plan. The response must cite only manual evidence IDs; it receives no tool schema and cannot fall back to simulated data. The ICP profile, evidence, ICP brief, plan, and audit event are persisted in Ano’s own workspace. Account briefs, prospect records, contacts, scoring, and outreach are intentionally deferred until a user has a real target account. Mercury and provider phases remain deferred.
 
 **Goal:** Turn the workflow into a controlled, multi-step research agent.
 

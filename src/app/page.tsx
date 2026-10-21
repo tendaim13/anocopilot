@@ -1,5 +1,5 @@
-import { StandaloneWorkbench } from "@/components/standalone-workbench";
+import { IcpSetupWorkbench } from "@/components/icp-setup-workbench";
 
 export default function HomePage() {
-  return <StandaloneWorkbench />;
+  return <IcpSetupWorkbench />;
 }
