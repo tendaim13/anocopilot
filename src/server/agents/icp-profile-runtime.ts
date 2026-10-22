@@ -7,13 +7,36 @@ import { BedrockAdapterError } from "@/server/agents/bedrock-contracts";
 import { AgentRuntimeError } from "@/server/agents/runtime";
 import { createCheckpoint } from "@/server/agents/resume";
 
+function normaliseLabel(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase().replace(/[^a-z]+/g, " ").trim() : value;
+}
+
+function normalisePlanAction(value: unknown) {
+  const label = normaliseLabel(value);
+  if (typeof label !== "string") return value;
+  if (label.includes("segment")) return "Define segment";
+  if (label.includes("market") || label.includes("validat")) return "Validate market";
+  if (label.includes("research") || label.includes("prepare")) return "Prepare research";
+  if (label.includes("profile") || label.includes("icp") || label.includes("refine")) return "Refine profile";
+  return value;
+}
+
+function normalisePriority(value: unknown) {
+  const label = normaliseLabel(value);
+  if (typeof label !== "string") return value;
+  if (["now", "immediate", "high", "urgent"].includes(label)) return "Now";
+  if (["today", "medium"].includes(label)) return "Today";
+  if (["this week", "week", "low"].includes(label)) return "This week";
+  return value;
+}
+
 const planItemSchema = z.object({
   title: z.string().trim().min(3).max(160),
-  action: z.enum(["Refine profile", "Validate market", "Define segment", "Prepare research"]),
-  priority: z.enum(["Now", "Today", "This week"]),
+  action: z.preprocess(normalisePlanAction, z.enum(["Refine profile", "Validate market", "Define segment", "Prepare research"])),
+  priority: z.preprocess(normalisePriority, z.enum(["Now", "Today", "This week"])),
   reason: z.string().trim().min(8).max(320),
   evidenceIds: z.array(z.string().trim().regex(/^M-\d{3}$/)).min(1).max(4),
-}).strict();
+});
 
 const modelIcpSchema = z.object({
   positioning: z.string().trim().min(12).max(700),
@@ -21,12 +44,12 @@ const modelIcpSchema = z.object({
   knownFacts: z.array(z.object({
     text: z.string().trim().min(3).max(240),
     evidenceIds: z.array(z.string().trim().regex(/^M-\d{3}$/)).min(1).max(3),
-  }).strict()).min(1).max(4),
+  })).min(1).max(4),
   questions: z.array(z.string().trim().min(4).max(220)).max(3),
   assumptions: z.array(z.string().trim().min(4).max(220)).max(3),
   evidenceIds: z.array(z.string().trim().regex(/^M-\d{3}$/)).min(1).max(6),
   plan: z.array(planItemSchema).min(1).max(3),
-}).strict();
+});
 
 function checkpoint(phase: "failed" | "completed") {
   return createCheckpoint(phase, 1, 0);
@@ -89,6 +112,7 @@ function systemPrompt(): SystemContentBlock[] {
       "When a supplied field explicitly says it is unknown, such as 'Not sure', treat it as missing context rather than a fact and add a clarification question.",
       "Every known fact and proposed plan item must cite M-### evidence IDs supplied in the user input.",
       "Keep the response concise: at most 4 known facts, 3 questions, 3 assumptions, and 3 plan items. Keep positioning and the ideal-customer summary to two short sentences each.",
+      "For each plan item, action must be exactly one of: Refine profile, Validate market, Define segment, Prepare research. Priority must be exactly one of: Now, Today, This week.",
       "Return only JSON with this exact shape: {positioning, idealCustomerSummary, knownFacts:[{text,evidenceIds}], questions, assumptions, evidenceIds, plan:[{title,action,priority,reason,evidenceIds}]}",
       "Do not include URLs, external citations, named companies, named contacts, email copy, or information absent from the supplied evidence.",
     ].join("\n"),
@@ -171,7 +195,10 @@ export async function runIcpProfile(
     modelFailure("Ano stopped because Bedrock did not return valid JSON for the ICP.", "MODEL_MALFORMED");
   }
   const parsed = modelIcpSchema.safeParse(rawModelAnswer);
-  if (!parsed.success) modelFailure("Ano stopped because Bedrock did not return the required structured ICP.", "MODEL_MALFORMED");
+  if (!parsed.success) {
+    const fields = [...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || "root"))].slice(0, 4).join(", ");
+    modelFailure(`Ano received an incomplete ICP structure (${fields}). No market profile was saved; please try again.`, "MODEL_MALFORMED");
+  }
 
   const answer = parsed.data;
   const citedIds = [...answer.evidenceIds, ...answer.knownFacts.flatMap((fact) => fact.evidenceIds), ...answer.plan.flatMap((item) => item.evidenceIds)];

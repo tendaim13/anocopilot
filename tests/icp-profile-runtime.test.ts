@@ -71,6 +71,23 @@ test("ICP setup accepts an unknown ideal customer profile and asks Ano to clarif
   assert.equal(result.readiness.components.find((component) => component.label === "Target market")?.score, 0);
 });
 
+test("ICP setup normalises common plan labels while preserving its controlled plan vocabulary", async () => {
+  const result = await runIcpProfile(input, config, async () => completedIcp({
+    plan: [{
+      title: "Validate the initial market",
+      action: "Market validation",
+      priority: "High",
+      reason: "Validate the supplied market context before selecting a research segment.",
+      evidenceIds: ["M-003"],
+      confidence: "low",
+    }],
+    generatedAt: "ignored-extra-field",
+  }));
+
+  assert.equal(result.plan[0].action, "Validate market");
+  assert.equal(result.plan[0].priority, "Now");
+});
+
 test("ICP setup explains when Bedrock reaches its response limit", async () => {
   const converse: BedrockConverse = async () => ({ stopReason: "max_tokens" } as ConverseCommandOutput);
   await assert.rejects(
