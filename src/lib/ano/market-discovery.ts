@@ -53,9 +53,11 @@ export type MarketScope = {
 
 export type ProviderReadiness = {
   key: "prospeo";
-  state: "disabled";
+  state: "disabled" | "ready" | "error";
   message: string;
-  action: "none";
+  action: "none" | "check_connection" | "create_preview";
+  checkedAt?: string;
+  lastErrorCode?: string;
 };
 
 export type MarketAuditEvent = {
@@ -70,7 +72,7 @@ export type MarketAuditEvent = {
 export type MarketScan = {
   id: string;
   scope: MarketScope;
-  status: "not_started" | "awaiting_provider_approval" | "blocked_provider";
+  status: "not_started" | "awaiting_provider_approval" | "blocked_provider" | "preview_ready" | "search_in_progress" | "completed" | "requires_manual_review";
   evidenceIds: string[];
   comparisonCriteria: string[];
 };
@@ -82,6 +84,29 @@ export type CompanyCandidate = {
   name: string;
   matchingSignals: string[];
   evidenceIds: string[];
+  industry?: string;
+  location?: string;
+  employeeBand?: string;
+  website?: string;
+  lifecycleState?: "discovered" | "shortlisted" | "dismissed" | "review";
+};
+
+export type CompanyDiscoverySearch = {
+  id: string;
+  status: "awaiting_approval" | "running" | "completed" | "requires_manual_review" | "failed";
+  requestedAt: string;
+  approvedAt?: string;
+  completedAt?: string;
+  scope: string[];
+  criteria: string[];
+  maximumResults: 25;
+  estimatedMaximumCredits: 1;
+  estimateDetail: string;
+  providerFilters: Record<string, unknown>;
+  canonicalLocations: string[];
+  resultCount?: number;
+  wasFree?: boolean;
+  failureMessage?: string;
 };
 
 export type SalesPlaybook = {
@@ -129,6 +154,10 @@ export type MarketBriefResult = {
   scope: MarketScope;
   scan: MarketScan;
   provider: ProviderReadiness;
+  companyDiscovery?: {
+    search?: CompanyDiscoverySearch;
+    candidates: CompanyCandidate[];
+  };
   timeline: MarketAuditEvent[];
 };
 

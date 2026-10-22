@@ -5,6 +5,7 @@ import { runMarketHypothesis } from "@/server/agents/market-hypothesis-runtime";
 import { createCheckpoint } from "@/server/agents/resume";
 import { AgentRuntimeError } from "@/server/agents/runtime";
 import { persistMarketBrief, readLatestMarketBrief, readMarketBrief, saveManualMarketScope, saveMarketDecision, updateMarketHypotheses } from "@/server/persistence/market-discovery-store";
+import { approveProspeoCompanySearch, checkProspeoConnection, prepareProspeoCompanySearch } from "@/server/persistence/prospeo-company-discovery-store";
 
 export async function createMarketBriefForWorkspace(session: WorkspaceSession, input: ProductBriefInput, idempotencyKey: string): Promise<MarketBriefResult> {
   try {
@@ -35,4 +36,16 @@ export async function getMarketBriefForWorkspace(session: WorkspaceSession, prod
 
 export async function getLatestMarketBriefForWorkspace(session: WorkspaceSession) {
   return readLatestMarketBrief(session);
+}
+
+export async function checkProspeoConnectionForWorkspace(session: WorkspaceSession) {
+  return checkProspeoConnection(session);
+}
+
+export async function prepareProspeoCompanySearchForWorkspace(session: WorkspaceSession, productBriefId: string) {
+  return prepareProspeoCompanySearch(session, productBriefId);
+}
+
+export async function approveProspeoCompanySearchForWorkspace(session: WorkspaceSession, searchId: string) {
+  return approveProspeoCompanySearch(session, searchId);
 }

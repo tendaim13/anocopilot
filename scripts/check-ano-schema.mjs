@@ -12,7 +12,7 @@ if (!process.env.SUPABASE_DB_URL) {
 const requiredTables = [
   "workspaces", "workspace_domains", "workspace_members", "connector_connections", "research_runs",
   "account_candidates", "contact_candidates", "evidence_items", "scorecards", "briefs", "work_items",
-  "proposals", "approval_decisions", "audit_logs", "notifications", "icp_profiles", "icp_briefs", "product_briefs", "market_hypotheses", "market_decisions", "market_scans", "ano_schema_migrations",
+  "proposals", "approval_decisions", "audit_logs", "notifications", "icp_profiles", "icp_briefs", "product_briefs", "market_hypotheses", "market_decisions", "market_scans", "provider_company_searches", "ano_schema_migrations",
 ];
 const requiredMigrations = [
   "20261021_000001_ano_workspace_and_research",
@@ -20,6 +20,7 @@ const requiredMigrations = [
   "20261021_000003_icp_profiles",
   "20261022_000004_market_discovery_phase_a",
   "20261022_000005_market_discovery_runtime",
+  "20261022_000006_prospeo_company_discovery",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;

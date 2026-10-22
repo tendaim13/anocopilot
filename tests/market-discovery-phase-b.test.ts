@@ -16,11 +16,11 @@ const brief: ProductBriefInput = {
   additionalContext: "",
 };
 
-test("a confirmed location becomes a paused provider-approval checkpoint, not a discovery result", () => {
+test("a confirmed location becomes a preview-only provider checkpoint, not a discovery result", () => {
   const scope = scopeForDecision(brief, "lock_location");
   assert.equal(scope.state, "awaiting_provider_approval");
   assert.deepEqual(scope.locations, ["Malaysia", "Australia"]);
-  assert.match(scope.summary, /Company discovery remains unavailable/i);
+  assert.match(scope.summary, /prepare a Prospeo search preview/i);
   assert.equal(canTransition("awaiting_scope_decision", scope.state), true);
 });
 
@@ -49,5 +49,5 @@ test("disabled company discovery returns an honest block with no fabricated cand
   assert.equal(preview.estimatedCredits, null);
   assert.deepEqual(preview.candidates, []);
   assert.match(preview.message, /will not fabricate/i);
-  assert.equal(disabledProviderReadiness().action, "none");
+  assert.equal(disabledProviderReadiness().action, "check_connection");
 });

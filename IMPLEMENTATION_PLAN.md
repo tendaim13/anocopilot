@@ -219,6 +219,7 @@ Existing standalone workspace, run, evidence, audit, and connection records rema
 | `MarketHypothesis` | Ano’s proposed company types, buyer roles, pains, assumptions, and open questions. |
 | `ResearchDecision` | A user choice to lock a market, continue, edit a hypothesis, approve a provider action, or dismiss a candidate. |
 | `MarketScan` | The method, scope, source evidence, comparison criteria, and status for a location/segment research step. |
+| `ProviderCompanySearch` | The immutable one-page Prospeo preview, user approval, provider receipt, outcome, and safe no-retry state. |
 | `CompanyCandidate` | A provider-discovered company, its source metadata, state, and evidence-backed fit signals. |
 | `Shortlist` | User-approved companies selected for deeper research. |
 | `ContactResearchRequest` | The company, roles, approval, estimate, and idempotency record for enrichment. |
@@ -267,23 +268,25 @@ Exit criteria:
 - Ano makes no location or company claim without the correct evidence label.
 - A missing provider connection produces an honest blocked state, not a simulated result.
 
-### Phase C — Prospeo company discovery
+### Phase C — Prospeo company discovery — implemented
 
 **Goal:** Enable approved, paid company discovery safely.
 
 Build:
 
-- Add workspace-scoped Prospeo connection setup and health checks.
-- Verify current API capability, terms, credits, rate limits, permitted use, and account access before enabling it.
-- Build a Prospeo adapter for approved company search/preview only.
-- Show query preview, estimate, confirmation, provider receipt, normalized candidates, and source timestamps.
-- Add candidate review and shortlist actions.
+- Add a workspace-scoped Prospeo account check using `PROSPEO_KEY`; the credential stays server-only and is never stored in Ano.
+- Use the free location-suggestion endpoint to canonicalise a user-locked location only after the user requests a preview.
+- Build a company-search preview that is permanently capped at one page (25 companies) and discloses the maximum one-credit impact before the company-search request.
+- Atomically claim the user-approved search before it leaves Ano. A completed, in-progress, or uncertain provider request cannot be reissued automatically.
+- Store only normalized company candidates, matching signals, provider retrieval time, provider receipt metadata, evidence records, candidate review state, and an audit trail. No contact search, enrichment, CRM write, or outreach path is enabled.
 
 Exit criteria:
 
 - No Prospeo request occurs without a user-approved scope and estimated cost.
 - Every candidate shows its provider provenance and matching signals.
 - Retrying cannot duplicate the same credit-bearing request.
+
+Implementation note: the connection check and location suggestions are free Prospeo endpoints, but they remain explicit user actions. The only credit-bearing action is labelled **Run 1-page company search**. A provider failure after that action is marked for manual review rather than retried.
 
 ### Phase D — Dropcontact contact verification
 
@@ -360,6 +363,6 @@ Every phase requires:
 
 ## Current checkpoint
 
-**Phase A and Phase B are complete.** Ano now starts with the minimal product brief, persists unverified hypotheses separately from direct input, and pauses at a durable market-scope decision. A user can restore the latest run, edit hypotheses before a scope is selected, provide a manual location, or keep/comparison-request the scope open.
+**Phase A, Phase B, and Phase C are complete.** Ano now starts with the minimal product brief, persists unverified hypotheses separately from direct input, pauses at a durable market-scope decision, and restores the latest run. A user can edit hypotheses before choosing a scope, provide a manual location, or keep/comparison-request the scope open.
 
-The company-discovery adapter remains explicitly disabled. It returns a visible blocked state with no candidate, credit estimate, connector call, or fabricated result. The next implementation task is **Phase C**: a separately approved Prospeo company-discovery integration with query preview, credit estimate, health checks, provenance, and duplicate-prevention controls.
+With a locked location, a user can explicitly check Prospeo, request a free canonical-location preview, inspect a permanently one-page query and its maximum one-credit impact, then decide whether to run it. Returned companies are stored with provider provenance and can be shortlisted, reviewed, or dismissed. Ano never searches people, enriches contacts, writes to a CRM, or starts outreach in Phase C; those remain Phase D or later.

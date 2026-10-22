@@ -11,8 +11,8 @@ export function disabledProviderReadiness(): ProviderReadiness {
   return {
     key: "prospeo",
     state: "disabled",
-    message: "Company discovery is not connected yet. Ano cannot search for or fabricate companies in this workspace.",
-    action: "none",
+    message: "Check the Prospeo connection before Ano can prepare a company-search preview. Ano cannot search for or fabricate companies in this workspace.",
+    action: "check_connection",
   };
 }
 
@@ -24,7 +24,7 @@ export function scopeForDecision(input: ProductBriefInput, choice: MarketDecisio
   if (choice === "lock_location") {
     const selected = locations(input.locationPreference);
     if (selected.length === 0) throw new MarketStateTransitionError("Ano needs a location before it can lock a location scope.");
-    return { state: "awaiting_provider_approval", kind: "location", locations: selected, source: "workspace_input", summary: `Location scope locked to ${selected.join(", ")}. Company discovery remains unavailable until a later approved provider phase.` };
+    return { state: "awaiting_provider_approval", kind: "location", locations: selected, source: "workspace_input", summary: `Location scope locked to ${selected.join(", ")}. Ano can now prepare a Prospeo search preview, but cannot search until you explicitly approve it.` };
   }
   if (choice === "compare_markets") {
     return { state: "awaiting_market_evidence", kind: "compare", locations: [], source: "none", summary: "Market comparison requested. Ano has no research evidence or enabled source to recommend a location yet." };
@@ -38,7 +38,7 @@ export function scopeForDecision(input: ProductBriefInput, choice: MarketDecisio
 export function scopeForManualLocation(location: string): MarketScope {
   const selected = locations(location);
   if (selected.length === 0) throw new MarketStateTransitionError("Ano needs a location before it can lock a location scope.");
-  return { state: "awaiting_provider_approval", kind: "location", locations: selected, source: "workspace_decision", summary: `Location scope locked to ${selected.join(", ")}. Company discovery remains unavailable until a later approved provider phase.` };
+  return { state: "awaiting_provider_approval", kind: "location", locations: selected, source: "workspace_decision", summary: `Location scope locked to ${selected.join(", ")}. Ano can now prepare a Prospeo search preview, but cannot search until you explicitly approve it.` };
 }
 
 export function canTransition(from: MarketRunState, to: MarketRunState) {

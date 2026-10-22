@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type { WorkspaceRuntime } from "@/contracts/ano";
-import type { MarketBriefResult, MarketDecisionInput, MarketHypothesis, ProductBriefInput } from "@/lib/ano/market-discovery";
+import type { CompanyCandidate, MarketBriefResult, MarketDecisionInput, MarketHypothesis, ProductBriefInput, ProviderReadiness } from "@/lib/ano/market-discovery";
 
 const starterInput: ProductBriefInput = {
   offer: "",
@@ -166,7 +166,7 @@ function MarketHypothesisResult({ initialResult }: { initialResult: MarketBriefR
       const payload = (await response.json()) as { result?: MarketBriefResult; error?: string };
       if (!response.ok || !payload.result) throw new Error(payload.error ?? "Ano could not lock that market scope.");
       setResult(payload.result);
-      setMessage("Location scope saved. Company discovery remains unavailable until a later approved provider phase.");
+      setMessage("Location scope saved. Check Prospeo, then review its one-page search preview before you decide whether to run it.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Ano could not lock that market scope.");
     } finally {
@@ -200,9 +200,86 @@ function MarketHypothesisResult({ initialResult }: { initialResult: MarketBriefR
     <section className="results-heading"><div><p className="section-kicker">02 — REVIEW THE HYPOTHESES</p><h2>{result.productBrief.offer}</h2><p>{result.run.message}</p></div><div className="run-complete"><span>✓</span> Product brief saved</div></section>
     <section className="market-results">
       <article className="brief-panel standalone-brief"><div className="brief-top"><div><p className="section-kicker">ANO MARKET MAP</p><h2>What may be worth testing</h2><p>Hypotheses are grounded only in your product brief—not external market research.</p></div><span className="confidence-badge">Hypothesis only</span></div><section className="brief-block"><h3>Preliminary market map</h3><p>{result.hypothesis.marketMap}</p></section><section className="brief-block"><div className="section-row"><h3>Testable hypotheses</h3>{result.locationDecision.status !== "selected" && <button type="button" className="secondary-button compact" disabled={isSaving} onClick={() => setIsEditing((current) => !current)}>{isEditing ? "Cancel" : "Edit hypotheses"}</button>}</div><div className="hypothesis-list">{(isEditing ? draftHypotheses : result.hypothesis.hypotheses).map((item, index) => <article className="hypothesis-item" key={item.id}><div>{isEditing ? <><input aria-label={`Hypothesis ${index + 1} title`} value={item.title} onChange={(event) => updateDraft(index, "title", event.target.value)} /><textarea aria-label={`Hypothesis ${index + 1} statement`} value={item.statement} rows={3} onChange={(event) => updateDraft(index, "statement", event.target.value)} /></> : <><b>{item.title}</b><p>{item.statement}</p>{item.origin === "workspace_member" && <small>Edited by you · still a hypothesis</small>}</>}</div><em>{item.evidenceIds.join(" · ")}</em></article>)}</div>{isEditing && <div className="inline-actions"><button className="primary-button compact-primary" type="button" disabled={isSaving} onClick={saveHypotheses}>{isSaving ? "Saving…" : "Save hypothesis edits"}</button><span>Edits do not turn a hypothesis into research evidence.</span></div>}</section>{result.hypothesis.assumptions.length > 0 && <section className="brief-block"><h3>Assumptions to validate</h3><ul className="plain-list">{result.hypothesis.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></section>}{result.hypothesis.questions.length > 0 && <section className="brief-block"><h3>Questions that would change the research</h3><ul className="plain-list">{result.hypothesis.questions.map((item) => <li key={item}>{item}</li>)}</ul></section>}</article>
-      <div className="standalone-side"><article className="panel decision-panel"><p className="section-kicker">{result.locationDecision.status === "selected" ? "SCOPE CHECKPOINT" : "DECISION REQUIRED"}</p><h2>{result.locationDecision.status === "selected" ? "Market scope" : "Choose the location path"}</h2><p>{result.locationDecision.status === "selected" ? result.scope.summary : result.locationDecision.prompt}</p>{result.locationDecision.status !== "selected" && <div className="decision-options">{result.locationDecision.options.map((option) => <button key={option.key} className="decision-option" type="button" disabled={isSaving} onClick={() => chooseLocation(option.key)}><b>{option.label}</b><span>{option.description}</span></button>)}</div>}{result.scope.state === "awaiting_location_input" && <div className="scope-input"><label>Location to prioritise<input value={manualLocation} onChange={(event) => setManualLocation(event.target.value)} placeholder="Country, region, or city" /></label><button className="primary-button compact-primary" type="button" disabled={isSaving} onClick={lockManualLocation}>{isSaving ? "Locking…" : "Lock location scope"}</button></div>}{message && <div className="decision-message">{message}</div>}</article><article className="panel provider-state"><p className="section-kicker">COMPANY DISCOVERY</p><h2>Provider unavailable</h2><p>{result.provider.message}</p><div><span>Scope</span><b>{result.scope.locations.length ? result.scope.locations.join(", ") : result.scope.kind === "compare" ? "Comparison requested" : "Open"}</b></div><div><span>Market-scan evidence</span><b>{result.scan.evidenceIds.length} records</b></div><div><span>Provider calls</span><b>0</b></div></article><article className="panel evidence-panel"><p className="section-kicker">EVIDENCE LEDGER</p><h2>Directly from you</h2>{result.evidence.map((item) => <div className="evidence-item" key={item.id}><span>◌</span><div><b>{item.label} <em>{item.id}</em></b><p>{item.observation}</p><small>Entered in Ano · not externally verified</small></div></div>)}</article></div>
+      <div className="standalone-side">
+        <article className="panel decision-panel"><p className="section-kicker">{result.locationDecision.status === "selected" ? "SCOPE CHECKPOINT" : "DECISION REQUIRED"}</p><h2>{result.locationDecision.status === "selected" ? "Market scope" : "Choose the location path"}</h2><p>{result.locationDecision.status === "selected" ? result.scope.summary : result.locationDecision.prompt}</p>{result.locationDecision.status !== "selected" && <div className="decision-options">{result.locationDecision.options.map((option) => <button key={option.key} className="decision-option" type="button" disabled={isSaving} onClick={() => chooseLocation(option.key)}><b>{option.label}</b><span>{option.description}</span></button>)}</div>}{result.scope.state === "awaiting_location_input" && <div className="scope-input"><label>Location to prioritise<input value={manualLocation} onChange={(event) => setManualLocation(event.target.value)} placeholder="Country, region, or city" /></label><button className="primary-button compact-primary" type="button" disabled={isSaving} onClick={lockManualLocation}>{isSaving ? "Locking…" : "Lock location scope"}</button></div>}{message && <div className="decision-message">{message}</div>}</article>
+        <ProspeoDiscoveryPanel result={result} onResult={setResult} />
+        <article className="panel evidence-panel"><p className="section-kicker">EVIDENCE LEDGER</p><h2>Directly from you</h2>{result.evidence.map((item) => <div className="evidence-item" key={item.id}><span>◌</span><div><b>{item.label} <em>{item.id}</em></b><p>{item.observation}</p><small>Entered in Ano · not externally verified</small></div></div>)}</article>
+      </div>
     </section>
     <section className="audit-panel panel"><div><p className="section-kicker">RUN TIMELINE</p><h2>What Ano has done</h2></div><ol>{result.timeline.map((entry) => <li key={entry.id}><span className={entry.category} /> <div><b>{entry.label}</b><p>{entry.detail}</p></div><time>{new Date(entry.at).toLocaleString()}</time></li>)}</ol></section>
-    <section className="next-stage-banner panel"><div><p className="section-kicker">BOUNDARY</p><h2>Company research is intentionally blocked until a provider is connected</h2><p>The market scope and audit trail are ready for a future approval flow. Ano has not connected Prospeo, Dropcontact, a CRM, or any outreach channel, and it has not fabricated a company or a location claim.</p></div><span>0 provider calls</span></section>
+    <section className="next-stage-banner panel"><div><p className="section-kicker">BOUNDARY</p><h2>Company discovery stays bounded and reviewable</h2><p>Ano can check Prospeo and prepare a one-page search preview. It cannot look up people, enrich contacts, create CRM records, or start outreach in this phase.</p></div><span>{result.companyDiscovery?.search?.status === "completed" ? "1 approved search" : "0 approved searches"}</span></section>
   </>;
+}
+
+type ProspeoAccountSummary = {
+  plan: string;
+  remainingCredits: number;
+  renewalDate?: string;
+  renewalDays?: number;
+};
+
+function ProspeoDiscoveryPanel({ result, onResult }: { result: MarketBriefResult; onResult: (result: MarketBriefResult) => void }) {
+  const [isWorking, setIsWorking] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [account, setAccount] = useState<ProspeoAccountSummary | null>(null);
+  const search = result.companyDiscovery?.search;
+  const candidates = result.companyDiscovery?.candidates ?? [];
+  const scopeLocked = result.scope.state === "awaiting_provider_approval" && result.scope.kind === "location";
+
+  async function checkConnection() {
+    setIsWorking(true); setNotice(null);
+    try {
+      const response = await fetch("/api/v1/connectors/prospeo/check", { method: "POST" });
+      const payload = (await response.json()) as { provider?: ProviderReadiness; account?: ProspeoAccountSummary; error?: string };
+      if (!response.ok || !payload.provider) throw new Error(payload.error ?? "Ano could not check Prospeo.");
+      onResult({ ...result, provider: payload.provider });
+      setAccount(payload.account ?? null);
+      setNotice("Prospeo is connected. Creating a preview will only verify the exact location values; it will not search for companies.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Ano could not check Prospeo."); }
+    finally { setIsWorking(false); }
+  }
+
+  async function preparePreview() {
+    setIsWorking(true); setNotice(null);
+    try {
+      const response = await fetch(`/api/v1/market-briefs/${result.productBrief.id}/company-search/preview`, { method: "POST" });
+      const payload = (await response.json()) as { result?: MarketBriefResult; message?: string; error?: string };
+      if (!response.ok || !payload.result) throw new Error(payload.error ?? "Ano could not prepare the company-search preview.");
+      onResult(payload.result); setNotice(payload.message ?? "Search preview ready.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Ano could not prepare the company-search preview."); }
+    finally { setIsWorking(false); }
+  }
+
+  async function approveSearch() {
+    setIsWorking(true); setNotice(null);
+    try {
+      const response = await fetch(`/api/v1/company-searches/${search?.id}/approve`, { method: "POST" });
+      const payload = (await response.json()) as { result?: MarketBriefResult; message?: string; error?: string };
+      if (!response.ok || !payload.result) throw new Error(payload.error ?? "Ano could not run the approved company search.");
+      onResult(payload.result); setNotice(payload.message ?? "Company search completed.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Ano could not run the approved company search."); }
+    finally { setIsWorking(false); }
+  }
+
+  async function changeCandidateState(candidate: CompanyCandidate, state: "shortlisted" | "dismissed" | "review") {
+    setIsWorking(true); setNotice(null);
+    try {
+      const response = await fetch(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/state`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: result.run.id, state }) });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Ano could not save that company review state.");
+      onResult({ ...result, companyDiscovery: { ...result.companyDiscovery, candidates: candidates.map((item) => item.id === candidate.id ? { ...item, lifecycleState: state } : item) } });
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Ano could not save that company review state."); }
+    finally { setIsWorking(false); }
+  }
+
+  return <article className="panel provider-state prospeo-discovery">
+    <div className="provider-heading"><div><p className="section-kicker">PROSPEO · COMPANY DISCOVERY</p><h2>{search ? "Review the one-page search" : "Find candidate companies"}</h2></div><span className={`provider-badge ${result.provider.state}`}>{result.provider.state === "ready" ? "Checked" : result.provider.state === "error" ? "Needs attention" : "Not checked"}</span></div>
+    <p>{scopeLocked ? result.provider.message : "Lock a location scope first. Ano will not build a company query from an open or comparison-only market path."}</p>
+    <div className="provider-meta"><span>Locked scope</span><b>{result.scope.locations.length ? result.scope.locations.join(", ") : "Not selected"}</b></div>
+    {account && <div className="provider-meta"><span>Prospeo account</span><b>{account.plan} · {account.remainingCredits} credits</b></div>}
+    {!search && <div className="provider-actions">{result.provider.action === "check_connection" && <button className="secondary-button" type="button" onClick={checkConnection} disabled={isWorking}>{isWorking ? "Checking…" : "Check Prospeo connection"}</button>}{result.provider.action === "create_preview" && scopeLocked && <button className="primary-button compact-primary" type="button" onClick={preparePreview} disabled={isWorking}>{isWorking ? "Preparing…" : "Create safe search preview"}</button>}</div>}
+    {search && <div className="search-preview"><div className="preview-row"><span>Canonical locations</span><b>{search.canonicalLocations.join(", ")}</b></div><div className="preview-row"><span>Maximum return</span><b>{search.maximumResults} companies · one page</b></div><div className="preview-row"><span>Maximum credit use</span><b>1 credit</b></div><p>{search.estimateDetail}</p>{search.status === "awaiting_approval" && <><div className="approval-note"><b>Ready only when you are.</b><span>This is the only action in Ano that can ask Prospeo for companies. It may use one credit. There is no people search, enrichment, CRM write, or outreach.</span></div><button className="primary-button provider-run-button" type="button" onClick={approveSearch} disabled={isWorking}>{isWorking ? "Running approved search…" : "Run 1-page company search"}</button></>}{search.status === "requires_manual_review" && <div className="provider-error">{search.failureMessage ?? "Ano stopped this provider request for manual review and will not retry it automatically."}</div>}{search.status === "completed" && <div className="provider-complete">{search.resultCount ?? candidates.length} companies saved{search.wasFree ? " · this exact page was free" : ""}</div>}</div>}
+    {candidates.length > 0 && <section className="provider-candidates"><div className="section-row"><h3>Companies from the approved page</h3><span>{candidates.length} results</span></div><div className="provider-candidate-list">{candidates.map((candidate) => <article key={candidate.id} className="provider-candidate"><div><b>{candidate.name}</b><p>{[candidate.industry, candidate.location, candidate.employeeBand].filter(Boolean).join(" · ") || "Provider details limited"}</p><small>{candidate.matchingSignals[0]}</small></div><div className="candidate-actions"><button type="button" className={candidate.lifecycleState === "shortlisted" ? "selected-action" : "secondary-button"} disabled={isWorking} onClick={() => changeCandidateState(candidate, "shortlisted")}>Shortlist</button><button type="button" className="secondary-button" disabled={isWorking} onClick={() => changeCandidateState(candidate, "review")}>Review</button><button type="button" className="secondary-button" disabled={isWorking} onClick={() => changeCandidateState(candidate, "dismissed")}>Dismiss</button></div></article>)}</div></section>}
+    {notice && <div className="decision-message">{notice}</div>}
+  </article>;
 }

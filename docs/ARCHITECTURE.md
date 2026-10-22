@@ -34,8 +34,8 @@ Browser client
 | --- | --- | --- |
 | Identity | `workspaces`, `workspace_domains`, `workspace_members` | Workspace tenancy, roles, and optional email-domain policy. |
 | Connections | `connector_connections` | Connector status, scopes, and credential references only—never raw secrets. |
-| Research | `research_runs`, `icp_profiles`, `icp_briefs`, `evidence_items`, `work_items` | Resumable, evidence-backed ICP and research-planning artefacts. |
-| Future targeting | `account_candidates`, `contact_candidates`, `scorecards`, `briefs` | Deferred until a real target account is selected or added. |
+| Research | `research_runs`, `icp_profiles`, `icp_briefs`, `evidence_items`, `work_items`, `product_briefs`, `market_hypotheses`, `market_decisions`, `market_scans`, `provider_company_searches` | Resumable market discovery, source-labelled evidence, and explicit provider approvals. |
+| Targeting | `account_candidates`, `contact_candidates`, `scorecards`, `briefs` | Provider companies are reviewable candidates; contacts remain deferred until a future approved contact phase. |
 | Human control | `proposals`, `approval_decisions`, `notifications` | Future external-action proposals and review state. |
 | Accountability | `audit_logs` | Append-only proposal, policy, tool, and outcome history. |
 
@@ -49,7 +49,8 @@ Every table is protected by RLS. A signed-in member can only read its workspace.
 | Workspace evidence and readiness | Allow | Only manual record labels (`M-###`) are persisted; readiness measures ICP-context completeness, not market demand or buying intent. |
 | Simulated company/contact/evidence research | Retired from public path | Internal test harness only; no public route or interface invokes it. |
 | Mercury reads | Deny until connector Phase 3 | Adapter skeleton only; no database or API access. |
-| Provider search/enrichment | Ask plus budget controls | Adapter skeleton only; no provider call. |
+| Prospeo company search | Ask plus one-page budget control | User checks the account, requests a free query preview, then explicitly approves one 25-company page. Ano records a receipt and never automatically retries an uncertain outcome. |
+| Contact enrichment | Deny pending Phase D | No person-search or enrichment route exists. |
 | Mercury proposals | Ask | Contract only; no write path. |
 | Email, calls, campaign changes, generic browser/HTTP/SQL | Deny | No route or tool exists. |
 

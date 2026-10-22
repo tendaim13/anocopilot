@@ -26,6 +26,10 @@ const migrations = [
     id: "20261022_000005_market_discovery_runtime",
     file: path.join(projectRoot, "supabase/migrations/20261022_000005_market_discovery_runtime.sql"),
   },
+  {
+    id: "20261022_000006_prospeo_company_discovery",
+    file: path.join(projectRoot, "supabase/migrations/20261022_000006_prospeo_company_discovery.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {

@@ -1,5 +1,5 @@
 import type { WorkspaceSession } from "@/contracts/ano";
-import { productBriefInputSchema, type MarketAuditEvent, type MarketBriefResult, type MarketDecisionInput, type MarketHypothesisPatch, type MarketScope, type MarketScopeInput, type ProductBriefInput } from "@/lib/ano/market-discovery";
+import { productBriefInputSchema, type CompanyCandidate, type CompanyDiscoverySearch, type MarketAuditEvent, type MarketBriefResult, type MarketDecisionInput, type MarketHypothesisPatch, type MarketScope, type MarketScopeInput, type ProductBriefInput, type ProviderReadiness } from "@/lib/ano/market-discovery";
 import { canTransition, disabledProviderReadiness, scopeForDecision, scopeForManualLocation, MarketStateTransitionError } from "@/server/domain/market-state-machine";
 
 export class MarketDiscoveryPersistenceError extends Error {
@@ -230,7 +230,7 @@ async function writeScopeSnapshot(
   return next;
 }
 
-async function runForBrief(session: Extract<WorkspaceSession, { kind: "supabase" }>, productBriefId: string) {
+export async function loadMarketBriefContext(session: Extract<WorkspaceSession, { kind: "supabase" }>, productBriefId: string) {
   const { data: brief, error: briefError } = await session.client.from("product_briefs").select("id, research_run_id").eq("workspace_id", session.workspace.id).eq("id", productBriefId).maybeSingle();
   if (briefError || !brief) throw new MarketDiscoveryPersistenceError("Ano could not find that product brief.");
   const { data: run, error: runError } = await session.client.from("research_runs").select("id, input_json, result_snapshot").eq("workspace_id", session.workspace.id).eq("id", brief.research_run_id).maybeSingle();
@@ -250,7 +250,7 @@ export async function saveMarketDecision(session: WorkspaceSession, productBrief
   if (findError || !decision) throw new MarketDiscoveryPersistenceError("Ano could not find that pending location decision.");
   const allowedChoices = Array.isArray(decision.options_json) ? decision.options_json.flatMap((option: { key?: unknown }) => typeof option.key === "string" ? [option.key] : []) : [];
   if (!allowedChoices.includes(input.choice)) throw new MarketDiscoveryPersistenceError("That location choice is not available for this product brief.");
-  const resumed = await runForBrief(session, productBriefId);
+  const resumed = await loadMarketBriefContext(session, productBriefId);
   if (decision.status === "selected") {
     if (decision.selected_key !== input.choice) throw new MarketDiscoveryPersistenceError("Ano already recorded a different location path for this run. Edit the brief to begin a new scope decision.");
     return { result: resumed.result, message: "That location path is already saved.", persisted: true };
@@ -273,7 +273,7 @@ export async function saveMarketDecision(session: WorkspaceSession, productBrief
 
 export async function saveManualMarketScope(session: WorkspaceSession, productBriefId: string, input: MarketScopeInput) {
   if (session.kind === "demo") return { scope: scopeForManualLocation(input.location), persisted: false };
-  const resumed = await runForBrief(session, productBriefId);
+  const resumed = await loadMarketBriefContext(session, productBriefId);
   if (resumed.result.scope.state !== "awaiting_location_input") throw new MarketDiscoveryPersistenceError("Ano is not waiting for a location in this run.");
   const scope = scopeForManualLocation(input.location);
   const result = await writeScopeSnapshot(session, resumed.run.id, resumed.result, scope, { event_type: "market_scope.manual_location", outcome: "completed", details_json: { location: input.location, provider_calls: 0, connector_calls: 0 } });
@@ -282,7 +282,7 @@ export async function saveManualMarketScope(session: WorkspaceSession, productBr
 
 export async function updateMarketHypotheses(session: WorkspaceSession, productBriefId: string, patch: MarketHypothesisPatch) {
   if (session.kind === "demo") throw new MarketDiscoveryPersistenceError("Sign in before Ano can save an edited hypothesis.");
-  const resumed = await runForBrief(session, productBriefId);
+  const resumed = await loadMarketBriefContext(session, productBriefId);
   if (resumed.result.locationDecision.status === "selected") throw new MarketDiscoveryPersistenceError("Edit the brief and start a new scope decision if you need to change hypotheses after choosing a location path.");
   const allowedEvidence = new Set(resumed.result.evidence.map((item) => item.id));
   if (patch.hypotheses.some((item) => item.evidenceIds.some((id) => !allowedEvidence.has(id)))) throw new MarketDiscoveryPersistenceError("Ano cannot save a hypothesis that cites evidence outside your product brief.");
@@ -298,13 +298,89 @@ export async function updateMarketHypotheses(session: WorkspaceSession, productB
   return next;
 }
 
+function providerReadiness(connection: { status?: unknown; last_checked_at?: unknown; last_error_code?: unknown } | null): ProviderReadiness {
+  if (connection?.status === "connected") {
+    return {
+      key: "prospeo",
+      state: "ready",
+      message: "Prospeo is checked and ready. Ano will show the exact one-page query and its maximum credit use before a company search can run.",
+      action: "create_preview",
+      checkedAt: typeof connection.last_checked_at === "string" ? connection.last_checked_at : undefined,
+    };
+  }
+  if (connection?.status === "error") {
+    return {
+      key: "prospeo",
+      state: "error",
+      message: "Ano could not verify the Prospeo connection. Check it again before a company-search preview can be prepared.",
+      action: "check_connection",
+      checkedAt: typeof connection.last_checked_at === "string" ? connection.last_checked_at : undefined,
+      lastErrorCode: typeof connection.last_error_code === "string" ? connection.last_error_code : undefined,
+    };
+  }
+  return disabledProviderReadiness();
+}
+
+function strings(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function asSearch(row: Record<string, unknown>): CompanyDiscoverySearch {
+  const safeStatus = ["awaiting_approval", "running", "completed", "requires_manual_review", "failed"].includes(String(row.status)) ? String(row.status) as CompanyDiscoverySearch["status"] : "failed";
+  const receipt = row.provider_receipt_json && typeof row.provider_receipt_json === "object" ? row.provider_receipt_json as Record<string, unknown> : {};
+  return {
+    id: String(row.id),
+    status: safeStatus,
+    requestedAt: String(row.created_at),
+    approvedAt: typeof row.approved_at === "string" ? row.approved_at : undefined,
+    completedAt: typeof row.completed_at === "string" ? row.completed_at : undefined,
+    scope: strings((row.scope_json as Record<string, unknown> | null)?.locations),
+    criteria: strings(row.criteria_json),
+    maximumResults: 25,
+    estimatedMaximumCredits: 1,
+    estimateDetail: "One first-page request can return up to 25 companies. Prospeo charges one credit only when it returns at least one company; an exact duplicate page can be free for 30 days.",
+    providerFilters: row.filters_json && typeof row.filters_json === "object" ? row.filters_json as Record<string, unknown> : {},
+    canonicalLocations: strings(row.canonical_locations_json),
+    resultCount: typeof row.result_count === "number" ? row.result_count : undefined,
+    wasFree: typeof receipt.free === "boolean" ? receipt.free : undefined,
+    failureMessage: typeof row.failure_message === "string" ? row.failure_message : undefined,
+  };
+}
+
+function asCandidate(row: Record<string, unknown>): CompanyCandidate {
+  const snapshot = row.raw_snapshot && typeof row.raw_snapshot === "object" ? row.raw_snapshot as Record<string, unknown> : {};
+  return {
+    id: String(row.source_key),
+    source: "provider",
+    retrievedAt: typeof snapshot.retrievedAt === "string" ? snapshot.retrievedAt : String(row.created_at),
+    name: String(row.name),
+    matchingSignals: strings(snapshot.matchingSignals),
+    evidenceIds: strings(snapshot.evidenceIds),
+    industry: typeof row.industry === "string" ? row.industry : undefined,
+    location: typeof row.location === "string" ? row.location : undefined,
+    employeeBand: typeof row.employee_band === "string" ? row.employee_band : undefined,
+    website: typeof snapshot.website === "string" ? snapshot.website : undefined,
+    lifecycleState: ["discovered", "shortlisted", "dismissed", "review"].includes(String(row.lifecycle_state)) ? String(row.lifecycle_state) as CompanyCandidate["lifecycleState"] : "discovered",
+  };
+}
+
+async function hydrateCompanyDiscovery(session: Extract<WorkspaceSession, { kind: "supabase" }>, result: MarketBriefResult, runId: string): Promise<MarketBriefResult> {
+  const [{ data: connection }, { data: search }, { data: candidates }] = await Promise.all([
+    session.client.from("connector_connections").select("status, last_checked_at, last_error_code").eq("workspace_id", session.workspace.id).eq("connector_key", "prospeo").maybeSingle(),
+    session.client.from("provider_company_searches").select("id, status, scope_json, filters_json, criteria_json, canonical_locations_json, created_at, approved_at, completed_at, result_count, provider_receipt_json, failure_message").eq("workspace_id", session.workspace.id).eq("research_run_id", runId).maybeSingle(),
+    session.client.from("account_candidates").select("source_key, name, industry, location, employee_band, lifecycle_state, raw_snapshot, created_at").eq("workspace_id", session.workspace.id).eq("research_run_id", runId).eq("source_label", "provider").order("created_at", { ascending: true }),
+  ]);
+  const discovery = search ? { search: asSearch(search as Record<string, unknown>), candidates: (candidates ?? []).map((candidate) => asCandidate(candidate as Record<string, unknown>)) } : { candidates: [] as CompanyCandidate[] };
+  return { ...result, provider: providerReadiness(connection), companyDiscovery: discovery };
+}
+
 export async function readMarketBrief(session: WorkspaceSession, productBriefId: string): Promise<MarketBriefResult> {
   if (session.kind === "demo") throw new MarketDiscoveryPersistenceError("Sign in before Ano can restore a saved product brief.");
-  const resumed = await runForBrief(session, productBriefId);
+  const resumed = await loadMarketBriefContext(session, productBriefId);
   const { data: scan } = await session.client.from("market_scans").select("id, scope_json, status, evidence_ids, comparison_criteria_json").eq("workspace_id", session.workspace.id).eq("research_run_id", resumed.run.id).maybeSingle();
-  if (!scan) return resumed.result;
+  if (!scan) return hydrateCompanyDiscovery(session, resumed.result, resumed.run.id);
   const scope = scan.scope_json as MarketScope;
-  return { ...resumed.result, run: { ...resumed.result.run, status: scope.state, message: scope.summary }, scope, scan: { id: scan.id, scope, status: scan.status, evidenceIds: scan.evidence_ids ?? [], comparisonCriteria: scan.comparison_criteria_json ?? [] }, provider: disabledProviderReadiness() };
+  return hydrateCompanyDiscovery(session, { ...resumed.result, run: { ...resumed.result.run, status: scope.state, message: scope.summary }, scope, scan: { id: scan.id, scope, status: scan.status, evidenceIds: scan.evidence_ids ?? [], comparisonCriteria: scan.comparison_criteria_json ?? [] }, provider: disabledProviderReadiness() }, resumed.run.id);
 }
 
 export async function readLatestMarketBrief(session: WorkspaceSession) {
