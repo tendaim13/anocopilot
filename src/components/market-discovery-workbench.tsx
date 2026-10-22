@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type { WorkspaceRuntime } from "@/contracts/ano";
-import type { MarketBriefResult, MarketDecisionInput, ProductBriefInput } from "@/lib/ano/market-discovery";
+import type { MarketBriefResult, MarketDecisionInput, MarketHypothesis, ProductBriefInput } from "@/lib/ano/market-discovery";
 
 const starterInput: ProductBriefInput = {
   offer: "",
@@ -41,6 +41,18 @@ export function MarketDiscoveryWorkbench() {
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (workspaceRuntime?.mode !== "supabase") return;
+    let cancelled = false;
+    fetch("/api/v1/market-briefs/current")
+      .then(async (response) => ({ response, payload: (await response.json()) as { result?: MarketBriefResult; error?: string } }))
+      .then(({ response, payload }) => {
+        if (!cancelled && response.ok && payload.result) setResult(payload.result);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [workspaceRuntime?.mode]);
 
   const signInRequired = workspaceError?.code === "AUTH_REQUIRED";
   const workspaceSetupRequired = workspaceError?.code === "WORKSPACE_REQUIRED";
@@ -118,31 +130,79 @@ export function MarketDiscoveryWorkbench() {
 
 function MarketHypothesisResult({ initialResult }: { initialResult: MarketBriefResult }) {
   const [result, setResult] = useState(initialResult);
-  const [decisionMessage, setDecisionMessage] = useState<string | null>(null);
-  const [isSavingDecision, setIsSavingDecision] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [manualLocation, setManualLocation] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftHypotheses, setDraftHypotheses] = useState<MarketHypothesis[]>(initialResult.hypothesis.hypotheses);
+
+  useEffect(() => {
+    setResult(initialResult);
+    setDraftHypotheses(initialResult.hypothesis.hypotheses);
+    setIsEditing(false);
+  }, [initialResult]);
 
   async function chooseLocation(choice: MarketDecisionInput["choice"]) {
-    setIsSavingDecision(true);
-    setDecisionMessage(null);
+    setIsSaving(true);
+    setMessage(null);
     try {
       const response = await fetch(`/api/v1/market-briefs/${result.productBrief.id}/decision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }) });
-      const payload = (await response.json()) as { choice?: string; message?: string; error?: string };
+      const payload = (await response.json()) as { result?: MarketBriefResult; message?: string; error?: string };
       if (!response.ok || !payload.message) throw new Error(payload.error ?? "Ano could not save that location decision.");
-      setResult((current) => ({ ...current, run: { ...current.run, status: "market_scope_locked" }, locationDecision: { ...current.locationDecision, status: "selected", selection: choice } }));
-      setDecisionMessage(payload.message);
+      if (payload.result) setResult(payload.result);
+      setMessage(payload.message);
     } catch (error) {
-      setDecisionMessage(error instanceof Error ? error.message : "Ano could not save that location decision.");
+      setMessage(error instanceof Error ? error.message : "Ano could not save that location decision.");
     } finally {
-      setIsSavingDecision(false);
+      setIsSaving(false);
+    }
+  }
+
+  async function lockManualLocation() {
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/v1/market-briefs/${result.productBrief.id}/scope`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location: manualLocation }) });
+      const payload = (await response.json()) as { result?: MarketBriefResult; error?: string };
+      if (!response.ok || !payload.result) throw new Error(payload.error ?? "Ano could not lock that market scope.");
+      setResult(payload.result);
+      setMessage("Location scope saved. Company discovery remains unavailable until a later approved provider phase.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ano could not lock that market scope.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function updateDraft(index: number, field: "title" | "statement", value: string) {
+    setDraftHypotheses((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item));
+  }
+
+  async function saveHypotheses() {
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/v1/market-briefs/${result.productBrief.id}/hypotheses`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hypotheses: draftHypotheses.map(({ id, title, statement, evidenceIds }) => ({ id, title, statement, evidenceIds })) }) });
+      const payload = (await response.json()) as MarketBriefResult | { error?: string };
+      if (!response.ok || !("hypothesis" in payload)) throw new Error("error" in payload ? payload.error : "Ano could not save the hypothesis edit.");
+      setResult(payload);
+      setDraftHypotheses(payload.hypothesis.hypotheses);
+      setIsEditing(false);
+      setMessage("Hypotheses saved as your edits. They remain unverified until future research provides evidence.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ano could not save the hypothesis edit.");
+    } finally {
+      setIsSaving(false);
     }
   }
 
   return <>
     <section className="results-heading"><div><p className="section-kicker">02 — REVIEW THE HYPOTHESES</p><h2>{result.productBrief.offer}</h2><p>{result.run.message}</p></div><div className="run-complete"><span>✓</span> Product brief saved</div></section>
     <section className="market-results">
-      <article className="brief-panel standalone-brief"><div className="brief-top"><div><p className="section-kicker">ANO MARKET MAP</p><h2>What may be worth testing</h2><p>Hypotheses are grounded only in your product brief—not external market research.</p></div><span className="confidence-badge">Hypothesis only</span></div><section className="brief-block"><h3>Preliminary market map</h3><p>{result.hypothesis.marketMap}</p></section><section className="brief-block"><h3>Testable hypotheses</h3><div className="hypothesis-list">{result.hypothesis.hypotheses.map((item) => <article className="hypothesis-item" key={item.id}><div><b>{item.title}</b><p>{item.statement}</p></div><em>{item.evidenceIds.join(" · ")}</em></article>)}</div></section>{result.hypothesis.assumptions.length > 0 && <section className="brief-block"><h3>Assumptions to validate</h3><ul className="plain-list">{result.hypothesis.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></section>}{result.hypothesis.questions.length > 0 && <section className="brief-block"><h3>Questions that would change the research</h3><ul className="plain-list">{result.hypothesis.questions.map((item) => <li key={item}>{item}</li>)}</ul></section>}</article>
-      <div className="standalone-side"><article className="panel decision-panel"><p className="section-kicker">DECISION REQUIRED</p><h2>Choose the location path</h2><p>{result.locationDecision.prompt}</p><div className="decision-options">{result.locationDecision.options.map((option) => <button key={option.key} className={`decision-option ${result.locationDecision.selection === option.key ? "selected-decision" : ""}`} type="button" disabled={isSavingDecision || result.locationDecision.status === "selected"} onClick={() => chooseLocation(option.key)}><b>{option.label}</b><span>{option.description}</span>{result.locationDecision.selection === option.key && <em>Selected</em>}</button>)}</div>{decisionMessage && <div className="decision-message">{decisionMessage}</div>}</article><article className="panel evidence-panel"><p className="section-kicker">YOUR INPUTS</p><h2>Directly from you</h2>{result.evidence.map((item) => <div className="evidence-item" key={item.id}><span>◌</span><div><b>{item.label} <em>{item.id}</em></b><p>{item.observation}</p><small>Entered in Ano · not externally verified</small></div></div>)}</article></div>
+      <article className="brief-panel standalone-brief"><div className="brief-top"><div><p className="section-kicker">ANO MARKET MAP</p><h2>What may be worth testing</h2><p>Hypotheses are grounded only in your product brief—not external market research.</p></div><span className="confidence-badge">Hypothesis only</span></div><section className="brief-block"><h3>Preliminary market map</h3><p>{result.hypothesis.marketMap}</p></section><section className="brief-block"><div className="section-row"><h3>Testable hypotheses</h3>{result.locationDecision.status !== "selected" && <button type="button" className="secondary-button compact" disabled={isSaving} onClick={() => setIsEditing((current) => !current)}>{isEditing ? "Cancel" : "Edit hypotheses"}</button>}</div><div className="hypothesis-list">{(isEditing ? draftHypotheses : result.hypothesis.hypotheses).map((item, index) => <article className="hypothesis-item" key={item.id}><div>{isEditing ? <><input aria-label={`Hypothesis ${index + 1} title`} value={item.title} onChange={(event) => updateDraft(index, "title", event.target.value)} /><textarea aria-label={`Hypothesis ${index + 1} statement`} value={item.statement} rows={3} onChange={(event) => updateDraft(index, "statement", event.target.value)} /></> : <><b>{item.title}</b><p>{item.statement}</p>{item.origin === "workspace_member" && <small>Edited by you · still a hypothesis</small>}</>}</div><em>{item.evidenceIds.join(" · ")}</em></article>)}</div>{isEditing && <div className="inline-actions"><button className="primary-button compact-primary" type="button" disabled={isSaving} onClick={saveHypotheses}>{isSaving ? "Saving…" : "Save hypothesis edits"}</button><span>Edits do not turn a hypothesis into research evidence.</span></div>}</section>{result.hypothesis.assumptions.length > 0 && <section className="brief-block"><h3>Assumptions to validate</h3><ul className="plain-list">{result.hypothesis.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></section>}{result.hypothesis.questions.length > 0 && <section className="brief-block"><h3>Questions that would change the research</h3><ul className="plain-list">{result.hypothesis.questions.map((item) => <li key={item}>{item}</li>)}</ul></section>}</article>
+      <div className="standalone-side"><article className="panel decision-panel"><p className="section-kicker">{result.locationDecision.status === "selected" ? "SCOPE CHECKPOINT" : "DECISION REQUIRED"}</p><h2>{result.locationDecision.status === "selected" ? "Market scope" : "Choose the location path"}</h2><p>{result.locationDecision.status === "selected" ? result.scope.summary : result.locationDecision.prompt}</p>{result.locationDecision.status !== "selected" && <div className="decision-options">{result.locationDecision.options.map((option) => <button key={option.key} className="decision-option" type="button" disabled={isSaving} onClick={() => chooseLocation(option.key)}><b>{option.label}</b><span>{option.description}</span></button>)}</div>}{result.scope.state === "awaiting_location_input" && <div className="scope-input"><label>Location to prioritise<input value={manualLocation} onChange={(event) => setManualLocation(event.target.value)} placeholder="Country, region, or city" /></label><button className="primary-button compact-primary" type="button" disabled={isSaving} onClick={lockManualLocation}>{isSaving ? "Locking…" : "Lock location scope"}</button></div>}{message && <div className="decision-message">{message}</div>}</article><article className="panel provider-state"><p className="section-kicker">COMPANY DISCOVERY</p><h2>Provider unavailable</h2><p>{result.provider.message}</p><div><span>Scope</span><b>{result.scope.locations.length ? result.scope.locations.join(", ") : result.scope.kind === "compare" ? "Comparison requested" : "Open"}</b></div><div><span>Market-scan evidence</span><b>{result.scan.evidenceIds.length} records</b></div><div><span>Provider calls</span><b>0</b></div></article><article className="panel evidence-panel"><p className="section-kicker">EVIDENCE LEDGER</p><h2>Directly from you</h2>{result.evidence.map((item) => <div className="evidence-item" key={item.id}><span>◌</span><div><b>{item.label} <em>{item.id}</em></b><p>{item.observation}</p><small>Entered in Ano · not externally verified</small></div></div>)}</article></div>
     </section>
-    <section className="next-stage-banner panel"><div><p className="section-kicker">BOUNDARY</p><h2>Company research is intentionally not available yet</h2><p>After you choose a scope, the next phase can ask for explicit approval before a credit-bearing company search. Ano has not connected Prospeo, Dropcontact, a CRM, or any outreach channel.</p></div><span>0 provider calls</span></section>
+    <section className="audit-panel panel"><div><p className="section-kicker">RUN TIMELINE</p><h2>What Ano has done</h2></div><ol>{result.timeline.map((entry) => <li key={entry.id}><span className={entry.category} /> <div><b>{entry.label}</b><p>{entry.detail}</p></div><time>{new Date(entry.at).toLocaleString()}</time></li>)}</ol></section>
+    <section className="next-stage-banner panel"><div><p className="section-kicker">BOUNDARY</p><h2>Company research is intentionally blocked until a provider is connected</h2><p>The market scope and audit trail are ready for a future approval flow. Ano has not connected Prospeo, Dropcontact, a CRM, or any outreach channel, and it has not fabricated a company or a location claim.</p></div><span>0 provider calls</span></section>
   </>;
 }

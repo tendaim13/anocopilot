@@ -360,6 +360,6 @@ Every phase requires:
 
 ## Current checkpoint
 
-The existing signed-in ICP form and its Bedrock response are proof that Ano’s workspace, persistence, and server-side model boundary can run. They do **not** represent the locked product workflow.
+**Phase A and Phase B are complete.** Ano now starts with the minimal product brief, persists unverified hypotheses separately from direct input, and pauses at a durable market-scope decision. A user can restore the latest run, edit hypotheses before a scope is selected, provide a manual location, or keep/comparison-request the scope open.
 
-The next implementation task is **Phase A**: replace that form and result screen with the minimal product brief, market-hypothesis output, and location-decision checkpoint. No live provider connection is part of Phase A.
+The company-discovery adapter remains explicitly disabled. It returns a visible blocked state with no candidate, credit estimate, connector call, or fabricated result. The next implementation task is **Phase C**: a separately approved Prospeo company-discovery integration with query preview, credit estimate, health checks, provenance, and duplicate-prevention controls.

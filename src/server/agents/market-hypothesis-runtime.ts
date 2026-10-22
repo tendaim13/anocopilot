@@ -2,6 +2,7 @@ import type { Message, SystemContentBlock } from "@aws-sdk/client-bedrock-runtim
 import { z } from "zod";
 
 import type { BriefEvidence, LocationDecision, MarketBriefResult, MarketHypothesis, ProductBriefInput } from "@/lib/ano/market-discovery";
+import { disabledProviderReadiness } from "@/server/domain/market-state-machine";
 import type { BedrockConverse, BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
 import { BedrockAdapterError } from "@/server/agents/bedrock-contracts";
 import { createCheckpoint } from "@/server/agents/resume";
@@ -176,13 +177,22 @@ export async function runMarketHypothesis(
   }
 
   const runId = crypto.randomUUID();
-  const hypotheses: MarketHypothesis[] = answer.hypotheses.map((item, index) => ({ ...item, id: `hypothesis-${index + 1}` }));
+  const hypotheses: MarketHypothesis[] = answer.hypotheses.map((item, index) => ({ ...item, id: `hypothesis-${index + 1}`, origin: "bedrock" }));
   const locationDecision = locationDecisionFromProductBrief(input);
+  const initialScope = { state: "awaiting_scope_decision" as const, kind: "unselected" as const, locations: [], source: "none" as const, summary: "Choose a location path before Ano considers a future research step." };
   return {
     run: { id: runId, status: "awaiting_scope_decision", mode: "bedrock", message: "Ano prepared unverified market hypotheses. Choose the location path before any future research is considered.", modelTurns: 1 },
     productBrief: { id: `brief-${runId}`, offer: input.offer, objective: input.objective },
     evidence,
     hypothesis: { marketMap: answer.marketMap, hypotheses, assumptions: answer.assumptions, questions: answer.questions },
     locationDecision,
+    scope: initialScope,
+    scan: { id: `scan-${runId}`, scope: initialScope, status: "not_started", evidenceIds: [], comparisonCriteria: ["User-confirmed location preference", "Visible research evidence", "Approved provider availability"] },
+    provider: disabledProviderReadiness(),
+    timeline: [
+      { id: "timeline-brief", at: new Date().toISOString(), label: "Product brief prepared", detail: "Ano received your offer and objective as workspace input.", category: "input" },
+      { id: "timeline-hypothesis", at: new Date().toISOString(), label: "Market hypotheses prepared", detail: "Bedrock produced unverified hypotheses using only the product brief. No provider or connector was used.", category: "hypothesis" },
+      { id: "timeline-boundary", at: new Date().toISOString(), label: "Location decision required", detail: "Ano is paused until you choose a location path. Company discovery is disabled.", category: "boundary" },
+    ],
   };
 }

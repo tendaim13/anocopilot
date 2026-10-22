@@ -31,6 +31,65 @@ export type MarketHypothesis = {
   title: string;
   statement: string;
   evidenceIds: string[];
+  origin?: "bedrock" | "workspace_member";
+  editedAt?: string;
+};
+
+export type MarketRunState =
+  | "awaiting_scope_decision"
+  | "awaiting_location_input"
+  | "awaiting_market_evidence"
+  | "market_scope_locked"
+  | "awaiting_provider_approval"
+  | "provider_unavailable";
+
+export type MarketScope = {
+  state: MarketRunState;
+  kind: "location" | "compare" | "open" | "unselected";
+  locations: string[];
+  source: "workspace_input" | "workspace_decision" | "none";
+  summary: string;
+};
+
+export type ProviderReadiness = {
+  key: "prospeo";
+  state: "disabled";
+  message: string;
+  action: "none";
+};
+
+export type MarketAuditEvent = {
+  id: string;
+  at: string;
+  label: string;
+  detail: string;
+  category: "input" | "hypothesis" | "decision" | "boundary";
+};
+
+/** Contracts used in later phases; Phase B intentionally does not populate candidates or playbooks. */
+export type MarketScan = {
+  id: string;
+  scope: MarketScope;
+  status: "not_started" | "awaiting_provider_approval" | "blocked_provider";
+  evidenceIds: string[];
+  comparisonCriteria: string[];
+};
+
+export type CompanyCandidate = {
+  id: string;
+  source: "provider";
+  retrievedAt: string;
+  name: string;
+  matchingSignals: string[];
+  evidenceIds: string[];
+};
+
+export type SalesPlaybook = {
+  id: string;
+  status: "draft" | "ready_for_review";
+  industryHypotheses: string[];
+  companyEvidenceIds: string[];
+  contactEvidenceIds: string[];
 };
 
 export type LocationDecision = {
@@ -49,7 +108,7 @@ export type LocationDecision = {
 export type MarketBriefResult = {
   run: {
     id: string;
-    status: "awaiting_scope_decision" | "market_scope_locked";
+    status: MarketRunState;
     mode: "bedrock";
     message: string;
     modelTurns: number;
@@ -67,6 +126,10 @@ export type MarketBriefResult = {
     questions: string[];
   };
   locationDecision: LocationDecision;
+  scope: MarketScope;
+  scan: MarketScan;
+  provider: ProviderReadiness;
+  timeline: MarketAuditEvent[];
 };
 
 export const marketDecisionInputSchema = z.object({
@@ -74,3 +137,20 @@ export const marketDecisionInputSchema = z.object({
 });
 
 export type MarketDecisionInput = z.infer<typeof marketDecisionInputSchema>;
+
+export const marketScopeInputSchema = z.object({
+  location: z.string().trim().refine((value) => value.length > 0, "Add a location before locking the scope."),
+});
+
+export type MarketScopeInput = z.infer<typeof marketScopeInputSchema>;
+
+export const marketHypothesisPatchSchema = z.object({
+  hypotheses: z.array(z.object({
+    id: z.string().trim().min(1).max(120),
+    title: z.string().trim().refine((value) => value.length > 0, "A hypothesis needs a title."),
+    statement: z.string().trim().refine((value) => value.length > 0, "A hypothesis needs a statement."),
+    evidenceIds: z.array(z.string().trim().regex(/^B-\d{3}$/)).min(1).max(4),
+  })).min(1).max(4),
+});
+
+export type MarketHypothesisPatch = z.infer<typeof marketHypothesisPatchSchema>;

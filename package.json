@@ -12,6 +12,7 @@
     "test:standalone": "tsx --test tests/standalone-brief-runtime.test.ts",
     "test:icp": "tsx --test tests/icp-profile-runtime.test.ts",
     "test:market": "tsx --test tests/market-hypothesis-runtime.test.ts",
+    "test:market-phase-b": "tsx --test tests/market-discovery-phase-b.test.ts",
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
     "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs"
   },

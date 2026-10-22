@@ -1,5 +1,6 @@
 import type { WorkspaceSession } from "@/contracts/ano";
-import type { MarketBriefResult, MarketDecisionInput, ProductBriefInput } from "@/lib/ano/market-discovery";
+import { productBriefInputSchema, type MarketAuditEvent, type MarketBriefResult, type MarketDecisionInput, type MarketHypothesisPatch, type MarketScope, type MarketScopeInput, type ProductBriefInput } from "@/lib/ano/market-discovery";
+import { canTransition, disabledProviderReadiness, scopeForDecision, scopeForManualLocation, MarketStateTransitionError } from "@/server/domain/market-state-machine";
 
 export class MarketDiscoveryPersistenceError extends Error {
   constructor(message: string) {
@@ -12,12 +13,13 @@ function failureMessage() {
   return "Ano could not safely save this product brief. No provider, connector, or sales action was attempted.";
 }
 
-function withIds(result: MarketBriefResult, runId: string, productBriefId: string, decisionId: string): MarketBriefResult {
+function withIds(result: MarketBriefResult, runId: string, productBriefId: string, decisionId: string, scanId: string): MarketBriefResult {
   return {
     ...result,
     run: { ...result.run, id: runId },
     productBrief: { ...result.productBrief, id: productBriefId },
     locationDecision: { ...result.locationDecision, id: decisionId },
+    scan: { ...result.scan, id: scanId },
   };
 }
 
@@ -45,7 +47,8 @@ export async function persistMarketBrief(
   const runId = crypto.randomUUID();
   const productBriefId = crypto.randomUUID();
   const decisionId = crypto.randomUUID();
-  const persisted = withIds(result, runId, productBriefId, decisionId);
+  const scanId = crypto.randomUUID();
+  const persisted = withIds(result, runId, productBriefId, decisionId, scanId);
   const now = new Date().toISOString();
   const { error: runError } = await client.from("research_runs").insert({
     id: runId,
@@ -102,6 +105,18 @@ export async function persistMarketBrief(
       options_json: persisted.locationDecision.options,
     });
     if (decisionError) throw new Error("Could not save the location decision.");
+    const { error: scanError } = await client.from("market_scans").insert({
+      id: scanId,
+      workspace_id: workspace.id,
+      research_run_id: runId,
+      product_brief_id: productBriefId,
+      scope_json: persisted.scan.scope,
+      comparison_criteria_json: persisted.scan.comparisonCriteria,
+      evidence_ids: persisted.scan.evidenceIds,
+      provider_key: "prospeo",
+      status: persisted.scan.status,
+    });
+    if (scanError) throw new Error("Could not save the market scan checkpoint.");
     const { error: auditError } = await client.from("audit_logs").insert({
       workspace_id: workspace.id,
       research_run_id: runId,
@@ -138,20 +153,163 @@ function decisionMessage(choice: MarketDecisionInput["choice"]) {
   return "Location remains open. Ano will not claim a preferred market without research evidence.";
 }
 
+function baseScope(): MarketScope {
+  return { state: "awaiting_scope_decision", kind: "unselected", locations: [], source: "none", summary: "Choose a location path before Ano considers a future research step." };
+}
+
+function hydrateResult(value: unknown): MarketBriefResult {
+  if (!value || typeof value !== "object" || !("run" in value) || !("productBrief" in value) || !("hypothesis" in value) || !("locationDecision" in value)) {
+    throw new MarketDiscoveryPersistenceError("Ano could not resume this product brief safely.");
+  }
+  const result = value as MarketBriefResult;
+  const scope = result.scope ?? baseScope();
+  return {
+    ...result,
+    scope,
+    scan: result.scan ?? { id: crypto.randomUUID(), scope, status: "not_started", evidenceIds: [], comparisonCriteria: ["User-confirmed location preference", "Visible research evidence", "Approved provider availability"] },
+    provider: result.provider ?? disabledProviderReadiness(),
+    timeline: result.timeline ?? [],
+  };
+}
+
+function event(label: string, detail: string, category: MarketAuditEvent["category"]): MarketAuditEvent {
+  return { id: crypto.randomUUID(), at: new Date().toISOString(), label, detail, category };
+}
+
+function withTimeline(result: MarketBriefResult, entry: MarketAuditEvent): MarketBriefResult {
+  return { ...result, timeline: [...result.timeline, entry] };
+}
+
+function scanStatus(scope: MarketScope): "awaiting_provider_approval" | "blocked_provider" {
+  return scope.state === "awaiting_provider_approval" ? "awaiting_provider_approval" : "blocked_provider";
+}
+
+async function writeScopeSnapshot(
+  session: Extract<WorkspaceSession, { kind: "supabase" }>,
+  runId: string,
+  result: MarketBriefResult,
+  scope: MarketScope,
+  auditEvent: { event_type: string; outcome: string; details_json: Record<string, unknown> },
+) {
+  const now = new Date().toISOString();
+  const next = withTimeline({
+    ...result,
+    run: { ...result.run, status: scope.state, message: scope.summary },
+    scope,
+    scan: { ...result.scan, scope, status: scanStatus(scope) },
+    provider: disabledProviderReadiness(),
+  }, event(auditEvent.event_type === "market_scope.manual_location" ? "Location scope locked" : "Location path selected", scope.summary, "decision"));
+  const { error: scanError } = await session.client.from("market_scans").upsert({
+    id: next.scan.id,
+    workspace_id: session.workspace.id,
+    research_run_id: runId,
+    product_brief_id: next.productBrief.id,
+    scope_json: next.scan.scope,
+    comparison_criteria_json: next.scan.comparisonCriteria,
+    evidence_ids: next.scan.evidenceIds,
+    provider_key: "prospeo",
+    status: next.scan.status,
+  }, { onConflict: "workspace_id,research_run_id" });
+  if (scanError) throw new MarketDiscoveryPersistenceError(failureMessage());
+  const { error: hypothesisError } = await session.client.from("market_hypotheses").update({ status: scope.state === "awaiting_provider_approval" ? "scope_locked" : "active" }).eq("research_run_id", runId).eq("workspace_id", session.workspace.id);
+  if (hypothesisError) throw new MarketDiscoveryPersistenceError(failureMessage());
+  const { error: runError } = await session.client.from("research_runs").update({
+    status: "paused",
+    result_snapshot: next,
+    checkpoint: { phase: "market_scope", state: scope.state, version: 6, turn: 1, tool_calls: 0, runtime: "standalone_market_discovery" },
+    heartbeat_at: now,
+  }).eq("id", runId).eq("workspace_id", session.workspace.id);
+  if (runError) throw new MarketDiscoveryPersistenceError(failureMessage());
+  const { error: auditError } = await session.client.from("audit_logs").insert({
+    workspace_id: session.workspace.id,
+    research_run_id: runId,
+    actor_id: session.actorId,
+    ...auditEvent,
+  });
+  if (auditError) throw new MarketDiscoveryPersistenceError(failureMessage());
+  return next;
+}
+
+async function runForBrief(session: Extract<WorkspaceSession, { kind: "supabase" }>, productBriefId: string) {
+  const { data: brief, error: briefError } = await session.client.from("product_briefs").select("id, research_run_id").eq("workspace_id", session.workspace.id).eq("id", productBriefId).maybeSingle();
+  if (briefError || !brief) throw new MarketDiscoveryPersistenceError("Ano could not find that product brief.");
+  const { data: run, error: runError } = await session.client.from("research_runs").select("id, input_json, result_snapshot").eq("workspace_id", session.workspace.id).eq("id", brief.research_run_id).maybeSingle();
+  if (runError || !run) throw new MarketDiscoveryPersistenceError("Ano could not find the product brief’s research run.");
+  const input = productBriefInputSchema.safeParse(run.input_json);
+  if (!input.success) throw new MarketDiscoveryPersistenceError("Ano could not resume this product brief because its original input is invalid.");
+  return { run, input: input.data, result: hydrateResult(run.result_snapshot) };
+}
+
 export async function saveMarketDecision(session: WorkspaceSession, productBriefId: string, input: MarketDecisionInput) {
-  if (session.kind === "demo") return { choice: input.choice, message: decisionMessage(input.choice), persisted: false };
+  if (session.kind === "demo") {
+    const scope = scopeForDecision({ offer: "", objective: "", marketHunch: "", locationPreference: "", buyerHunch: "", customerExamples: "", exclusions: "", additionalContext: "" }, input.choice);
+    return { scope, message: decisionMessage(input.choice), persisted: false };
+  }
   const { client, workspace, actorId } = session;
-  const { data: decision, error: findError } = await client.from("market_decisions").select("id, research_run_id, status").eq("workspace_id", workspace.id).eq("product_brief_id", productBriefId).eq("decision_type", "location_path").maybeSingle();
+  const { data: decision, error: findError } = await client.from("market_decisions").select("id, research_run_id, status, selected_key, options_json").eq("workspace_id", workspace.id).eq("product_brief_id", productBriefId).eq("decision_type", "location_path").maybeSingle();
   if (findError || !decision) throw new MarketDiscoveryPersistenceError("Ano could not find that pending location decision.");
-  if (decision.status === "selected") return { choice: input.choice, message: decisionMessage(input.choice), persisted: true };
+  const allowedChoices = Array.isArray(decision.options_json) ? decision.options_json.flatMap((option: { key?: unknown }) => typeof option.key === "string" ? [option.key] : []) : [];
+  if (!allowedChoices.includes(input.choice)) throw new MarketDiscoveryPersistenceError("That location choice is not available for this product brief.");
+  const resumed = await runForBrief(session, productBriefId);
+  if (decision.status === "selected") {
+    if (decision.selected_key !== input.choice) throw new MarketDiscoveryPersistenceError("Ano already recorded a different location path for this run. Edit the brief to begin a new scope decision.");
+    return { result: resumed.result, message: "That location path is already saved.", persisted: true };
+  }
+  let scope: MarketScope;
+  try {
+    scope = scopeForDecision(resumed.input, input.choice);
+    if (!canTransition(resumed.result.scope.state, scope.state)) throw new MarketStateTransitionError("That location transition is not available from this run state.");
+  } catch (error) {
+    if (error instanceof MarketStateTransitionError) throw new MarketDiscoveryPersistenceError(error.message);
+    throw error;
+  }
   const now = new Date().toISOString();
   const { error: decisionError } = await client.from("market_decisions").update({ status: "selected", selected_key: input.choice, selected_by: actorId, selected_at: now }).eq("id", decision.id).eq("workspace_id", workspace.id);
   if (decisionError) throw new MarketDiscoveryPersistenceError(failureMessage());
-  const { error: hypothesisError } = await client.from("market_hypotheses").update({ status: "scope_locked" }).eq("research_run_id", decision.research_run_id).eq("workspace_id", workspace.id);
+  const selectedResult = { ...resumed.result, locationDecision: { ...resumed.result.locationDecision, status: "selected" as const, selection: input.choice } };
+  const result = await writeScopeSnapshot(session, decision.research_run_id, selectedResult, scope, { event_type: "market_scope.selected", outcome: "completed", details_json: { choice: input.choice, provider_calls: 0, connector_calls: 0 } });
+  return { result, message: decisionMessage(input.choice), persisted: true };
+}
+
+export async function saveManualMarketScope(session: WorkspaceSession, productBriefId: string, input: MarketScopeInput) {
+  if (session.kind === "demo") return { scope: scopeForManualLocation(input.location), persisted: false };
+  const resumed = await runForBrief(session, productBriefId);
+  if (resumed.result.scope.state !== "awaiting_location_input") throw new MarketDiscoveryPersistenceError("Ano is not waiting for a location in this run.");
+  const scope = scopeForManualLocation(input.location);
+  const result = await writeScopeSnapshot(session, resumed.run.id, resumed.result, scope, { event_type: "market_scope.manual_location", outcome: "completed", details_json: { location: input.location, provider_calls: 0, connector_calls: 0 } });
+  return { result, persisted: true };
+}
+
+export async function updateMarketHypotheses(session: WorkspaceSession, productBriefId: string, patch: MarketHypothesisPatch) {
+  if (session.kind === "demo") throw new MarketDiscoveryPersistenceError("Sign in before Ano can save an edited hypothesis.");
+  const resumed = await runForBrief(session, productBriefId);
+  if (resumed.result.locationDecision.status === "selected") throw new MarketDiscoveryPersistenceError("Edit the brief and start a new scope decision if you need to change hypotheses after choosing a location path.");
+  const allowedEvidence = new Set(resumed.result.evidence.map((item) => item.id));
+  if (patch.hypotheses.some((item) => item.evidenceIds.some((id) => !allowedEvidence.has(id)))) throw new MarketDiscoveryPersistenceError("Ano cannot save a hypothesis that cites evidence outside your product brief.");
+  const now = new Date().toISOString();
+  const hypotheses = patch.hypotheses.map((item) => ({ ...item, origin: "workspace_member" as const, editedAt: now }));
+  const next = withTimeline({ ...resumed.result, hypothesis: { ...resumed.result.hypothesis, hypotheses } }, event("Hypotheses edited", "You edited Ano’s hypotheses. They remain unverified until future research supplies evidence.", "hypothesis"));
+  const { error: hypothesisError } = await session.client.from("market_hypotheses").update({ content_json: next.hypothesis, status: "active" }).eq("research_run_id", resumed.run.id).eq("workspace_id", session.workspace.id);
   if (hypothesisError) throw new MarketDiscoveryPersistenceError(failureMessage());
-  const { error: runError } = await client.from("research_runs").update({ checkpoint: { phase: "market_scope", state: "market_scope_locked", version: 5, turn: 1, tool_calls: 0, runtime: "standalone_market_discovery", selection: input.choice }, heartbeat_at: now }).eq("id", decision.research_run_id).eq("workspace_id", workspace.id);
+  const { error: runError } = await session.client.from("research_runs").update({ result_snapshot: next, heartbeat_at: now }).eq("id", resumed.run.id).eq("workspace_id", session.workspace.id);
   if (runError) throw new MarketDiscoveryPersistenceError(failureMessage());
-  const { error: auditError } = await client.from("audit_logs").insert({ workspace_id: workspace.id, research_run_id: decision.research_run_id, actor_id: actorId, event_type: "market_scope.selected", outcome: "completed", details_json: { choice: input.choice, provider_calls: 0, connector_calls: 0 } });
+  const { error: auditError } = await session.client.from("audit_logs").insert({ workspace_id: session.workspace.id, research_run_id: resumed.run.id, actor_id: session.actorId, event_type: "market_hypothesis.edited", outcome: "completed", details_json: { hypothesis_count: hypotheses.length, provider_calls: 0, connector_calls: 0 } });
   if (auditError) throw new MarketDiscoveryPersistenceError(failureMessage());
-  return { choice: input.choice, message: decisionMessage(input.choice), persisted: true };
+  return next;
+}
+
+export async function readMarketBrief(session: WorkspaceSession, productBriefId: string): Promise<MarketBriefResult> {
+  if (session.kind === "demo") throw new MarketDiscoveryPersistenceError("Sign in before Ano can restore a saved product brief.");
+  const resumed = await runForBrief(session, productBriefId);
+  const { data: scan } = await session.client.from("market_scans").select("id, scope_json, status, evidence_ids, comparison_criteria_json").eq("workspace_id", session.workspace.id).eq("research_run_id", resumed.run.id).maybeSingle();
+  if (!scan) return resumed.result;
+  const scope = scan.scope_json as MarketScope;
+  return { ...resumed.result, run: { ...resumed.result.run, status: scope.state, message: scope.summary }, scope, scan: { id: scan.id, scope, status: scan.status, evidenceIds: scan.evidence_ids ?? [], comparisonCriteria: scan.comparison_criteria_json ?? [] }, provider: disabledProviderReadiness() };
+}
+
+export async function readLatestMarketBrief(session: WorkspaceSession) {
+  if (session.kind === "demo") return null;
+  const { data: brief, error } = await session.client.from("product_briefs").select("id").eq("workspace_id", session.workspace.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (error || !brief) return null;
+  return readMarketBrief(session, brief.id);
 }
