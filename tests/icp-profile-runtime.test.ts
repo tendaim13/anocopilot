@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { ConverseCommandOutput } from "@aws-sdk/client-bedrock-runtime";
 
-import type { IcpProfileInput } from "../src/lib/ano/icp";
+import { icpProfileInputSchema, type IcpProfileInput } from "../src/lib/ano/icp";
 import { BedrockAdapterError, type BedrockConverse, type BedrockPlannerConfig } from "../src/server/agents/bedrock-contracts";
 import { AgentRuntimeError } from "../src/server/agents/runtime";
 import { runIcpProfile } from "../src/server/agents/icp-profile-runtime";
@@ -22,6 +22,22 @@ const input: IcpProfileInput = {
 };
 
 const config: BedrockPlannerConfig = { region: "test-region", modelId: "test-model", guardrailIdentifier: "test-guardrail", guardrailVersion: "1" };
+
+test("ICP setup accepts terse workspace answers so Ano can ask clarifying questions", () => {
+  const terse = {
+    ...input,
+    productName: "AI",
+    productDescription: "AI workflows",
+    valueProposition: "Fewer handoffs",
+    targetMarket: "Industry",
+    targetLocations: "MY",
+    idealCustomerProfile: "Not sure",
+    buyerRoles: "Not sure",
+    salesObjective: "Start",
+  };
+
+  assert.equal(icpProfileInputSchema.safeParse(terse).success, true);
+});
 
 function completedIcp(overrides: Record<string, unknown> = {}): ConverseCommandOutput {
   return {
