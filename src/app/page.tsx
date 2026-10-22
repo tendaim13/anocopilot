@@ -1,5 +1,5 @@
-import { IcpSetupWorkbench } from "@/components/icp-setup-workbench";
+import { MarketDiscoveryWorkbench } from "@/components/market-discovery-workbench";
 
 export default function HomePage() {
-  return <IcpSetupWorkbench />;
+  return <MarketDiscoveryWorkbench />;
 }

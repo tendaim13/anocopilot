@@ -18,6 +18,10 @@ const migrations = [
     id: "20261021_000003_icp_profiles",
     file: path.join(projectRoot, "supabase/migrations/20261021_000003_icp_profiles.sql"),
   },
+  {
+    id: "20261022_000004_market_discovery_phase_a",
+    file: path.join(projectRoot, "supabase/migrations/20261022_000004_market_discovery_phase_a.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {
