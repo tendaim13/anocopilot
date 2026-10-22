@@ -16,6 +16,8 @@ export type BedrockConverseRequest = {
   system: SystemContentBlock[];
   toolConfig?: ToolConfiguration;
   timeoutMs: number;
+  /** Optional, bounded per-call response budget. The adapter enforces its ceiling. */
+  maxTokens?: number;
 };
 
 export type BedrockConverse = (request: BedrockConverseRequest) => Promise<ConverseCommandOutput>;

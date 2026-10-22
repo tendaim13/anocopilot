@@ -51,7 +51,7 @@ export function getBedrockPlannerConfig(): BedrockPlannerConfig {
 export function createBedrockConverse(config: BedrockPlannerConfig): BedrockConverse {
   const client = new BedrockRuntimeClient({ region: config.region, maxAttempts: 1 });
 
-  return async ({ messages, system, toolConfig, timeoutMs }) => {
+  return async ({ messages, system, toolConfig, timeoutMs, maxTokens }) => {
     if (timeoutMs <= 0) {
       throw new BedrockAdapterError("Bedrock planning exceeded Ano’s configured runtime limit.", "TIMEOUT");
     }
@@ -70,7 +70,9 @@ export function createBedrockConverse(config: BedrockPlannerConfig): BedrockConv
           guardrailVersion: config.guardrailVersion,
           trace: "enabled",
         },
-        inferenceConfig: { maxTokens: 600, temperature: 0 },
+        // The caller may request a larger structured response, but never an
+        // unbounded one. This keeps each Bedrock request predictable.
+        inferenceConfig: { maxTokens: Math.min(Math.max(maxTokens ?? 600, 128), 1_400), temperature: 0 },
         requestMetadata: { application: "ano", runtime: "phase4b" },
       }), { abortSignal: controller.signal });
     } catch (error) {

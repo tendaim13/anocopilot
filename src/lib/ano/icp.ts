@@ -6,7 +6,9 @@ export const icpProfileInputSchema = z.object({
   valueProposition: z.string().trim().min(12).max(800),
   targetMarket: z.string().trim().min(2).max(600),
   targetLocations: z.string().trim().min(2).max(400),
-  idealCustomerProfile: z.string().trim().min(12).max(1_200),
+  // A workspace may not know its ideal customer yet. Ano should turn that
+  // uncertainty into a clarification question instead of refusing to start.
+  idealCustomerProfile: z.string().trim().min(2).max(1_200),
   buyerRoles: z.string().trim().min(2).max(400),
   salesObjective: z.string().trim().min(12).max(600),
   exclusions: z.string().trim().max(800).optional().default(""),

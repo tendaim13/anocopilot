@@ -54,11 +54,29 @@ test("ICP setup sends no tool schema and produces a source-bound market profile"
   const result = await runIcpProfile(input, config, converse);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].toolConfig, undefined);
+  assert.equal(requests[0].maxTokens, 1_200);
   assert.equal(result.run.mode, "bedrock");
   assert.equal(result.evidence.every((item) => item.id.startsWith("M-")), true);
   assert.equal(result.readiness.components.some((component) => component.label === "Buyer context"), true);
   assert.equal("account" in result, false);
   assert.match(result.brief.idealCustomerSummary, /fire protection/i);
+});
+
+test("ICP setup accepts an unknown ideal customer profile and asks Ano to clarify it", async () => {
+  const uncertainInput = { ...input, idealCustomerProfile: "Not sure", targetMarket: "Not sure yet" };
+  const result = await runIcpProfile(uncertainInput, config, async () => completedIcp());
+
+  assert.equal(result.readiness.label, "Needs buyer context");
+  assert.equal(result.readiness.components.find((component) => component.label === "Buyer context")?.score, 0);
+  assert.equal(result.readiness.components.find((component) => component.label === "Target market")?.score, 0);
+});
+
+test("ICP setup explains when Bedrock reaches its response limit", async () => {
+  const converse: BedrockConverse = async () => ({ stopReason: "max_tokens" } as ConverseCommandOutput);
+  await assert.rejects(
+    () => runIcpProfile(input, config, converse),
+    (error: unknown) => error instanceof AgentRuntimeError && error.code === "MODEL_OUTPUT_LIMIT",
+  );
 });
 
 test("ICP setup rejects a model citation that was not supplied by the workspace", async () => {

@@ -21,11 +21,11 @@ const modelIcpSchema = z.object({
   knownFacts: z.array(z.object({
     text: z.string().trim().min(3).max(240),
     evidenceIds: z.array(z.string().trim().regex(/^M-\d{3}$/)).min(1).max(3),
-  }).strict()).min(1).max(7),
-  questions: z.array(z.string().trim().min(4).max(220)).max(5),
-  assumptions: z.array(z.string().trim().min(4).max(220)).max(4),
+  }).strict()).min(1).max(4),
+  questions: z.array(z.string().trim().min(4).max(220)).max(3),
+  assumptions: z.array(z.string().trim().min(4).max(220)).max(3),
   evidenceIds: z.array(z.string().trim().regex(/^M-\d{3}$/)).min(1).max(6),
-  plan: z.array(planItemSchema).min(1).max(4),
+  plan: z.array(planItemSchema).min(1).max(3),
 }).strict();
 
 function checkpoint(phase: "failed" | "completed") {
@@ -50,10 +50,18 @@ function manualEvidence(input: IcpProfileInput) {
   return evidence;
 }
 
+function isUncertain(value: string) {
+  return /\b(?:not sure|unknown|unsure|tbd|n\/a)\b/i.test(value);
+}
+
 function readiness(input: IcpProfileInput): IcpProfileResult["readiness"] {
   const offerScore = input.productDescription.length >= 160 ? 30 : 22;
-  const marketScore = input.targetMarket.length >= 30 && input.targetLocations.length >= 8 ? 25 : 17;
-  const buyerScore = input.idealCustomerProfile.length >= 80 && input.buyerRoles.length >= 12 ? 20 : 12;
+  const marketScore = isUncertain(input.targetMarket) || isUncertain(input.targetLocations)
+    ? 0
+    : input.targetMarket.length >= 30 && input.targetLocations.length >= 8 ? 25 : 17;
+  const buyerScore = isUncertain(input.idealCustomerProfile) || isUncertain(input.buyerRoles)
+    ? 0
+    : input.idealCustomerProfile.length >= 80 && input.buyerRoles.length >= 12 ? 20 : 12;
   const objectiveScore = 15;
   const boundariesScore = input.exclusions || input.contextNotes ? 10 : 0;
   const score = offerScore + marketScore + buyerScore + objectiveScore + boundariesScore;
@@ -78,7 +86,9 @@ function systemPrompt(): SystemContentBlock[] {
       "Create an ICP and a research plan for the workspace's own offer. Do not create, name, infer, or research prospect accounts or contacts. Do not draft outreach.",
       "Do not browse, search, call tools, use connectors, claim public research, invent facts, or recommend any automatic action.",
       "Treat every supplied record as unverified workspace context. Separate known facts from assumptions and ask concise questions when details are missing.",
+      "When a supplied field explicitly says it is unknown, such as 'Not sure', treat it as missing context rather than a fact and add a clarification question.",
       "Every known fact and proposed plan item must cite M-### evidence IDs supplied in the user input.",
+      "Keep the response concise: at most 4 known facts, 3 questions, 3 assumptions, and 3 plan items. Keep positioning and the ideal-customer summary to two short sentences each.",
       "Return only JSON with this exact shape: {positioning, idealCustomerSummary, knownFacts:[{text,evidenceIds}], questions, assumptions, evidenceIds, plan:[{title,action,priority,reason,evidenceIds}]}",
       "Do not include URLs, external citations, named companies, named contacts, email copy, or information absent from the supplied evidence.",
     ].join("\n"),
@@ -122,7 +132,7 @@ export async function runIcpProfile(
 
   let response;
   try {
-    response = await converse({ messages, system: systemPrompt(), timeoutMs: 24_000 });
+    response = await converse({ messages, system: systemPrompt(), timeoutMs: 24_000, maxTokens: 1_200 });
   } catch (error) {
     if (error instanceof BedrockAdapterError) {
       const codes = {
@@ -140,8 +150,14 @@ export async function runIcpProfile(
   if (response.stopReason === "guardrail_intervened" || response.stopReason === "content_filtered") {
     modelFailure("Ano stopped because the configured Bedrock guardrail intervened. Refine the workspace context and try again.", "MODEL_GUARDRAIL");
   }
+  if (response.stopReason === "max_tokens") {
+    modelFailure("Ano reached its bounded Bedrock output limit before the ICP was complete. Please try again; no prospect or external action was created.", "MODEL_OUTPUT_LIMIT");
+  }
+  if (response.stopReason === "model_context_window_exceeded") {
+    modelFailure("Ano’s workspace context was too long for Bedrock to complete the ICP. Shorten the additional context and try again.", "MODEL_CONTEXT_WINDOW");
+  }
   if (response.stopReason !== "end_turn" && response.stopReason !== "stop_sequence") {
-    modelFailure("Ano stopped because Bedrock did not return a completed ICP. No connector or external action was attempted.", "MODEL_MALFORMED");
+    modelFailure(`Ano stopped before completing the ICP (Bedrock: ${response.stopReason ?? "unknown"}). No connector or external action was attempted.`, "MODEL_MALFORMED");
   }
 
   const assistant = response.output?.message;
