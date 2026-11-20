@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { getBrowserSupabaseClient } from "@/client/services/supabase-browser";
+import { MaterialButton } from "@/components/material/material-button";
+import { MaterialTextField } from "@/components/material/material-text-field";
 
 function toWorkspaceSlug(value: string) {
   return value
@@ -22,6 +24,7 @@ export function WorkspaceOnboardingForm() {
   const [workspaceSlug, setWorkspaceSlug] = useState("");
   const [actorEmail, setActorEmail] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const emailDomain = useMemo(() => actorEmail?.split("@")[1]?.toLowerCase() ?? null, [actorEmail]);
@@ -29,6 +32,7 @@ export function WorkspaceOnboardingForm() {
   useEffect(() => {
     const client = getBrowserSupabaseClient();
     if (!client) {
+      setIsError(true);
       setMessage("Ano is missing its public Supabase configuration.");
       return;
     }
@@ -50,9 +54,11 @@ export function WorkspaceOnboardingForm() {
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage(null);
-    const client = getBrowserSupabaseClient();
+    setIsError(false);
 
+    const client = getBrowserSupabaseClient();
     if (!client) {
+      setIsError(true);
       setMessage("Ano is missing its public Supabase configuration.");
       return;
     }
@@ -60,6 +66,7 @@ export function WorkspaceOnboardingForm() {
     const name = workspaceName.trim();
     const slug = toWorkspaceSlug(workspaceSlug);
     if (name.length < 2 || slug.length < 2) {
+      setIsError(true);
       setMessage("Enter a workspace name with at least two characters.");
       return;
     }
@@ -72,7 +79,12 @@ export function WorkspaceOnboardingForm() {
     setIsSubmitting(false);
 
     if (error) {
-      setMessage(error.code === "23505" ? "That workspace URL is already taken. Choose another name or URL." : "Ano could not create that workspace. Please try again.");
+      setIsError(true);
+      setMessage(
+        error.code === "23505"
+          ? "That workspace URL is already taken. Choose another name or URL."
+          : "Ano could not create that workspace. Please try again.",
+      );
       return;
     }
 
@@ -83,18 +95,78 @@ export function WorkspaceOnboardingForm() {
   return (
     <main className="auth-page">
       <section className="auth-card onboarding-card">
-        <div className="brand-lockup auth-brand"><div className="brand-mark"><span>◖</span><span>◗</span></div><div><strong>Ano</strong><small>Sales copilot</small></div></div>
+        <div className="brand-lockup auth-brand">
+          <div className="brand-mark">
+            <span>◖</span>
+            <span>◗</span>
+          </div>
+          <div>
+            <strong>Ano</strong>
+            <small>Sales copilot</small>
+          </div>
+        </div>
         <p className="eyebrow">CREATE YOUR WORKSPACE</p>
         <h1>Set up Ano</h1>
-        <p className="lede">This creates your team’s isolated workspace. You become its owner and can invite colleagues later.</p>
+        <p className="lede">
+          This creates your team’s isolated workspace. You become its owner and can invite
+          colleagues later.
+        </p>
         <form onSubmit={createWorkspace} className="auth-form">
-          <label>Workspace name<input value={workspaceName} onChange={(event) => updateWorkspaceName(event.target.value)} required minLength={2} maxLength={120} placeholder="Nerva Studio" /></label>
-          <label>Workspace URL<input value={workspaceSlug} onChange={(event) => { setSlugWasEdited(true); setWorkspaceSlug(toWorkspaceSlug(event.target.value)); }} required minLength={2} maxLength={80} placeholder="nerva-studio" /><small>ano / {workspaceSlug || "your-workspace"}</small></label>
-          <p className="workspace-domain-note">{emailDomain ? <><b>{emailDomain}</b> will be the first approved email domain for this workspace.</> : "Confirming your work email…"}</p>
-          <button className="primary-button" type="submit" disabled={isSubmitting || !actorEmail}>{isSubmitting ? "Creating workspace…" : "Create workspace"}<span>→</span></button>
+          <MaterialTextField
+            id="ano-workspace-name"
+            name="workspaceName"
+            label="Workspace name"
+            value={workspaceName}
+            onValueChange={updateWorkspaceName}
+            required
+            minLength={2}
+            maxLength={120}
+            placeholder="Nerva Studio"
+            disabled={isSubmitting}
+          />
+          <MaterialTextField
+            id="ano-workspace-slug"
+            name="workspaceSlug"
+            label="Workspace URL"
+            value={workspaceSlug}
+            onValueChange={(value) => {
+              setSlugWasEdited(true);
+              setWorkspaceSlug(toWorkspaceSlug(value));
+            }}
+            required
+            minLength={2}
+            maxLength={80}
+            placeholder="nerva-studio"
+            supportingText={`ano / ${workspaceSlug || "your-workspace"}`}
+            disabled={isSubmitting}
+          />
+          <p className="workspace-domain-note">
+            {emailDomain ? (
+              <>
+                <b>{emailDomain}</b> will be the first approved email domain for this workspace.
+              </>
+            ) : (
+              "Confirming your work email…"
+            )}
+          </p>
+          <MaterialButton
+            type="submit"
+            variant="filled"
+            className="auth-submit"
+            disabled={isSubmitting || !actorEmail}
+          >
+            {isSubmitting ? "Creating workspace…" : "Create workspace"}
+          </MaterialButton>
         </form>
-        {message && <p className="auth-message" role="status">{message}</p>}
-        <p className="auth-footnote">Already belong to a workspace? Ask its owner to add you. <Link href="/">Return to Ano</Link></p>
+        {message && (
+          <p className={`auth-message${isError ? " is-error" : ""}`} role="status">
+            {message}
+          </p>
+        )}
+        <p className="auth-footnote">
+          Already belong to a workspace? Ask its owner to add you.{" "}
+          <Link href="/">Return to Ano</Link>
+        </p>
       </section>
     </main>
   );

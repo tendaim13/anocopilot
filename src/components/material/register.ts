@@ -1,0 +1,89 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+let registrationPromise: Promise<void> | null = null;
+let registrationComplete = false;
+
+/**
+ * Registers Ano's approved Material Web custom elements on the browser client.
+ * Dynamic imports keep Lit and custom-element definitions out of Node.js SSR
+ * prerendering while loading only the components Ano uses.
+ */
+export function registerMaterialComponents(): Promise<void> {
+  if (typeof window === "undefined") {
+    return Promise.resolve();
+  }
+  if (!registrationPromise) {
+    registrationPromise = Promise.all([
+      import("@material/web/button/filled-button.js"),
+      import("@material/web/button/filled-tonal-button.js"),
+      import("@material/web/button/outlined-button.js"),
+      import("@material/web/button/text-button.js"),
+      import("@material/web/checkbox/checkbox.js"),
+      import("@material/web/icon/icon.js"),
+      import("@material/web/iconbutton/icon-button.js"),
+      import("@material/web/iconbutton/filled-icon-button.js"),
+      import("@material/web/iconbutton/outlined-icon-button.js"),
+      import("@material/web/fab/fab.js"),
+      import("@material/web/textfield/outlined-text-field.js"),
+      import("@material/web/list/list.js"),
+      import("@material/web/list/list-item.js"),
+      import("@material/web/chips/chip-set.js"),
+      import("@material/web/chips/filter-chip.js"),
+      import("@material/web/chips/suggestion-chip.js"),
+      import("@material/web/chips/assist-chip.js"),
+      import("@material/web/dialog/dialog.js"),
+      import("@material/web/menu/menu.js"),
+      import("@material/web/menu/menu-item.js"),
+      import("@material/web/progress/linear-progress.js"),
+      import("@material/web/progress/circular-progress.js"),
+      import("@material/web/select/outlined-select.js"),
+      import("@material/web/select/select-option.js"),
+      import("@material/web/tabs/tabs.js"),
+      import("@material/web/tabs/primary-tab.js"),
+      import("@material/web/tabs/secondary-tab.js"),
+    ]).then(() => {
+      registrationComplete = true;
+    });
+  }
+  return registrationPromise;
+}
+
+if (typeof window !== "undefined") {
+  void registerMaterialComponents();
+}
+
+/**
+ * Triggers client-side Material Web registration and reports when custom
+ * elements have finished upgrading. Initial state stays false so SSR and the
+ * first client hydration pass match identically.
+ */
+export function useMaterialWeb(): boolean {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (registrationComplete) {
+      setReady(true);
+      return;
+    }
+    void registerMaterialComponents().then(() => {
+      if (active) setReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return ready;
+}
+
+/**
+ * Mounts Material Web registration in Server Component layouts without adding
+ * extra DOM markup.
+ */
+export function MaterialWebBootstrap() {
+  useMaterialWeb();
+  return null;
+}

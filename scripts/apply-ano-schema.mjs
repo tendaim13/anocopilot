@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { Client } from "pg";
+import { Client, Pool } from "pg";
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(currentDirectory, "..");
@@ -29,6 +30,58 @@ const migrations = [
   {
     id: "20261022_000006_prospeo_company_discovery",
     file: path.join(projectRoot, "supabase/migrations/20261022_000006_prospeo_company_discovery.sql"),
+  },
+  {
+    id: "20261023_000007_langgraph_research_foundation",
+    file: path.join(projectRoot, "supabase/migrations/20261023_000007_langgraph_research_foundation.sql"),
+  },
+  {
+    id: "20261023_000008_controlled_tavily_research",
+    file: path.join(projectRoot, "supabase/migrations/20261023_000008_controlled_tavily_research.sql"),
+  },
+  {
+    id: "20261023_000009_evidence_research_attempts",
+    file: path.join(projectRoot, "supabase/migrations/20261023_000009_evidence_research_attempts.sql"),
+  },
+  {
+    id: "20261023_000010_fix_evidence_attempt_constraint",
+    file: path.join(projectRoot, "supabase/migrations/20261023_000010_fix_evidence_attempt_constraint.sql"),
+  },
+  {
+    id: "20261023_000011_searxng_research_provider",
+    file: path.join(projectRoot, "supabase/migrations/20261023_000011_searxng_research_provider.sql"),
+  },
+  {
+    id: "20261024_000012_phase_c_market_synthesis",
+    file: path.join(projectRoot, "supabase/migrations/20261024_000012_phase_c_market_synthesis.sql"),
+  },
+  {
+    id: "20261024_000013_iterative_deep_research",
+    file: path.join(projectRoot, "supabase/migrations/20261024_000013_iterative_deep_research.sql"),
+  },
+  {
+    id: "20261030_000014_run_event_update_policy",
+    file: path.join(projectRoot, "supabase/migrations/20261030_000014_run_event_update_policy.sql"),
+  },
+  {
+    id: "20261030_000015_durable_research_leases",
+    file: path.join(projectRoot, "supabase/migrations/20261030_000015_durable_research_leases.sql"),
+  },
+  {
+    id: "20261030_000016_phase_c_recommendation_reports",
+    file: path.join(projectRoot, "supabase/migrations/20261030_000016_phase_c_recommendation_reports.sql"),
+  },
+  {
+    id: "20261121_000017_phase_d_target_to_account_discovery",
+    file: path.join(projectRoot, "supabase/migrations/20261121_000017_phase_d_target_to_account_discovery.sql"),
+  },
+  {
+    id: "20261121_000018_phase_e_people_verification_playbooks",
+    file: path.join(projectRoot, "supabase/migrations/20261121_000018_phase_e_people_verification_playbooks.sql"),
+  },
+  {
+    id: "20261121_000019_phase_f_outreach_and_mercury_proposals",
+    file: path.join(projectRoot, "supabase/migrations/20261121_000019_phase_f_outreach_and_mercury_proposals.sql"),
   },
 ];
 
@@ -89,6 +142,9 @@ try {
     newMigrations.push(migration.id);
   }
   await client.query("commit");
+  const checkpointer = new PostgresSaver(new Pool({ connectionString: databaseUrl, ssl: await databaseSslConfig(databaseUrl) }), undefined, { schema: "ano_langgraph" });
+  await checkpointer.setup();
+  await checkpointer.end();
   console.log(newMigrations.length ? `Applied Ano-only schema migrations: ${newMigrations.join(", ")}.` : "Ano schema is already current.");
 } catch (error) {
   await client.query("rollback").catch(() => undefined);

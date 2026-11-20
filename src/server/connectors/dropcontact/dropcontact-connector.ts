@@ -4,10 +4,21 @@ export class DropcontactConnector implements AnoConnector {
   key = "dropcontact" as const;
 
   async status(): Promise<ConnectorStatus> {
-    return { connector: this.key, health: "disabled", enabledCapabilities: [], message: "Contact enrichment is disabled until Phase 5 approval and budget controls." };
+    const configured = Boolean(process.env.DROPCONTACT_API_KEY?.trim());
+    return {
+      connector: this.key,
+      health: configured ? "pending" : "disabled",
+      enabledCapabilities: configured ? ["enrich"] : [],
+      message: configured
+        ? "Dropcontact selective contact verification is available only for user-selected pairs with upfront credit approval."
+        : "Contact enrichment requires DROPCONTACT_API_KEY on the server and explicit per-batch user approval.",
+    };
   }
 
   async enrich() {
-    throw new ConnectorUnavailableError(this.key, "Dropcontact is not enabled for this Ano workspace.");
+    throw new ConnectorUnavailableError(
+      this.key,
+      "Direct Dropcontact enrichment is not available. Ano must record a per-batch preview and explicit user approval first.",
+    );
   }
 }

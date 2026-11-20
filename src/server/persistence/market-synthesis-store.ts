@@ -1,0 +1,396 @@
+import "server-only";
+
+import type { SupabaseWorkspaceSession, WorkspaceSession } from "@/contracts/ano";
+import {
+  evidenceAssessmentSchema,
+  lockTargetDecisionInputSchema,
+  marketSynthesisSchema,
+  recommendationModeSchema,
+  type EvidenceAssessment,
+  type LockTargetDecisionInput,
+  type MarketSynthesis,
+  type MarketSynthesisDraft,
+  type RecommendationMode,
+  type SynthesisStatus,
+} from "@/lib/ano/market-synthesis";
+import type { SynthesisSource } from "@/server/agents/market-synthesis-model";
+import type { ResearchCoverage } from "@/server/research/deep-research-assessment";
+
+export class MarketSynthesisPersistenceError extends Error {
+  constructor(message: string, readonly code: string = "MARKET_SYNTHESIS_UNAVAILABLE") {
+    super(message);
+    this.name = "MarketSynthesisPersistenceError";
+  }
+}
+
+type Row = Record<string, unknown>;
+
+const SYNTHESIS_LEASE_TIMEOUT_MS = 90_000;
+
+function requireLiveSession(session: WorkspaceSession): asserts session is SupabaseWorkspaceSession {
+  if (session.kind === "demo") throw new MarketSynthesisPersistenceError("Sign in before Ano can create durable evidence synthesis.", "AUTH_REQUIRED");
+}
+
+function text(value: unknown, maximum = 700) {
+  const result = String(value ?? "").replace(/\u0000/g, "").trim().replace(/\s+/g, " ");
+  return result ? result.slice(0, maximum) : null;
+}
+
+function strings(value: unknown, maximum: number) {
+  return Array.isArray(value) ? value.map((item) => text(item, 280)).filter((item): item is string => Boolean(item)).slice(0, maximum) : [];
+}
+
+function iso(value: unknown) {
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) throw new MarketSynthesisPersistenceError("Ano found an invalid market-synthesis timestamp.");
+  return date.toISOString();
+}
+
+function strengthFor(sourceCount: number, sourceClassCount: number): EvidenceAssessment["coverageStrength"] {
+  if (sourceCount < 3) return "insufficient";
+  if (sourceClassCount < 2) return "limited";
+  if (sourceCount >= 10 && sourceClassCount >= 3) return "strong";
+  return "moderate";
+}
+
+function hasLockableRoute(draft: MarketSynthesisDraft) {
+  const marketIds = new Set(draft.markets.map((market) => market.id));
+  return draft.industries.some((industry) => industry.marketProfileId && marketIds.has(industry.marketProfileId));
+}
+
+function recommendationModeFor(assessment: EvidenceAssessment, draft: MarketSynthesisDraft, sources: SynthesisSource[]): RecommendationMode {
+  if (sources.length === 0) return "no_usable_evidence";
+  if (assessment.comparisonReady && hasLockableRoute(draft)) return "directly_supported";
+  if (draft.claims.some((claim) => claim.kind === "comparable")) return "comparative_inference";
+  return "exploratory";
+}
+
+export function assessSourceLedger(sources: SynthesisSource[], missionCoverage?: ResearchCoverage | null): EvidenceAssessment {
+  const sourceClasses = new Set(sources.map((source) => source.sourceClass));
+  const sourceCount = sources.length;
+  const sourceClassCount = sourceClasses.size;
+  const coverageStrength = strengthFor(sourceCount, sourceClassCount);
+  const gaps: string[] = [];
+  if (sourceCount < 3) gaps.push("Direct comparison coverage is limited because fewer than three retrievable sources are available.");
+  if (sourceClassCount < 2) gaps.push("The current evidence comes from one source class, so Ano will label any route as exploratory unless comparable evidence supports it.");
+  const noPublishedDate = sources.filter((source) => !source.publishedAt).length;
+  if (noPublishedDate) gaps.push(`${noPublishedDate} saved source${noPublishedDate === 1 ? " has" : "s have"} no published date, so freshness is limited.`);
+  if (missionCoverage) gaps.push(...missionCoverage.gaps);
+  return evidenceAssessmentSchema.parse({
+    fetchedSourceCount: sourceCount,
+    sourceClassCount,
+    coverageStrength,
+    comparisonReady: missionCoverage ? missionCoverage.comparisonReady : sourceCount >= 3 && sourceClassCount >= 2,
+    contradictions: [],
+    // The persisted assessment is intentionally concise. Deep research may
+    // identify more gaps than the review card can use; retain a stable,
+    // de-duplicated first six instead of rejecting the entire analysis.
+    gaps: Array.from(new Set(gaps)).slice(0, 6),
+    summary: sourceCount
+      ? missionCoverage ? `Ano has ${missionCoverage.qualifyingSourceCount} decision-relevant excerpts across ${missionCoverage.sourceClassCount} source classes for a comparative market study.` : `Ano has ${sourceCount} saved source excerpt${sourceCount === 1 ? "" : "s"} across ${sourceClassCount} source class${sourceClassCount === 1 ? "" : "es"}.`
+      : "Ano has no retrievable source excerpts to assess.",
+  });
+}
+
+export function auditMarketSynthesisDraft(draft: MarketSynthesisDraft, sources: SynthesisSource[]) {
+  const sourceIds = new Set(sources.map((source) => source.id));
+  const claimIds = new Set<string>();
+  for (const claim of draft.claims) {
+    if (claimIds.has(claim.id)) throw new MarketSynthesisPersistenceError("Ano rejected a duplicate evidence claim before saving it.", "CITATION_AUDIT_FAILED");
+    claimIds.add(claim.id);
+    if (claim.sourceIds.some((sourceId) => !sourceIds.has(sourceId))) {
+      throw new MarketSynthesisPersistenceError("Ano rejected a claim that cited a source outside the saved evidence ledger.", "CITATION_AUDIT_FAILED");
+    }
+    if (claim.kind === "comparable" && !claim.comparisonBasis) {
+      throw new MarketSynthesisPersistenceError("Ano rejected comparable evidence without a stated basis for the comparison.", "CITATION_AUDIT_FAILED");
+    }
+  }
+  const marketIds = new Set<string>();
+  for (const market of draft.markets) {
+    if (marketIds.has(market.id)) throw new MarketSynthesisPersistenceError("Ano rejected duplicate market profiles before saving them.", "CITATION_AUDIT_FAILED");
+    marketIds.add(market.id);
+    if (market.claimIds.some((claimId) => !claimIds.has(claimId))) {
+      throw new MarketSynthesisPersistenceError("Ano rejected a market profile with an unverified claim reference.", "CITATION_AUDIT_FAILED");
+    }
+  }
+  const industryIds = new Set<string>();
+  for (const industry of draft.industries) {
+    if (industryIds.has(industry.id)) throw new MarketSynthesisPersistenceError("Ano rejected duplicate industry profiles before saving them.", "CITATION_AUDIT_FAILED");
+    industryIds.add(industry.id);
+    if (industry.marketProfileId && !marketIds.has(industry.marketProfileId)) {
+      throw new MarketSynthesisPersistenceError("Ano rejected an industry profile with an unknown market reference.", "CITATION_AUDIT_FAILED");
+    }
+    if (industry.claimIds.some((claimId) => !claimIds.has(claimId))) {
+      throw new MarketSynthesisPersistenceError("Ano rejected an industry profile with an unverified claim reference.", "CITATION_AUDIT_FAILED");
+    }
+  }
+}
+
+async function runForConversation(session: SupabaseWorkspaceSession, conversationId: string) {
+  const { data, error } = await session.client
+    .from("ano_research_runs")
+    .select("id, graph_run_id, status, coverage_json")
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) throw new MarketSynthesisPersistenceError("Ano could not find saved public evidence for this conversation.", "RESEARCH_RUN_NOT_FOUND");
+  if (data.status !== "sources_ready") throw new MarketSynthesisPersistenceError("Ano needs a completed public-evidence run before it can assess the market.", "SOURCES_NOT_READY");
+  return data as Row;
+}
+
+export async function loadSynthesisSources(session: WorkspaceSession, conversationId: string): Promise<{ researchRunId: string; graphRunId: string; sources: SynthesisSource[]; missionCoverage: ResearchCoverage | null }> {
+  requireLiveSession(session);
+  const run = await runForConversation(session, conversationId);
+  const { data, error } = await session.client
+    .from("research_sources")
+    .select("id, title, source_class, supporting_excerpt, published_at")
+    .eq("workspace_id", session.workspace.id)
+    .eq("ano_research_run_id", String(run.id))
+    .eq("status", "fetched")
+    .not("supporting_excerpt", "is", null)
+    .order("retrieved_at", { ascending: false })
+    .limit(100);
+  if (error) throw new MarketSynthesisPersistenceError("Ano could not read the stored source excerpts.");
+  const sourceRows = data ?? [];
+  const { data: assessments, error: assessmentsError } = await session.client
+    .from("research_source_assessments")
+    .select("research_source_id, overall_score")
+    .eq("workspace_id", session.workspace.id)
+    .eq("ano_research_run_id", String(run.id));
+  if (assessmentsError) throw new MarketSynthesisPersistenceError("Ano could not read evidence-quality assessments.");
+  const scoreBySource = new Map((assessments ?? []).map((assessment) => [String(assessment.research_source_id), Number(assessment.overall_score)]));
+  const ranked = sourceRows
+    .map((source) => ({ source, score: scoreBySource.get(String(source.id)) ?? 0 }))
+    .sort((left, right) => right.score - left.score);
+  const selected = [...new Map(ranked.map((item) => [String(item.source.source_class), item])).values(), ...ranked]
+    .filter((item, index, all) => all.findIndex((candidate) => String(candidate.source.id) === String(item.source.id)) === index)
+    .slice(0, 24);
+  const sources = selected.map(({ source, score }) => ({
+    id: String(source.id),
+    title: text(source.title, 500) ?? "Untitled source",
+    sourceClass: source.source_class as SynthesisSource["sourceClass"],
+    excerpt: text(source.supporting_excerpt, 1_200) ?? "",
+    publishedAt: source.published_at ? iso(source.published_at) : null,
+    evidenceScore: score,
+  })).filter((source) => Boolean(source.excerpt));
+  const rawCoverage = run.coverage_json;
+  const missionCoverage = rawCoverage && typeof rawCoverage === "object" && Array.isArray((rawCoverage as Record<string, unknown>).cells)
+    ? rawCoverage as ResearchCoverage
+    : null;
+  return { researchRunId: String(run.id), graphRunId: String(run.graph_run_id), sources, missionCoverage };
+}
+
+async function synthesisRow(session: SupabaseWorkspaceSession, conversationId: string) {
+  const { data, error } = await session.client
+    .from("ano_research_syntheses")
+    .select("id, conversation_id, ano_research_run_id, status, recommendation_mode, assessment_json, failure_message, heartbeat_at, created_at, updated_at")
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new MarketSynthesisPersistenceError("Ano could not read the evidence synthesis.");
+  return data ? data as Row : null;
+}
+
+async function recoverExpiredSynthesisLease(session: SupabaseWorkspaceSession, synthesis: Row) {
+  if (String(synthesis.status) !== "running") return synthesis;
+  const heartbeat = new Date(String(synthesis.heartbeat_at ?? synthesis.updated_at)).getTime();
+  if (!Number.isFinite(heartbeat) || Date.now() - heartbeat <= SYNTHESIS_LEASE_TIMEOUT_MS) return synthesis;
+  const message = "Ano's evidence-analysis worker stopped before it could confirm the saved synthesis. No web search, company lookup, or sales action was attempted. You can explicitly analyze the same saved evidence again.";
+  const { data, error } = await session.client.from("ano_research_syntheses").update({
+    status: "requires_manual_review",
+    failure_message: message,
+    completed_at: new Date().toISOString(),
+    heartbeat_at: null,
+  }).eq("workspace_id", session.workspace.id).eq("id", synthesis.id).eq("status", "running").select("id").maybeSingle();
+  if (error) throw new MarketSynthesisPersistenceError("Ano could not preserve the interrupted evidence analysis.", "LEASE_RECOVERY_NOT_SAVED");
+  if (!data) return (await synthesisRow(session, String(synthesis.conversation_id))) ?? synthesis;
+  const run = await runForConversation(session, String(synthesis.conversation_id));
+  await session.client.from("run_events").upsert({
+    workspace_id: session.workspace.id,
+    graph_run_id: String(run.graph_run_id),
+    event_key: `phase-c-lease-expired:${synthesis.id}`,
+    label: "Evidence analysis paused after an interruption",
+    detail: "Ano preserved the saved evidence and did not retry the interrupted model request automatically. A new analysis requires an explicit user action.",
+  }, { onConflict: "graph_run_id,event_key" });
+  return (await synthesisRow(session, String(synthesis.conversation_id))) ?? synthesis;
+}
+
+async function hasPartialSynthesis(session: SupabaseWorkspaceSession, synthesisId: string) {
+  const checks = await Promise.all([
+    session.client.from("research_claims").select("id", { count: "exact", head: true }).eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId),
+    session.client.from("market_profiles").select("id", { count: "exact", head: true }).eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId),
+    session.client.from("industry_profiles").select("id", { count: "exact", head: true }).eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId),
+    session.client.from("target_decisions").select("id", { count: "exact", head: true }).eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId),
+  ]);
+  if (checks.some((result) => result.error)) throw new MarketSynthesisPersistenceError("Ano could not inspect the previous evidence synthesis safely.");
+  return checks.some((result) => (result.count ?? 0) > 0);
+}
+
+export async function readMarketSynthesis(session: WorkspaceSession, conversationId: string): Promise<MarketSynthesis | null> {
+  requireLiveSession(session);
+  const existing = await synthesisRow(session, conversationId);
+  const synthesis = existing ? await recoverExpiredSynthesisLease(session, existing) : null;
+  if (!synthesis) return null;
+  const synthesisId = String(synthesis.id);
+  const [claimsResult, marketsResult, industriesResult, decisionResult] = await Promise.all([
+    session.client.from("research_claims").select("id, claim_kind, statement, source_ids, comparison_basis, evidence_strength, citation_status").eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId).order("created_at", { ascending: true }),
+    session.client.from("market_profiles").select("id, name, summary, evidence_strength, claim_ids, unknowns_json, next_research_actions_json").eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId).order("created_at", { ascending: true }),
+    session.client.from("industry_profiles").select("id, market_profile_id, name, summary, operational_problems_json, solution_fit_json, buyer_role_hypotheses_json, evidence_strength, claim_ids, unknowns_json").eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId).order("created_at", { ascending: true }),
+    session.client.from("target_decisions").select("id, status, market_profile_id, industry_profile_id, rationale, selected_at").eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId).maybeSingle(),
+  ]);
+  if (claimsResult.error || marketsResult.error || industriesResult.error || decisionResult.error) throw new MarketSynthesisPersistenceError("Ano could not read the saved market findings.");
+  return marketSynthesisSchema.parse({
+    id: synthesis.id,
+    conversationId: synthesis.conversation_id,
+    researchRunId: synthesis.ano_research_run_id,
+    status: synthesis.status,
+    recommendationMode: recommendationModeSchema.parse(synthesis.recommendation_mode ?? "pending"),
+    assessment: synthesis.assessment_json,
+    claims: (claimsResult.data ?? []).map((claim) => ({ id: claim.id, kind: claim.claim_kind, statement: claim.statement, sourceIds: strings(claim.source_ids, 6), comparisonBasis: claim.comparison_basis ? text(claim.comparison_basis, 280) : null, evidenceStrength: claim.evidence_strength, citationStatus: claim.citation_status })),
+    markets: (marketsResult.data ?? []).map((market) => ({ id: market.id, name: market.name, summary: market.summary, evidenceStrength: market.evidence_strength, claimIds: strings(market.claim_ids, 8), unknowns: strings(market.unknowns_json, 5), nextResearchActions: strings(market.next_research_actions_json, 4) })),
+    industries: (industriesResult.data ?? []).map((industry) => ({ id: industry.id, marketProfileId: industry.market_profile_id, name: industry.name, summary: industry.summary, operationalProblems: strings(industry.operational_problems_json, 5), solutionFit: strings(industry.solution_fit_json, 4), buyerRoleHypotheses: strings(industry.buyer_role_hypotheses_json, 5), evidenceStrength: industry.evidence_strength, claimIds: strings(industry.claim_ids, 8), unknowns: strings(industry.unknowns_json, 5) })),
+    decision: decisionResult.data ? { id: decisionResult.data.id, status: decisionResult.data.status, marketProfileId: decisionResult.data.market_profile_id, industryProfileId: decisionResult.data.industry_profile_id, rationale: decisionResult.data.rationale ? text(decisionResult.data.rationale) : null, selectedAt: decisionResult.data.selected_at ? iso(decisionResult.data.selected_at) : null } : null,
+    failureMessage: synthesis.failure_message ? text(synthesis.failure_message, 700) : null,
+    createdAt: iso(synthesis.created_at),
+    updatedAt: iso(synthesis.updated_at),
+  });
+}
+
+export async function claimMarketSynthesis(session: WorkspaceSession, conversationId: string, researchRunId: string, assessment: EvidenceAssessment) {
+  requireLiveSession(session);
+  const existing = await synthesisRow(session, conversationId);
+  const now = new Date().toISOString();
+  if (existing) {
+    const status = String(existing.status);
+    const restartable = ["failed_safe", "requires_manual_review", "insufficient_evidence"] as string[];
+    if (!restartable.includes(status) || await hasPartialSynthesis(session, String(existing.id))) {
+      return { synthesisId: String(existing.id), claimed: false, status };
+    }
+    const { data, error } = await session.client.from("ano_research_syntheses").update({
+      status: "running",
+      recommendation_mode: "pending",
+      assessment_json: assessment,
+      failure_message: null,
+      started_at: now,
+      completed_at: null,
+      heartbeat_at: now,
+    }).eq("workspace_id", session.workspace.id).eq("id", existing.id).in("status", restartable).select("id").maybeSingle();
+    if (error) throw new MarketSynthesisPersistenceError("Ano could not restart the saved evidence analysis.");
+    return { synthesisId: String(existing.id), claimed: Boolean(data), status: data ? "running" : status };
+  }
+  const id = crypto.randomUUID();
+  const { error } = await session.client.from("ano_research_syntheses").insert({
+    id,
+    workspace_id: session.workspace.id,
+    conversation_id: conversationId,
+    ano_research_run_id: researchRunId,
+    status: "awaiting_analysis",
+    recommendation_mode: "pending",
+    assessment_json: assessment,
+    created_by: session.actorId,
+    heartbeat_at: now,
+  });
+  if (error) {
+    const recovered = await synthesisRow(session, conversationId);
+    if (recovered) return { synthesisId: String(recovered.id), claimed: false, status: String(recovered.status) };
+    throw new MarketSynthesisPersistenceError("Ano could not create the citation-bound evidence assessment.");
+  }
+  const { data: claimed, error: claimError } = await session.client.from("ano_research_syntheses")
+    .update({ status: "running", started_at: now, heartbeat_at: now })
+    .eq("workspace_id", session.workspace.id).eq("id", id).eq("status", "awaiting_analysis").select("id").maybeSingle();
+  if (claimError || !claimed) throw new MarketSynthesisPersistenceError("Ano could not secure the evidence assessment.");
+  return { synthesisId: id, claimed: true, status: "running" };
+}
+
+export async function saveNoUsableEvidence(session: WorkspaceSession, synthesisId: string, assessment: EvidenceAssessment, graphRunId: string) {
+  requireLiveSession(session);
+  const completedAt = new Date().toISOString();
+  const noEvidenceAssessment = evidenceAssessmentSchema.parse({
+    ...assessment,
+    summary: "Ano could not retrieve usable public evidence for this question. It has not invented a market recommendation.",
+  });
+  const { data, error } = await session.client.from("ano_research_syntheses").update({
+    status: "ready_for_review",
+    recommendation_mode: "no_usable_evidence",
+    assessment_json: noEvidenceAssessment,
+    failure_message: null,
+    completed_at: completedAt,
+    heartbeat_at: null,
+  }).eq("workspace_id", session.workspace.id).eq("id", synthesisId).eq("status", "running").select("id").maybeSingle();
+  if (error || !data) throw new MarketSynthesisPersistenceError("Ano could not save the no-evidence research result.");
+  await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: graphRunId, event_key: `phase-c-no-usable-evidence:${synthesisId}`, label: "Research result ready without usable evidence", detail: "Ano found no usable public evidence for this question. It preserved the research record and did not invent a market recommendation." }, { onConflict: "graph_run_id,event_key" });
+}
+
+export async function saveMarketSynthesis(session: WorkspaceSession, synthesisId: string, graphRunId: string, baseline: EvidenceAssessment, draft: MarketSynthesisDraft, sources: SynthesisSource[]): Promise<{ status: SynthesisStatus }> {
+  requireLiveSession(session);
+  auditMarketSynthesisDraft(draft, sources);
+  const assessment = evidenceAssessmentSchema.parse({
+    ...baseline,
+    contradictions: draft.contradictions,
+    gaps: Array.from(new Set([...baseline.gaps, ...draft.gaps])).slice(0, 6),
+    summary: draft.summary,
+  });
+  const recommendationMode = recommendationModeFor(assessment, draft, sources);
+  const decisionReady = hasLockableRoute(draft);
+  const status: SynthesisStatus = decisionReady ? "ready_for_decision" : "ready_for_review";
+  const completedAt = new Date().toISOString();
+  const { data: synthesis, error: synthesisError } = await session.client.from("ano_research_syntheses").select("ano_research_run_id, conversation_id").eq("workspace_id", session.workspace.id).eq("id", synthesisId).maybeSingle();
+  if (synthesisError || !synthesis) throw new MarketSynthesisPersistenceError("Ano could not recover the evidence run while saving its synthesis.");
+  const claims = draft.claims.map((claim) => ({ id: claim.id, workspace_id: session.workspace.id, synthesis_id: synthesisId, ano_research_run_id: synthesis.ano_research_run_id, claim_kind: claim.kind, statement: claim.statement, source_ids: claim.sourceIds, comparison_basis: claim.comparisonBasis, evidence_strength: claim.evidenceStrength, citation_status: claim.citationStatus }));
+  const markets = draft.markets.map((market) => ({ id: market.id, workspace_id: session.workspace.id, synthesis_id: synthesisId, ano_research_run_id: synthesis.ano_research_run_id, name: market.name, summary: market.summary, evidence_strength: market.evidenceStrength, claim_ids: market.claimIds, unknowns_json: market.unknowns, next_research_actions_json: market.nextResearchActions }));
+  const industries = draft.industries.map((industry) => ({ id: industry.id, workspace_id: session.workspace.id, synthesis_id: synthesisId, ano_research_run_id: synthesis.ano_research_run_id, market_profile_id: industry.marketProfileId, name: industry.name, summary: industry.summary, operational_problems_json: industry.operationalProblems, solution_fit_json: industry.solutionFit, buyer_role_hypotheses_json: industry.buyerRoleHypotheses, evidence_strength: industry.evidenceStrength, claim_ids: industry.claimIds, unknowns_json: industry.unknowns }));
+  // Industry profiles reference their market profile. These writes must be
+  // ordered; parallel inserts can race the foreign key and discard an otherwise
+  // valid citation-bound synthesis.
+  if (claims.length) {
+    const { error } = await session.client.from("research_claims").insert(claims);
+    if (error) throw new MarketSynthesisPersistenceError("Ano could not save the citation-bound claims.");
+  }
+  if (markets.length) {
+    const { error } = await session.client.from("market_profiles").insert(markets);
+    if (error) throw new MarketSynthesisPersistenceError("Ano could not save the market profiles.");
+  }
+  if (industries.length) {
+    const { error } = await session.client.from("industry_profiles").insert(industries);
+    if (error) throw new MarketSynthesisPersistenceError("Ano could not save the industry profiles.");
+  }
+  if (decisionReady) {
+    const { error: decisionError } = await session.client.from("target_decisions").insert({ workspace_id: session.workspace.id, conversation_id: synthesis.conversation_id, synthesis_id: synthesisId, status: "awaiting_selection" });
+    if (decisionError) throw new MarketSynthesisPersistenceError("Ano could not save the target-decision checkpoint.");
+  }
+  const { data: completed, error: updateError } = await session.client.from("ano_research_syntheses").update({ status, recommendation_mode: recommendationMode, assessment_json: assessment, completed_at: completedAt, failure_message: null, heartbeat_at: null }).eq("workspace_id", session.workspace.id).eq("id", synthesisId).eq("status", "running").select("id").maybeSingle();
+  if (updateError || !completed) throw new MarketSynthesisPersistenceError("Ano could not complete the reviewed evidence synthesis.");
+  await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: graphRunId, event_key: `phase-c-synthesis:${synthesisId}`, label: status === "ready_for_decision" ? "Market recommendation ready" : "Research insight report ready", detail: status === "ready_for_decision" ? `Ano produced a ${recommendationMode.replaceAll("_", " ")} market and industry route. A human target decision is still required before any company discovery.` : `Ano produced a ${recommendationMode.replaceAll("_", " ")} evidence report and retained the material unknowns. It did not create a route for company discovery.` }, { onConflict: "graph_run_id,event_key" });
+  return { status };
+}
+
+export async function stopMarketSynthesis(session: WorkspaceSession, synthesisId: string, graphRunId: string, error: unknown) {
+  requireLiveSession(session);
+  const message = error instanceof MarketSynthesisPersistenceError || (error instanceof Error && error.message.startsWith("Ano "))
+    ? error.message
+    : "Ano could not safely complete the evidence synthesis. No new web search, company lookup, or sales action was attempted.";
+  await session.client.from("ano_research_syntheses").update({ status: "failed_safe", failure_message: text(message, 700), completed_at: new Date().toISOString(), heartbeat_at: null }).eq("workspace_id", session.workspace.id).eq("id", synthesisId).eq("status", "running");
+  await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: graphRunId, event_key: `phase-c-stop:${synthesisId}`, label: "Evidence synthesis stopped safely", detail: message }, { onConflict: "graph_run_id,event_key" });
+}
+
+export async function lockTargetDecision(session: WorkspaceSession, conversationId: string, input: LockTargetDecisionInput) {
+  requireLiveSession(session);
+  const checked = lockTargetDecisionInputSchema.parse(input);
+  const synthesis = await readMarketSynthesis(session, conversationId);
+  if (!synthesis || synthesis.status !== "ready_for_decision" || !synthesis.decision) throw new MarketSynthesisPersistenceError("Ano cannot lock a target route until the saved evidence is ready for comparison.", "DECISION_NOT_READY");
+  if (synthesis.decision.status === "locked") return synthesis;
+  const market = synthesis.markets.find((item) => item.id === checked.marketProfileId);
+  const industry = synthesis.industries.find((item) => item.id === checked.industryProfileId);
+  if (!market || !industry || (industry.marketProfileId && industry.marketProfileId !== market.id)) throw new MarketSynthesisPersistenceError("Choose a market and an industry that belong to the same evidence-backed route.", "INVALID_TARGET_ROUTE");
+  const now = new Date().toISOString();
+  const { data, error } = await session.client.from("target_decisions").update({ status: "locked", market_profile_id: market.id, industry_profile_id: industry.id, rationale: checked.rationale ?? null, selected_by: session.actorId, selected_at: now }).eq("workspace_id", session.workspace.id).eq("id", synthesis.decision.id).eq("status", "awaiting_selection").select("id").maybeSingle();
+  if (error) throw new MarketSynthesisPersistenceError("Ano could not save the selected target route.");
+  if (!data) return (await readMarketSynthesis(session, conversationId))!;
+  const run = await runForConversation(session, conversationId);
+  await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: String(run.graph_run_id), event_key: `phase-c-target:${synthesis.decision.id}`, label: "Target route locked", detail: `You selected ${market.name} / ${industry.name}. Ano has not searched Prospeo, people, or contacts.` }, { onConflict: "graph_run_id,event_key" });
+  return (await readMarketSynthesis(session, conversationId))!;
+}

@@ -1,0 +1,10 @@
+[botdetection]
+# This private gateway does not activate SearXNG's public bot/API limiter.
+# Caddy requires the Ano gateway credential, while Ano owns durable approval,
+# request ceilings, and no-replay handling. Keep proxy information here only
+# for a future, separately reviewed public-instance configuration.
+trusted_proxies = ["172.16.0.0/12"]
+
+[botdetection.ip_limit]
+filter_link_local = true
+link_token = false

@@ -1,89 +1,65 @@
 # Ano architecture
 
-Ano is a standalone, tenant-safe sales research and planning product. Mercury is a future connector—not a shared backend, internal import, or database dependency.
+Ano is a standalone, tenant-safe, chat-first AI sales research and planning product. Mercury is a future connector—not a shared backend, internal import, or database dependency.
 
 ```text
-Browser client
+Browser client (Material Web 2.4.1 + React 19 Client Components)
   -> Next 16 Proxy refreshes the Supabase session
-  -> Thin /api/v1 route validates input
-  -> Workspace session resolves user, membership, and allowed domain
-  -> Domain service owns the business action
-  -> Agent policy guard permits, requests approval, or denies a tool
-  -> Bounded agent runtime executes registered tools
-  -> Ano-owned persistence records result, evidence, score, plan, and audit log
-  -> Future connector adapter (Mercury, provider) only through declared capability
+  -> Thin /api/v1 route validates input and idempotency keys
+  -> Workspace session resolves authenticated user, membership, and domain policy
+  -> Domain service orchestrates research / synthesis / queue transitions
+  -> LangGraph JS (Postgres checkpointer in ano_langgraph) manages resumable interrupts
+  -> Server-only Bedrock adapters interpret, plan, and synthesize saved excerpts only
+  -> Ano-owned persistence records conversations, messages, plans, sources, claims, receipts, and audit logs
+  -> Controlled providers (private SearXNG, bounded Prospeo, selective Dropcontact & approval-gated Outreach/Mercury)
 ```
 
 ## Layers and ownership
 
 | Layer | Location | Responsibility |
 | --- | --- | --- |
-| Public contracts | `src/contracts/` | Tool, guard, checkpoint, role, and workspace shapes. |
-| Auth/session | `src/lib/supabase`, `src/proxy.ts`, `src/server/auth/` | Cookie refresh, server-validated identity, workspace membership, domain checks. |
-| HTTP | `src/app/api/v1/` | Parse, validate, return safe errors; never implement business policy directly. |
-| Domain | `src/server/domain/` | Research orchestration and user-initiated shortlist/review/dismiss decisions. |
-| Policy | `src/server/policy/` | Tool allow/ask/deny decisions, limits, and audit labels. |
-| Agent | `src/server/agents/` | Role contract, bounded runtime, evidence/scoring integrity, checkpoint support. |
-| Persistence | `src/server/persistence/` | Idempotent runs and Ano-owned artefact writes through user-session RLS. |
-| Connectors | `src/server/connectors/` | Capability-scoped adapters; disabled by default. |
-| Jobs | `src/server/jobs/` | Safe stale-run recovery; it never retries external activity. |
+| Material UI & Shell | `src/components/material/`, `src/components/shell/`, `src/components/conversation/`, `src/components/artifacts/`, `src/components/work/`, `src/styles/` | Material Web (`@material/web`) registration, Material 3 tokens, chat-first thread, inline artifact cards, context rail, and work queue. |
+| Public contracts | `src/contracts/`, `src/lib/ano/` | Workspace, agent, graph-run, message-part, evidence-research, market-synthesis, company-discovery, people-playbooks, outreach-execution, and work-queue Zod schemas. |
+| Auth/session | `src/lib/supabase/`, `src/proxy.ts`, `src/server/auth/` | Cookie refresh, server-validated Supabase identity, workspace membership, and domain allow-list checks. |
+| HTTP | `src/app/api/v1/` | Parse, validate, enforce idempotency headers, and return safe errors; never implement business policy in the client. |
+| Domain | `src/server/domain/` | Research conversation lifecycle, bounded SearXNG research orchestration, citation-bound synthesis, Prospeo target-to-account & people discovery, selective Dropcontact verification, factual playbooks, outreach/Mercury execution, and work queue aggregation. |
+| Graph & Agent | `src/server/langgraph/`, `src/server/agents/` | Checkpointed Phase A/B/C/D/E/F LangGraph flows and server-only Bedrock planners/synthesizers with strict JSON schema validation. |
+| Research Retrieval | `src/server/research/` | Private SearXNG client, SSRF-hardened `EvidenceSourceRetriever`, source scoring, and coverage assessment. |
+| Persistence | `src/server/persistence/` | Idempotent runs, conversation pagination/rename/archive, and append-only `audit_logs` via user-session RLS. |
+| Connectors & Jobs | `src/server/connectors/`, `src/server/jobs/` | Future Prospeo/Dropcontact/Mercury capability adapters and safe stale-run/lease recovery (never retries uncertain calls). |
 
 ## Schema groups
 
 | Group | Tables | Purpose |
 | --- | --- | --- |
 | Identity | `workspaces`, `workspace_domains`, `workspace_members` | Workspace tenancy, roles, and optional email-domain policy. |
-| Connections | `connector_connections` | Connector status, scopes, and credential references only—never raw secrets. |
-| Research | `research_runs`, `icp_profiles`, `icp_briefs`, `evidence_items`, `work_items`, `product_briefs`, `market_hypotheses`, `market_decisions`, `market_scans`, `provider_company_searches` | Resumable market discovery, source-labelled evidence, and explicit provider approvals. |
-| Targeting | `account_candidates`, `contact_candidates`, `scorecards`, `briefs` | Provider companies are reviewable candidates; contacts remain deferred until a future approved contact phase. |
-| Human control | `proposals`, `approval_decisions`, `notifications` | Future external-action proposals and review state. |
-| Accountability | `audit_logs` | Append-only proposal, policy, tool, and outcome history. |
+| Conversations & Graphs | `ano_conversations`, `ano_graph_runs`, `ano_graph_checkpoints`, `ano_messages`, `ano_graph_decisions`, `run_events` (plus `ano_langgraph.*`) | Durable chat history, LangGraph thread state, interrupts, checkpoints, and timeline events. |
+| Phase A Planning | `research_briefs`, `research_questions`, `research_plans` | Structured offers, clarifying questions, and versioned approval-gated research plans. |
+| Phase B Evidence | `ano_research_runs`, `provider_action_requests`, `research_waves`, `research_queries`, `research_search_results`, `research_sources`, `research_source_assessments` | Bounded SearXNG searches, SSRF-safe source excerpts, hashes, receipts, and quality scores. |
+| Phase C Synthesis | `ano_research_syntheses`, `research_claims`, `market_profiles`, `industry_profiles`, `target_decisions` | Citation-audited observations, comparable evidence, inferences, market/industry profiles, and locked target route. |
+| Phase D Account Discovery | `provider_company_searches`, `account_candidates` (plus `provider_action_requests` audit rows) | Canonical Prospeo search previews, 1-page cohort summaries, structured `signals_json`, fit scores, and `claim_ids` separated from industry claims. |
+| Phase E People & Playbooks | `provider_person_searches`, `contact_candidates`, `contact_verification_runs`, `account_playbooks` | Buyer-role proposals, bounded Prospeo person search, selective Dropcontact verification pairs, and factual evidence-backed account playbooks. |
+| Phase F Outreach & Accountability | `outreach_drafts`, `proposals`, `approval_decisions`, `audit_logs`, `notifications` | Versioned multi-channel drafts with deterministic eligibility checks, immutable per-action human decisions, Mercury proposal receipts, and append-only audit trail. |
 
-Every table is protected by RLS. A signed-in member can only read its workspace. `viewer` is read-only; `owner`, `admin`, and `member` can write approved Ano records. Audit records have only select/insert policies—no client update or delete policy.
+Every table is protected by RLS. A signed-in member can only read their workspace. `viewer` is read-only; `owner`, `admin`, and `member` can write approved Ano records. `audit_logs` allows select/insert only—no client update or delete policy.
 
-## Tool safety matrix
+## Tool & provider safety matrix
 
-| Tool category | Current policy | Execution state |
+| Capability | Current policy | Execution state |
 | --- | --- | --- |
-| Standalone ICP setup | Allow only with a signed-in Ano workspace | User enters offer, target market, buyer, and objective; Bedrock creates a single source-constrained ICP and research plan. |
-| Workspace evidence and readiness | Allow | Only manual record labels (`M-###`) are persisted; readiness measures ICP-context completeness, not market demand or buying intent. |
-| Simulated company/contact/evidence research | Retired from public path | Internal test harness only; no public route or interface invokes it. |
-| Mercury reads | Deny until connector Phase 3 | Adapter skeleton only; no database or API access. |
-| Prospeo company search | Ask plus one-page budget control | User checks the account, requests a free query preview, then explicitly approves one 25-company page. Ano records a receipt and never automatically retries an uncertain outcome. |
-| Contact enrichment | Deny pending Phase D | No person-search or enrichment route exists. |
-| Mercury proposals | Ask | Contract only; no write path. |
-| Email, calls, campaign changes, generic browser/HTTP/SQL | Deny | No route or tool exists. |
-
-## Current runtime boundary
-
-The public runtime is a one-turn, server-only Bedrock ICP call. It receives a structured record supplied by a signed-in workspace member: product, value proposition, target market and locations, ideal customer, buyer roles, objective, and optional exclusions/context. Ano creates `M-###` manual-evidence labels before the model call. Bedrock receives no tool schema, no connector, no browser/HTTP capability, and no database access. Its JSON response must cite only these evidence IDs; any unknown citation, URL, malformed JSON, guardrail intervention, timeout, or incomplete response is rejected. Ano never substitutes a simulated result.
-
-The public `/api/v1/brief` endpoint returns `410`: an account brief is deferred until a real target account exists. The public UI and `/api/v1/icp` create no prospect account, contact, scorecard, or outreach draft.
-
-The earlier Phase 4A/4B mock-tool loop remains covered by regression tests but is retired from the public interface and `/api/v1/research` returns `410` rather than running it.
-
-Bedrock never gains direct access to persistence, Mercury, providers, email, calls, browser/HTTP, SQL, or any external action. The server requires standard AWS IAM credentials—not a Bedrock API key—and exposes only safe error categories such as missing credentials, access denied, or invalid model/guardrail configuration. Guardrails do not inspect tool arguments or returned tool results, so Ano independently constrains all model inputs and validates the returned evidence labels.
-
-## Durable-run contract
-
-A research request includes a client idempotency UUID. `research_runs` has a unique `(workspace_id, idempotency_key)` pair. A repeat of a completed key returns the stored result; a running key returns a conflict. A stale run is marked failed, never silently replayed. This prevents duplicate writes now and prevents later provider spending from being retried unsafely.
+| Phase A research conversation & planning | Allow for signed-in workspace | Bedrock interprets briefs, asks at most one decision-changing question, and creates a versioned plan awaiting explicit approval. |
+| Phase B private SearXNG discovery & source fetch | Separate explicit approval + budget ceiling | Up to 50 SearXNG searches and 100 safe fetches per mission; SSRF/content-type/size checks enforced server-side; uncertain outcomes require manual review and are never retried automatically. |
+| Phase C citation-bound synthesis | Saved sources only | Bedrock sees only saved source IDs and excerpts; citation audit rejects ungrounded claims; target-route lock requires explicit user selection. |
+| Prospeo company search | Locked `target_decisions` + free location preview + explicit approval | Re-anchored to `ano_conversations` and `target_decisions`; free suggestion canonicalization followed by strict 1-page (25-company, 1-credit max) `/search-company` execution with no automatic retries. |
+| Prospeo people search | Shortlisted companies + role preview + explicit approval | Proposes buyer roles from Phase C claims and limits `/search-person` to 1 page (max 25 people) with no contact verification or auto-retry. |
+| Selective Dropcontact verification | Explicit contact selection + preview + separate approval | Submits only user-checked 1–10 name/company pairs after credit disclosure; never bulk-enriches contacts automatically. |
+| Outreach, calling & Mercury CRM proposals | Eligibility check + immutable per-action human approval | Compiles versioned drafts from approved playbooks, blocks suppressed or unverified email actions, and requires explicit `ApprovalCard` confirmation in `approval_decisions`; zero direct Mercury DB writes. |
 
 ## Database operation
 
-The schema lives in [`supabase/migrations/20261021_000001_ano_workspace_and_research.sql`](../supabase/migrations/20261021_000001_ano_workspace_and_research.sql), with the manual-record update in [`supabase/migrations/20261021_000002_manual_workspace_records.sql`](../supabase/migrations/20261021_000002_manual_workspace_records.sql) and the Ano-only ICP records in [`supabase/migrations/20261021_000003_icp_profiles.sql`](../supabase/migrations/20261021_000003_icp_profiles.sql). The application’s service-role key is intentionally insufficient to run DDL.
-
-To apply the schema, add these private values to `.env.local`:
-
-```text
-SUPABASE_DB_URL=
-ANO_DATABASE_LABEL=ano
-```
-
-Then run:
+Schema migrations live in `supabase/migrations/` (`000001` through `000019`). The application's runtime never uses a service-role key for DDL. To apply or verify migrations against Ano's dedicated database, set `SUPABASE_DB_URL` and `ANO_DATABASE_LABEL=ano` in `.env.local` and run:
 
 ```bash
 npm run db:apply
 npm run db:status
 ```
-
-The script is transactional, records the migration in `ano_schema_migrations`, and refuses to run without the explicit Ano label. It must point at Ano’s dedicated Supabase database.

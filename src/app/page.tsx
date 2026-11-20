@@ -1,5 +1,5 @@
-import { MarketDiscoveryWorkbench } from "@/components/market-discovery-workbench";
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return <MarketDiscoveryWorkbench />;
+  redirect("/research");
 }

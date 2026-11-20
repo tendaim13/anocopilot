@@ -1,0 +1,41 @@
+use_default_settings:
+  engines:
+    # Ano begins with a small, explicit allow-list. We can change this only
+    # after a documented reliability/terms review and a separate deployment.
+    keep_only:
+      - bing
+      - duckduckgo
+      - mojeek
+      - wikipedia
+
+general:
+  debug: false
+  instance_name: "Ano private research"
+  enable_metrics: false
+
+search:
+  safe_search: 2
+  autocomplete: ""
+  formats:
+    - json
+
+server:
+  # The public SearXNG API limiter blocks JSON clients after four requests per
+  # hour and classifies normal machine-to-machine headers as bots. This is a
+  # private service: Caddy requires Ano's gateway token and Ano independently
+  # enforces explicit approval, a 12-search ceiling, and no automatic replay.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: GET
+  default_http_headers:
+    X-Content-Type-Options: nosniff
+    X-Download-Options: noopen
+    X-Robots-Tag: noindex, nofollow
+    Referrer-Policy: no-referrer
+
+valkey:
+  url: valkey://valkey:6379/0
+
+outgoing:
+  request_timeout: 6.0

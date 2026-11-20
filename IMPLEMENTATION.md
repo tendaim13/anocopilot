@@ -1,6 +1,6 @@
 # Ano implementation plan: LangGraph research-to-revenue platform
 
-**Status:** Phase A is implemented and structurally verified. The initial Tavily Phase B pilot is retained as an audit record but is superseded for all future work. Phase B.1/B.2 are implemented and schema-verified: new runs use a private SearXNG adapter plus Ano-owned safe source retrieval. The private gateway is live with TLS and authenticated health checks; the separately approved, one-query Ano smoke test remains outstanding.
+**Status:** Phase A is implemented and structurally verified. The initial Tavily Phase B pilot is retained as an audit record but is superseded for all future work. Phase B.1/B.2 are implemented and schema-verified: new runs use a private SearXNG adapter plus Ano-owned safe source retrieval. The private gateway is live with TLS and authenticated health checks. The 2026-10-30 recommendation-policy revision below supersedes every earlier instruction that treated incomplete comparative coverage as a reason to withhold a research answer from the user.
 
 **Supersedes for future work:** `IMPLEMENTATION_PLAN.md`. The earlier plan started with a form-led market hypothesis and moved too quickly to company discovery. This document replaces that direction with a research-first, chat-led product.
 
@@ -12,7 +12,7 @@
 | Orchestration | Use **LangGraph JS** as Ano's durable orchestration layer. Do not build a one-off Bedrock loop as the core workflow. |
 | Reasoning | Use Amazon Bedrock through a server-only LangChain Bedrock adapter. Bedrock interprets, plans, evaluates, and synthesises; it does not own application state or external permissions. |
 | Research | Use a **private self-hosted SearXNG instance** for search discovery and an Ano-owned, application-controlled source retriever. Do not depend on AWS's managed Bedrock Web Search, AWS Console access, a public SearXNG instance, a generic browser, or arbitrary HTTP controlled by the model. |
-| Evidence | Recommendations require visible source-backed evidence. Model text is never evidence by itself. |
+| Evidence | Recommendations require source-backed reasoning. Model text is never evidence by itself, but incomplete direct evidence changes confidence and framing rather than automatically withholding a useful recommendation. |
 | Prospecting | Research and market selection happen before Prospeo company discovery. |
 | People | A selected company leads to role recommendations, then named-person discovery, then optional Dropcontact verification. |
 | Actions | Email, scheduling, and calling are later graphs. No provider may send an email, create a campaign, schedule a call, or place a call without a separate explicit approval. |
@@ -35,8 +35,10 @@ User message
   → ask one decision-changing question only when needed
   → show a research plan
   → user starts research
-  → collect and assess public evidence
-  → compare markets, industries, problems, and buyer roles
+  → collect, rank, and assess public evidence
+  → compare markets, industries, problems, and buyer roles using direct and comparable evidence
+  → present Ano's best evidence-calibrated recommendation
+  → make sources, confidence, and reasoning available when the user wants them
   → user chooses a target route
   → search companies in Prospeo
   → identify named people at approved companies
@@ -139,13 +141,13 @@ Approved research scope
 
 | Component | Responsibility | Must not do |
 | --- | --- | --- |
-| Private SearXNG | Aggregate configured web-search engines and return result metadata. | Extract pages, store Ano data, hold Bedrock/Supabase credentials, or accept anonymous public use. |
-| Valkey | Support SearXNG rate limiting. | Hold application data or secrets. |
+| Private SearXNG | Aggregate configured web-search engines and return result metadata. It has an internal Caddy peer network plus a no-published-port outbound engine network. | Extract pages, store Ano data, hold Bedrock/Supabase credentials, or accept anonymous public use. |
+| Valkey | Remain isolated on the internal network for SearXNG support services; it is not an Ano data store. | Hold application data or secrets. |
 | Reverse proxy | Terminate TLS and require Ano-to-service authentication. | Expose SearXNG's internal port directly. |
 | Ano search adapter | Validate a search request, call SearXNG, normalise result metadata, and persist a receipt. | Give Bedrock direct network access. |
 | Ano source retriever | Fetch only an Ano-saved search result, apply SSRF/content controls, extract evidence, and persist a bounded excerpt. | Fetch arbitrary model URLs, retain raw pages, or automatically replay an uncertain request. |
 
-The first deployment is one small Amazon Linux 2023 EC2 host running pinned Docker images for **SearXNG**, **Valkey**, and a reverse proxy. SearXNG and Valkey bind only to the Docker network. The reverse proxy is the sole HTTPS entry point and requires an Ano-held gateway credential. No public SearXNG instance will be used.
+The first deployment is one small Amazon Linux 2023 EC2 host running pinned Docker images for **SearXNG**, **Valkey**, and a reverse proxy. SearXNG and Valkey have no published host ports. SearXNG shares an internal peer network with Caddy and a dedicated no-published-port egress bridge for its configured engines; Valkey remains internal-only. The reverse proxy is the sole HTTPS entry point and requires an Ano-held gateway credential. No public SearXNG instance will be used.
 
 The deployment requires a domain and TLS before Ano enables the provider. The EC2 host's SSH arrangement is operational access only; it is not used as Ano's application authentication mechanism.
 
@@ -172,7 +174,7 @@ Ano extracts readable page text server-side, strips executable/interactive conte
 | `SEARXNG_GATEWAY_TOKEN` | Ano server environment and reverse proxy | Rotatable, long random shared credential; never stored in Supabase or passed to Bedrock. |
 | `SEARXNG_SECRET_KEY` | EC2 server environment | Generated once for SearXNG; never copied into Ano. |
 | Engine allow-list | SearXNG configuration | Enable engines only after a documented terms/reliability check; do not make Google scraping the default. |
-| Limiting | SearXNG + Ano | Valkey-backed SearXNG limiter plus Ano's per-run request ceiling. |
+| Limiting | Caddy + Ano | The private Caddy credential gate plus Ano's explicit approval, durable action claims, 12-search/30-fetch ceilings, and no-replay policy. SearXNG's public JSON API limiter is disabled because it caps authenticated API clients at four searches per IP per hour. |
 | Health check | Ano server | Authenticated, no-query health check; it records availability only and never triggers research. |
 
 | Control | Initial limit |
@@ -195,6 +197,8 @@ Tavily migrations, provider receipts, and stopped attempts remain intact for aud
 
 ## 5. Evidence and recommendation policy
 
+**Product rule:** Ano does not make a user wait for a perfect evidence matrix. When it has usable evidence, it produces the strongest useful recommendation that evidence supports. Research coverage controls the recommendation's confidence, the type of wording Ano may use, and what Ano proposes to validate next. It does not become a user-facing dead end.
+
 ### 5.1 Evidence labels
 
 Every displayed statement has one of the following labels:
@@ -203,9 +207,10 @@ Every displayed statement has one of the following labels:
 | --- | --- |
 | **You told Ano** | A direct user statement. It is retained as user context, not independently verified fact. |
 | **Source observation** | A statement or datum derived from a retrieved source, linked to that source and retrieval time. |
+| **Comparable evidence** | A source observation from a meaningfully similar industry, market, country, sales motion, or operating model. Ano states why it is comparable and never presents it as direct evidence about the target. |
 | **Ano inference** | A conclusion combining one or more source observations. It links to every supporting source. |
 | **Hypothesis to test** | A plausible but unverified route; it cannot be worded as a confirmed market fact. |
-| **Insufficient evidence** | Ano could not find enough reliable support to make a recommendation. |
+| **Unknown / validate next** | A decision-relevant point for which Ano found no adequate direct or comparable evidence. It is a stated gap, not a fabricated fact or a reason to hide the rest of the report. |
 
 ### 5.2 Source quality policy
 
@@ -225,11 +230,31 @@ Before synthesis, Ano validates every claim against the evidence ledger:
 
 - a claim must cite one or more stored source IDs;
 - citations must refer to the claim's topic, not merely the same industry;
-- a market ranking needs comparable evidence for every compared market;
+- a strong market ranking needs comparable evidence for every compared market; otherwise Ano may show a candidate route with an exploratory or moderate confidence label;
 - conflicting sources are shown, not silently averaged away;
 - a company-level pain statement needs company-level evidence;
 - an industry-level pain statement must remain industry-level when company evidence is absent; and
-- no source, weak source, or conflicting source routes back to clarification, additional research, or an explicit uncertainty state.
+- no source, weak source, or conflicting source must be rendered as a gap, comparable finding, or qualified inference rather than a confirmed fact.
+
+### 5.4 Recommendation outcomes and confidence
+
+Ano must persist its internal coverage assessment, but the primary user outcome is an insight report rather than an internal pass/fail screen.
+
+| Research outcome | What Ano presents | What Ano must not do |
+| --- | --- | --- |
+| **Directly supported comparison** | A ranked market recommendation, the supporting findings, trade-offs, confidence, and a recommended first route. | Claim that the selected market guarantees demand or revenue. |
+| **Partial direct evidence with useful comparables** | A candidate market route with direct findings, comparable-market/industry findings, clearly labelled Ano inferences, and targeted validation suggestions. | Say the comparable evidence is direct evidence about the target market. |
+| **Sparse but usable evidence** | A narrow exploratory recommendation or two defensible routes, with the assumptions the user is being asked to accept. | Hide the result behind an internal coverage score or manufacture precision. |
+| **No usable evidence** | A short, honest result: what Ano searched, that no usable public support was found, the least-assumptive next question, and an option to approve a different research scope. | Invent a market recommendation, statistics, sources, or customer pain. |
+
+Every recommendation contains four visible sections:
+
+1. **What Ano found** — direct observations from sources.
+2. **What this may mean for you** — comparable evidence and Ano's explicit reasoning.
+3. **Recommended starting route** — market, industries, buyer roles, likely problems, and why this route is worth testing.
+4. **What to validate next** — material unknowns and the next bounded research question.
+
+The source ledger, coverage score, query count, retrieval diagnostics, provider receipts, and budget consumption remain available in the later **Sources / Why Ano thinks this** view and the Activity audit trail. They are not the report that a seller has to interpret before receiving an answer.
 
 ## 6. Persistent data and state design
 
@@ -303,9 +328,8 @@ capture_message
   → execute_fetch
   → normalise_evidence
   → assess_evidence_coverage
-       ├─ gap → refine_queries
-       ├─ insufficient → await_scope_decision
-       └─ sufficient → synthesise_market_profiles
+       ├─ research budget remains and a targeted gap can be addressed → refine_queries
+       └─ usable evidence or research is complete → synthesise_market_report
   → citation_audit
   → await_target_decision
   → handoff_to_prospecting
@@ -326,8 +350,8 @@ capture_message
 | `select_sources_to_fetch` | Bedrock | Search-result metadata | Ranked result IDs and reasons | `execute_fetch` |
 | `execute_fetch` | Application | Approved result IDs | Normalised source records | `normalise_evidence` |
 | `normalise_evidence` | Application | Source records | Safe excerpts, metadata, source classification | `assess_evidence_coverage` |
-| `assess_evidence_coverage` | Bedrock + deterministic checks | Source and claim records | Coverage, contradiction, and gap result | Refine, stop, or synthesise |
-| `synthesise_market_profiles` | Bedrock | Evidence IDs and allowed excerpts | Market, industry, problem, and buyer recommendations | `citation_audit` |
+| `assess_evidence_coverage` | Bedrock + deterministic checks | Source and claim records | Coverage, contradiction, gaps, comparable-evidence opportunities, and recommendation mode | Refine while a targeted approved wave remains; otherwise synthesise |
+| `synthesise_market_report` | Bedrock | Evidence IDs and allowed excerpts | Direct findings, comparable findings, labelled inferences, unknowns, and market/industry route candidates | `citation_audit` |
 | `citation_audit` | Application | Draft claims | Verified claim/source links or blocked claims | `await_target_decision` or repair |
 | `await_target_decision` | LangGraph interrupt | Evidence-backed recommendations | User market/industry choice | `handoff_to_prospecting` |
 
@@ -355,8 +379,9 @@ Bad clarification examples:
 | Bedrock formatting failure | Retry once with the same bounded input, then show an honest recoverable error. |
 | Search/fetch rate limit or temporary network failure | Retry only within the configured safe retry policy. |
 | Uncertain provider outcome or charge | Stop at `requires_manual_review`; never replay automatically. |
-| Insufficient evidence | Explain the gap and offer narrower scope, more research, or stop. |
-| Contradictory evidence | Show the conflict and do not publish a confident ranking. |
+| Limited but usable evidence | Complete the report with an exploratory or moderate confidence label, direct/comparable/inference separation, and a concise next-validation list. |
+| No usable evidence | Complete a short no-evidence result, preserve the audit record, and offer one decision-changing clarification or a separately approved new scope. |
+| Contradictory evidence | Show the conflict, avoid a confident ranking, and offer the most defensible candidate routes or a targeted next-validation question. |
 | Prompt-injection content in a source | Treat as untrusted content, exclude it from instructions, log the event, and continue only when safe. |
 
 ## 8. UI information architecture
@@ -368,9 +393,10 @@ The application uses tabs. It does not render a long vertical, all-stages-at-onc
 | Tab | Availability | Purpose |
 | --- | --- | --- |
 | **Ask Ano** | Phase A | Conversational intake, clarification, plan approval, and current request. |
-| **Research** | Phase B | Progress, current query plan, source timeline, evidence gaps, and run controls. |
-| **Markets** | Phase C | Market comparison, country/region evidence, trade-offs, and selection. |
-| **Industries** | Phase C | Industry problems, solution fit, buyer roles, and confidence. |
+| **Research** | Phase B | Plain-language progress while Ano is working. After completion, it is a secondary history of the question and research run—not a prerequisite to reading the outcome. |
+| **Markets** | Phase C | The primary completed-research report: recommended market routes, confidence, trade-offs, and selection. |
+| **Industries** | Phase C | The supporting opportunity view: industry problems, solution fit, buyer roles, and confidence. |
+| **Sources / Why Ano thinks this** | Phase C | Optional evidence drill-down: sources, direct versus comparable evidence, citations, research gaps, and audit-safe retrieval status. |
 | **Accounts** | Phase D | Prospeo company preview, approved search results, shortlist, and account fit. |
 | **People** | Phase E | Role recommendations, named-person discovery, and selected contacts. |
 | **Playbook** | Phase E/F | Evidence-backed account/industry/contact angles and reviewed drafts. |
@@ -378,7 +404,7 @@ The application uses tabs. It does not render a long vertical, all-stages-at-onc
 
 Only tabs relevant to the current conversation state are enabled. Each tab owns its own internal scrolling area; changing tabs does not discard graph state.
 
-### 8.2 Research progress UI
+### 8.2 Research progress and result UI
 
 The Research tab shows an understandable timeline rather than hidden agent behaviour:
 
@@ -391,7 +417,11 @@ Evidence gap: Malaysia sector-specific data is weak
 Decision ready: review findings
 ```
 
-Every step has a visible status: queued, running, paused for you, complete, insufficient evidence, failed safely, or requires manual review.
+While research runs, Ano shows only seller-relevant progress such as the research focus, comparison being explored, and whether it needs a decision. It does not make the user interpret query budgets, fetch limits, source-class counts, or provider diagnostics.
+
+When research completes, Ano lands the user on **Markets**, not a source ledger. The report starts with the recommended starting route and its confidence; it then explains direct findings, comparable evidence, Ano's inference, and the next thing worth validating. **Sources / Why Ano thinks this** is a non-blocking drill-down for people who want to inspect the evidence.
+
+Internal statuses remain durable for audit and operations: queued, running, paused for a user decision, completed, completed with limited evidence, failed safely, and requires manual review. Only an actual decision the user must make is presented as a blocking UI state.
 
 ## 9. Detailed delivery phases
 
@@ -464,14 +494,14 @@ Every step has a visible status: queued, running, paused for you, complete, insu
 
 ### Phase B — Private SearXNG evidence runtime
 
-**Purpose:** Replace the Tavily pilot with a no-credit, private web-discovery service and a bounded Ano-owned source retriever. This phase does not rank markets, call Prospeo, discover people, or create outreach.
+**Purpose:** Replace the Tavily pilot with a no-credit, private web-discovery service and a bounded Ano-owned source retriever. A current mission may use up to 50 searches and 100 source fetches, but only when the approved research objective requires them. This phase does not call Prospeo, discover people, or create outreach.
 
 #### B.0 Deploy and verify the private research service
 
 - Provision the existing Amazon Linux 2023 EC2 host with Docker Engine, Docker Compose, security updates, and only the ports needed for SSH and the authenticated HTTPS gateway.
 - Deploy pinned SearXNG, Valkey, and reverse-proxy images through a version-controlled Compose file. SearXNG and Valkey must not publish host ports.
 - Generate separate server and gateway secrets, store them only in the EC2/Ano server environments, and verify that neither appears in Git, browser bundles, Bedrock context, Supabase, logs, or screenshots.
-- Configure SearXNG JSON search output, an explicit engine allow-list, safe-search defaults, Valkey-backed rate limiting, and structured service logs.
+- Configure SearXNG JSON search output, an explicit engine allow-list, safe-search defaults, and structured service logs. Keep the public SearXNG API limiter disabled: Caddy authentication and Ano-owned approval/limits control this private machine-to-machine path.
 - Add an authenticated health endpoint/check. It may verify service availability but may not make a research query.
 - Do not connect Ano to this service until the gateway, TLS, auth, health check, and a manual one-query smoke test are all confirmed.
 
@@ -479,14 +509,14 @@ Every step has a visible status: queued, running, paused for you, complete, insu
 
 - Add a provider-neutral `SearxngResearchProvider` server-only adapter. It calls only the authenticated SearXNG search endpoint and produces normalised result metadata.
 - Add Ano-only migration(s) that permit `searxng` provider state and action records without mutating or removing Tavily history.
-- Update the provider preview to name SearXNG, show the 12-search/30-fetch ceilings, state that there is no Tavily credit use, and disclose web-source retrieval risk.
+- Update the provider preview to name SearXNG, show the 50-search/100-fetch mission ceilings, state that there is no Tavily credit use, and disclose web-source retrieval risk.
 - Preserve the durable action model: a run and each search/fetch request are claimed before execution; duplicate clicks and ambiguous outcomes cannot replay a network request.
 - Remove Tavily from all new Phase B routes and configuration checks. Do not remove the old adapter or secret until the replacement has passed acceptance; it simply cannot be selected for a new run.
 
 #### B.2 Build Ano-owned safe source retrieval
 
 - Implement a server-only `EvidenceSourceRetriever` separate from SearXNG. It accepts a saved search-result ID, not a URL, and produces one explicit source outcome: `fetched`, `rejected`, `failed_safe`, or `requires_manual_review`.
-- Enforce scheme, hostname, DNS/IP, redirect, timeout, 2 MB response-size, content-type, and 30-source-per-run limits before extraction.
+- Enforce scheme, hostname, DNS/IP, redirect, timeout, 2 MB response-size, content-type, and 100-source-per-mission limits before extraction.
 - Extract readable HTML/plain-text evidence; retain only a bounded excerpt, source metadata, hash, and diagnostic receipt. Reject unsupported content visibly rather than handing opaque pages to Bedrock.
 - Store non-sensitive diagnostics sufficient to investigate failures: request stage, HTTP status when received, content type, byte count, redirect count, and safe response-shape metadata. Never collapse a failed parse into an unexplained generic provider error.
 - Treat fetched material as untrusted: it cannot introduce instructions, alter graph policy, request more tools, or enter a system/developer prompt.
@@ -517,7 +547,20 @@ Every step has a visible status: queued, running, paused for you, complete, insu
 - The UI now discloses private SearXNG, its 12-search/30-source limit, no Tavily credit use, and the distinction between rejected sources and safe retrieval failures.
 - Added a non-secret, digest-pinned Compose deployment bundle for SearXNG, Valkey, and an authenticated Caddy HTTPS gateway. Docker and Compose are installed on the dedicated EC2 host, and the bundle is staged at `/opt/ano-searxng`.
 - **Gateway activation record:** `deepresearch.nervastudios.com` resolves to the dedicated EC2 host. On 2026-10-23, the pinned SearXNG, Valkey, and Caddy services were started with host-only generated credentials and automatic TLS. The authenticated `/healthz` route returned `200`; unauthenticated `/healthz` and `/search` returned `401`. Ano's ignored, server-only local environment now holds the gateway URL and token. No `/search` request, source fetch, or research run was made.
-- **Still required:** a user-visible provider preview and explicit approval for one deliberately bounded research run. That run is the only remaining live Phase B smoke test; it must not happen automatically as part of gateway activation.
+- **Limiter correction:** On 2026-10-24, the public SearXNG limiter was disabled for the private authenticated gateway. Its default API quota is four JSON searches per IP per hour and its bot checks reject Ano's machine-to-machine JSON request shape. Ano now identifies its server request explicitly; Caddy authentication and Ano's durable approval, bounded-run, and no-retry controls remain mandatory.
+- **Egress correction:** On 2026-10-24, SearXNG was given a dedicated no-published-port Docker egress bridge after its initial internal-only network prevented DNS resolution and engine access. This permits outbound calls to the configured engines only; it does not make SearXNG directly reachable from the internet.
+- **Live smoke record:** On 2026-10-24, a user-approved bounded SearXNG run completed. Ano persisted 17 fetched source excerpts and three safe retrieval-failure records under a durable receipt. This verified the full preview → explicit approval → bounded discovery → source retrieval path without a retry or any Prospeo, person, contact, or outreach action.
+
+#### B.5 Iterative deep-research mission — implemented and schema-applied; pending live acceptance
+
+- Replaced the fixed one-pass sequence for new runs with `plan wave → search → score candidates → fetch → assess coverage → targeted follow-up wave → complete`.
+- The approved mission is a hard ceiling of **50 SearXNG searches and 100 safe source fetches**. Previous 12/30 runs retain their original limits and receipts; no historic run is replayed or relabelled.
+- Added persisted research waves, query records, source-to-query traceability, and per-source assessment records. Bedrock proposes only the next bounded question set. It has no SearXNG credential, HTTP/browser access, or ability to expand the approved mission.
+- Candidate retrieval is ranked before fetching. The score combines source-class authority, query directness, publication freshness, source-class diversity, extractability, and a near-duplicate penalty. A vendor page can provide terminology but is not decision-relevant evidence by itself.
+- The coverage assessment measures direct coverage, comparable-market/industry coverage, source diversity, contradiction, and material unknowns across problem urgency, market density, buyer conditions, market access, and solution fit. Counter-evidence is explicitly requested during follow-up waves.
+- Phase C consumes the mission coverage ledger to calibrate its recommendation. It does not withhold synthesis merely because a strict cross-market comparison gate is not met: usable evidence produces an evidence-backed, exploratory, or no-usable-evidence report as defined in Section 5.4.
+- Added deterministic assessment and LangGraph tests for source quality, comparison coverage, and an evidence-gap-driven second wave. No new web search, source retrieval, company search, contact enrichment, or outreach was performed while implementing this replacement.
+- Applied and verified Ano-only migration `20261024_000013_iterative_deep_research`; the dedicated Ano schema now reports 44/44 required tables. Typecheck, Phase A/B/C regressions, the new deep-research tests, SearXNG contracts, and a Turbopack production build pass.
 
 #### Superseded Tavily pilot record — 2026-10-23
 
@@ -526,37 +569,60 @@ Every step has a visible status: queued, running, paused for you, complete, insu
 
 ### Phase C — Evidence synthesis, market comparison, and target choice
 
-**Purpose:** Turn live research into a defensible decision about where to sell and which industries to examine.
+**Purpose:** Turn live research into the most useful evidence-calibrated recommendation Ano can make about where to sell and which industries to examine. A perfect comparative dataset improves confidence; it is not a prerequisite for a report.
 
 #### C.1 Evidence assessment
 
 - Implement `assess_evidence_coverage`, `refine_queries`, and `citation_audit`.
-- Require market comparisons to use the same comparison dimensions across every market.
+- Use the same comparison dimensions across every market where evidence permits.
 - Score evidence coverage separately from commercial attractiveness. A high score for evidence means “well supported,” not “guaranteed revenue.”
-- Surface contradictions, stale evidence, and insufficient evidence prominently.
+- Detect direct evidence, comparable evidence, contradictions, stale evidence, and material unknowns.
+- Treat coverage as a recommendation-calibration input, not a synthesis gate when at least one usable source exists.
 
 #### C.2 Research synthesis
 
 - Implement `synthesise_market_profiles` using only approved evidence IDs and permitted excerpts.
-- Produce structured outputs for market profiles, industry profiles, operational problems, solution fit, buyer-role hypotheses, evidence strength, unknowns, and next research actions.
+- Produce structured outputs for direct findings, comparable findings, Ano inferences, market profiles, industry profiles, operational problems, solution fit, buyer-role hypotheses, confidence, unknowns, and next research actions.
 - Enforce the distinction between observation, inference, and hypothesis at render time as well as in the model contract.
+- Require Ano to state why any source is considered comparable—for example, shared industry, sales motion, operating model, adjacent geography, or regulatory/economic fingerprint.
 
 #### C.3 Markets and Industries UI
 
-- Activate **Research**, **Markets**, and **Industries** tabs.
-- Present market comparisons as decision-ready tables/cards, each with an evidence drawer rather than an endless page.
-- Let the user compare, narrow, reject, or request additional research.
+- Activate **Research**, **Markets**, **Industries**, and **Sources / Why Ano thinks this** tabs.
+- Land completed research on **Markets** and present recommendation-first cards, not an internal evidence-coverage dashboard.
+- Present direct evidence, comparable evidence, Ano inferences, and unknowns in distinct visual treatments; sources are linked but do not dominate the initial report.
+- Let the user compare, narrow, reject, lock a route, or request a new separately approved research question.
 - Add a `target_decision` interrupt: the graph cannot move to company discovery until the user selects or locks a route.
 
 #### C.4 Tests and Phase C exit gate
 
-- Test citation mismatch rejection, insufficient-evidence routing, contradictory-source routing, and no-location/no-industry inputs.
+- Test citation mismatch rejection, direct/comparable/inference labels, no-usable-evidence reports, contradictory-source reports, and no-location/no-industry inputs.
 - Use a representative product prompt and verify that conclusions are materially more useful than a restatement of the prompt.
-- Review a live research result visually: sources, inference labels, uncertainty, and decision controls must be visible and understandable.
+- Review a live research result visually: a seller can understand the recommended route before opening source details; sources, inference labels, uncertainty, and decision controls remain visible and understandable.
 
-**Phase C is complete only when:** Ano can show why it recommends a market and industry, what evidence supports that recommendation, what remains uncertain, and let the user choose a target route.
+**Phase C is complete only when:** Ano can provide a useful report for direct, comparable, sparse, and no-usable-evidence outcomes; show why it recommends a market and industry (or why it cannot responsibly recommend one); separate observation, comparable evidence, inference, and unknowns; and let the user choose a target route when a route is proposed.
 
 **Explicitly excluded from Phase C:** paying for Prospeo, person discovery, enrichment, and outreach.
+
+#### Phase C implementation record — 2026-10-24
+
+- Added the Ano-only `20261024_000012_phase_c_market_synthesis` migration. It stores one evidence synthesis per research run, citation-bound claims, market and industry profiles, and an explicit target-decision record. No company, person, contact, or Mercury tables are involved.
+- Added a dedicated `phase-c-v1` LangGraph subgraph. It assesses saved fetched excerpts first, routes fewer than three excerpts to an insufficient-evidence stop, invokes Bedrock only with bounded saved excerpts and source IDs, then applies a deterministic citation audit before any findings are persisted.
+- The audit rejects claim source IDs outside the saved ledger, unknown claim references, duplicate profiles, and mismatched market-to-industry links. Evidence coverage and commercial attractiveness are not conflated: source count and source-class diversity control whether a route may be locked.
+- Added **Markets** and **Industries** tabs with compact findings cards, expandable cited-evidence drawers, explicit observation/inference/hypothesis/uncertainty labels, visible gaps and contradictions, and a target-route lock. Locking records the user decision only; it does not invoke SearXNG, Prospeo, Dropcontact, a CRM, email, or telephony.
+- **Verification record:** the Ano-only migration is applied and schema status is current. Phase C contract tests, the existing Phase B/SearXNG regression tests, and a Turbopack production build pass. An authenticated live run on 2026-10-24 analyzed the existing source ledger once. It correctly stopped at `insufficient_evidence`: 17 fetched excerpts were available, but all were classified as one source class and none carried a publication date, so no market or industry route was invented or locked. The UI exposes the coverage gap plus review and new-question controls. The Phase C model action remains user-triggered and is never retried automatically.
+
+#### Phase C recommendation-policy revision — 2026-10-30 (authoritative for future implementation)
+
+The prior implementation record is retained as history, but its `insufficient_evidence` stop is no longer the intended user outcome. The following work replaces that behaviour without weakening evidence integrity or provider safety:
+
+1. **Preserve assessment; remove it as a hard user gate.** Keep `comparison_ready`, coverage, source-class diversity, contradictions, and retrieval outcomes as audit fields. Add a persisted `recommendation_mode`: `directly_supported`, `comparative_inference`, `exploratory`, or `no_usable_evidence`.
+2. **Synthesize whenever usable evidence exists.** The graph may run targeted follow-up waves while the approved mission remains. Once it has usable excerpts—or exhausts the approved mission—it produces the appropriate report mode. Only zero usable evidence bypasses the normal market synthesis, and it still receives a short, useful no-evidence result.
+3. **Use an explicit evidence-aware Bedrock contract.** For every conclusion, the model must return source IDs; an evidence kind (`direct`, `comparable`, or `inference`); a concise rationale; confidence; and a statement of what would disprove or validate it. The application rejects unsupported direct claims, unlinked comparable claims, and inferred statistics presented as observations.
+4. **Define comparable fingerprints deterministically.** A comparable route must name the shared dimensions: industry/operating model, customer size or sales motion, adjacent geography or economic/regulatory context, buyer role, and problem mechanism. Bedrock may explain the comparison but cannot silently turn a weak analogy into a market fact.
+5. **Render report-first.** Completed research opens a concise market recommendation report. It shows the strongest route, alternatives, confidence, direct findings, comparable reasoning, likely problems, buyer roles, and a next validation step. The source ledger becomes a voluntary Sources / Why Ano thinks this view, not the page that blocks forward progress.
+6. **Retain human control at the hand-off.** Ano can recommend a route; it cannot call Prospeo until the user deliberately locks a market/industry route. A user may instead reject the recommendation or approve a new question. No company, person, contact, email, calling, or scheduling provider action is introduced by this revision.
+7. **Verify four end-to-end cases.** (a) strong direct comparison, (b) mixed direct and comparable evidence, (c) sparse but useful evidence, and (d) no usable evidence. Each must leave a readable result and audit trail; none may strand the user on a coverage error page.
 
 ### Phase D — Research-backed Prospeo account discovery
 
@@ -723,6 +789,12 @@ For each approved phase:
 
 ## 15. Immediate next action
 
-When implementation is authorised, start with **Phase A only**. The first technical task is a read-only audit of the current Bedrock configuration and Ano persistence layer, followed by the LangGraph foundation, durable conversation state, and the chat-led research-plan flow.
+The next authorised implementation is the **Phase C recommendation-policy revision** above. It is deliberately limited to the research-to-recommendation boundary:
 
-Do not begin live research provider work, Prospeo changes, Dropcontact work, message sending, scheduling, or calling until the relevant later phase is explicitly authorised.
+1. Inspect the current Phase C contracts, graph routes, persistence schema, and UI state without altering the provider adapter or prior source records.
+2. Add the `recommendation_mode`, confidence, direct finding, comparable finding, inference, unknown, and validation-next contract fields. Preserve old coverage fields as audit metadata.
+3. Route every run with one or more usable excerpts through evidence-aware synthesis; route zero-usable-evidence runs to a concise no-evidence report. Do not replay a source request, bypass approval, or spend new provider budget in this change.
+4. Update the market and industry report so the recommended route appears first, while sources and raw research diagnostics move into a non-blocking Sources / Why Ano thinks this view.
+5. Add contract, graph, persistence, and UI tests for the four outcome modes; run the established Ano verification suite and review the live interaction before calling the revision complete.
+
+Do not begin Prospeo changes, Dropcontact work, message sending, scheduling, or calling until the relevant later phase is explicitly authorised.

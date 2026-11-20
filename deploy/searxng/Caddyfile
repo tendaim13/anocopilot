@@ -1,0 +1,31 @@
+{
+  email {$ACME_EMAIL}
+  admin off
+}
+
+{$SEARXNG_DOMAIN} {
+  log {
+    output stdout
+    format json
+  }
+
+  route {
+    @health {
+      path /healthz
+      header X-Ano-Gateway-Token {$SEARXNG_GATEWAY_TOKEN}
+    }
+    respond @health "ok" 200
+
+    @search {
+      path /search
+      header X-Ano-Gateway-Token {$SEARXNG_GATEWAY_TOKEN}
+    }
+    handle @search {
+      # The token ends at the proxy. SearXNG never receives or stores it.
+      request_header -X-Ano-Gateway-Token
+      reverse_proxy searxng:8080
+    }
+
+    respond "Unauthorized" 401
+  }
+}

@@ -1,0 +1,81 @@
+name: ano-searxng
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE:?Set CADDY_IMAGE to an immutable image digest in .env}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      searxng:
+        condition: service_started
+    networks:
+      - edge
+      - internal
+    security_opt:
+      - no-new-privileges:true
+
+  searxng:
+    image: ${SEARXNG_IMAGE:?Set SEARXNG_IMAGE to an immutable image digest in .env}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET in .env}
+      SEARXNG_BASE_URL: https://${SEARXNG_DOMAIN:?Set SEARXNG_DOMAIN in .env}/
+      SEARXNG_VALKEY_URL: valkey://valkey:6379/0
+      # Caddy's private gateway credential and Ano's durable run limits are the
+      # applicable control plane; do not apply SearXNG's public JSON API quota.
+      SEARXNG_LIMITER: "false"
+      SEARXNG_PUBLIC_INSTANCE: "false"
+      # The version-controlled configuration is read-only; the cache volume is
+      # the only SearXNG path that needs container write access.
+      FORCE_OWNERSHIP: "false"
+    volumes:
+      - ./searxng:/etc/searxng:ro
+      - searxng_cache:/var/cache/searxng
+    depends_on:
+      valkey:
+        condition: service_started
+    expose:
+      - "8080"
+    networks:
+      - internal
+      # This is outbound-only in practice: the service has no published port,
+      # while SearXNG needs egress to reach its configured search engines.
+      - research_egress
+    security_opt:
+      - no-new-privileges:true
+
+  valkey:
+    image: ${VALKEY_IMAGE:?Set VALKEY_IMAGE to an immutable image digest in .env}
+    restart: unless-stopped
+    command: ["valkey-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - valkey_data:/data
+    expose:
+      - "6379"
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  edge:
+  internal:
+    internal: true
+  research_egress:
+    # Only SearXNG is attached. It permits engine lookups without creating an
+    # externally reachable SearXNG port.
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  searxng_cache:
+  valkey_data:

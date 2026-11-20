@@ -49,6 +49,28 @@ export type ProspeoCompanySearch = {
   rateLimit: ProspeoRateLimit;
 };
 
+export type ProspeoPerson = {
+  id: string;
+  fullName: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  seniority?: string;
+  department?: string;
+  linkedInUrl?: string;
+  location?: string;
+  companyId?: string;
+  companyName?: string;
+  companyDomain?: string;
+};
+
+export type ProspeoPersonSearch = {
+  free: boolean;
+  people: ProspeoPerson[];
+  totalCount?: number;
+  rateLimit: ProspeoRateLimit;
+};
+
 export class ProspeoClientError extends Error {
   constructor(
     readonly code: "PROSPEO_KEY_UNCONFIGURED" | "INVALID_API_KEY" | "RATE_LIMITED" | "INSUFFICIENT_CREDITS" | "INVALID_FILTERS" | "PLAN_REQUIRED" | "NO_RESULTS" | "SERVICE_UNAVAILABLE" | "INVALID_RESPONSE" | "NETWORK_ERROR",
@@ -86,6 +108,18 @@ const companyPayloadSchema = z.object({
   error: z.literal(false),
   free: z.boolean().optional().default(false),
   results: z.array(z.object({ company: z.unknown() })),
+  pagination: z.object({ total_count: z.number().optional() }).optional(),
+});
+
+const personPayloadSchema = z.object({
+  error: z.literal(false),
+  free: z.boolean().optional().default(false),
+  results: z.array(
+    z.object({
+      person: z.unknown().optional(),
+      company: z.unknown().optional(),
+    }).passthrough(),
+  ),
   pagination: z.object({ total_count: z.number().optional() }).optional(),
 });
 
@@ -208,7 +242,7 @@ export async function suggestProspeoLocations(location: string, fetcher?: Prospe
   return parsed.data.location_suggestions ?? [];
 }
 
-/** This is intentionally the only credit-bearing method in the client. */
+/** This is intentionally bounded to page 1 (25 companies max). */
 export async function searchProspeoCompanies(filters: Record<string, unknown>, fetcher?: ProspeoFetcher): Promise<ProspeoCompanySearch> {
   const response = await prospeoRequest("/search-company", { method: "POST", body: JSON.stringify({ page: 1, filters }) }, fetcher);
   const parsed = companyPayloadSchema.safeParse(response.payload);
@@ -216,6 +250,83 @@ export async function searchProspeoCompanies(filters: Record<string, unknown>, f
   return {
     free: parsed.data.free,
     companies: parsed.data.results.map((item) => normaliseCompany(item.company)).filter((item): item is ProspeoCompany => item !== null).slice(0, 25),
+    totalCount: parsed.data.pagination?.total_count,
+    rateLimit: response.rateLimit,
+  };
+}
+
+function normalisePerson(entry: { person?: unknown; company?: unknown } & Record<string, unknown>): ProspeoPerson | null {
+  const rawPerson =
+    entry.person && typeof entry.person === "object"
+      ? (entry.person as Record<string, unknown>)
+      : entry;
+  const rawCompany =
+    entry.company && typeof entry.company === "object"
+      ? (entry.company as Record<string, unknown>)
+      : {};
+
+  const firstName = optionalString(rawPerson.first_name);
+  const lastName = optionalString(rawPerson.last_name);
+  const fullName =
+    optionalString(rawPerson.full_name) ??
+    optionalString(rawPerson.name) ??
+    ([firstName, lastName].filter(Boolean).join(" ").trim() || undefined);
+  const id =
+    optionalString(rawPerson.person_id) ??
+    optionalString(rawPerson.id) ??
+    optionalString(rawPerson.linkedin_url);
+
+  if (!id || !fullName) return null;
+
+  const rawLocation =
+    rawPerson.location && typeof rawPerson.location === "object"
+      ? (rawPerson.location as Record<string, unknown>)
+      : {};
+  const locationText =
+    optionalString(rawPerson.location_text) ??
+    ([optionalString(rawLocation.city), optionalString(rawLocation.state), optionalString(rawLocation.country)]
+      .filter(Boolean)
+      .join(", ") || undefined);
+
+  return {
+    id,
+    fullName,
+    firstName,
+    lastName,
+    title: optionalString(rawPerson.current_job_title) ?? optionalString(rawPerson.title) ?? optionalString(rawPerson.job_title),
+    seniority: optionalString(rawPerson.seniority),
+    department: optionalString(rawPerson.department),
+    linkedInUrl: optionalString(rawPerson.linkedin_url),
+    location: locationText,
+    companyId: optionalString(rawCompany.company_id) ?? optionalString(rawPerson.company_id),
+    companyName: optionalString(rawCompany.name) ?? optionalString(rawPerson.company_name),
+    companyDomain: optionalString(rawCompany.domain) ?? optionalString(rawPerson.company_domain),
+  };
+}
+
+/**
+ * Bounded 1-page (25-person max) named-person discovery for shortlisted companies.
+ * Never returns or fabricates verified contact emails or phone numbers.
+ */
+export async function searchProspeoPeople(
+  filters: Record<string, unknown>,
+  fetcher?: ProspeoFetcher,
+): Promise<ProspeoPersonSearch> {
+  const response = await prospeoRequest(
+    "/search-person",
+    { method: "POST", body: JSON.stringify({ page: 1, filters }) },
+    fetcher,
+  );
+  const parsed = personPayloadSchema.safeParse(response.payload);
+  if (!parsed.success) {
+    throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned person data Ano could not verify.");
+  }
+  return {
+    free: parsed.data.free,
+    people: parsed.data.results
+      .map((item) => normalisePerson(item))
+      .filter((item): item is ProspeoPerson => item !== null)
+      .slice(0, 25),
     totalCount: parsed.data.pagination?.total_count,
     rateLimit: response.rateLimit,
   };
