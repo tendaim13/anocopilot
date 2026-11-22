@@ -16,7 +16,7 @@ import {
 } from "@/server/agents/bedrock-contracts";
 
 export type AnoAgentMode = "disabled" | "bedrock" | "ollama" | "gemini";
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 export const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 export { BedrockAdapterError } from "@/server/agents/bedrock-contracts";

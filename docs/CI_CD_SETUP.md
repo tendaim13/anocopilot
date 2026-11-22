@@ -65,7 +65,7 @@ Add these in **Vercel Project Settings → Environment Variables** (**never** pu
 ### Reasoning LLM (Google AI Studio Gemini — Free/Token-Conserving)
 - `ANO_AGENT_MODE` — `gemini`
 - `GEMINI_API_KEY` — Google AI Studio API key
-- `GEMINI_MODEL` — `gemini-2.5-flash-lite` (or `gemini-3.1-flash-lite` if enabled on your project)
+- `GEMINI_MODEL` — `gemini-3.5-flash-lite` (or `gemini-3.1-flash-lite`)
 - *(Later, when switching back to AWS Bedrock, add `AWS_REGION`, `BEDROCK_MODEL_ID`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`, AWS IAM role/keys and switch `ANO_AGENT_MODE=bedrock`.)*
 
 ### Research & Lead Connectors

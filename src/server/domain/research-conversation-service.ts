@@ -18,6 +18,11 @@ import {
 } from "@/lib/ano/research-conversation";
 import { BedrockConfigurationError, getActivePlannerConfig } from "@/server/agents/bedrock";
 import { replyInResearchConversation } from "@/server/agents/conversation-chat-model";
+import { GeminiApiError } from "@/server/agents/gemini-chat-model";
+import {
+  OllamaConnectionError,
+  OllamaModelNotFoundError,
+} from "@/server/agents/ollama-chat-model";
 import { createBedrockResearchPlanningModel, ResearchPlanningModelError } from "@/server/agents/research-planning-model";
 import { dropcontactConfiguration } from "@/server/connectors/dropcontact/dropcontact-client";
 import { getOutreachExecutionForConversation } from "@/server/domain/outreach-execution-service";
@@ -61,6 +66,18 @@ export class ResearchConversationServiceError extends Error {
     super(message);
     this.name = "ResearchConversationServiceError";
   }
+}
+
+export function formatConversationChatError(error: unknown): string {
+  if (
+    error instanceof ResearchConversationServiceError ||
+    error instanceof GeminiApiError ||
+    error instanceof OllamaConnectionError ||
+    error instanceof OllamaModelNotFoundError
+  ) {
+    return error.message;
+  }
+  return "Ano's conversational model could not respond right now. Check your configured model and try again.";
 }
 
 function requirePlannerConfig() {
@@ -219,11 +236,13 @@ export async function continueResearchConversation(
       message,
     );
   } catch (error) {
-    const fallbackError =
-      error instanceof ResearchConversationServiceError
-        ? error.message
-        : "Ano's conversational model could not respond right now. Check your configured model and try again.";
-    throw new ResearchConversationServiceError(fallbackError);
+    console.error(
+      "[ano:chat]",
+      error instanceof Error
+        ? { name: error.name, message: error.message.slice(0, 400) }
+        : { type: typeof error },
+    );
+    throw new ResearchConversationServiceError(formatConversationChatError(error));
   }
 
   let replyText = chatOutput.reply;

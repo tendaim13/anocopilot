@@ -15,9 +15,17 @@ import {
   resolveGeminiThinkingConfig,
 } from "@/server/agents/gemini-chat-model";
 import {
+  OllamaConnectionError,
+  OllamaModelNotFoundError,
+} from "@/server/agents/ollama-chat-model";
+import {
   createBedrockResearchPlanningModel,
   ResearchPlanningModelError,
 } from "@/server/agents/research-planning-model";
+import {
+  formatConversationChatError,
+  ResearchConversationServiceError,
+} from "@/server/domain/research-conversation-service";
 
 test("ANO_AGENT_MODE=gemini resolves token-conserving defaults and rejects missing API key", () => {
   const savedEnv = { ...process.env };
@@ -34,6 +42,7 @@ test("ANO_AGENT_MODE=gemini resolves token-conserving defaults and rejects missi
 
     process.env.GEMINI_API_KEY = "test-gemini-key";
     const defaultConfig = getActivePlannerConfig();
+    assert.equal(DEFAULT_GEMINI_MODEL, "gemini-3.5-flash-lite");
     assert.deepEqual(defaultConfig, {
       provider: "gemini",
       apiKey: "test-gemini-key",
@@ -58,6 +67,12 @@ test("ANO_AGENT_MODE=gemini resolves token-conserving defaults and rejects missi
 });
 
 test("resolveGeminiThinkingConfig conserves thinking tokens across Gemini 2.5 and 3.x models", () => {
+  assert.deepEqual(resolveGeminiThinkingConfig({ modelId: DEFAULT_GEMINI_MODEL }), {
+    thinkingLevel: "minimal",
+  });
+  assert.deepEqual(resolveGeminiThinkingConfig({ modelId: "gemini-3.5-flash-lite" }), {
+    thinkingLevel: "minimal",
+  });
   assert.deepEqual(resolveGeminiThinkingConfig({ modelId: "gemini-2.5-flash-lite" }), {
     thinkingBudget: 0,
   });
@@ -251,12 +266,107 @@ test("createGeminiChatModel surfaces 429, 401, and 404 errors immediately with z
       !err.message.includes("super-secret-gemini-key"),
   );
 
+  let notFoundCalls = 0;
   const notFoundModel = createGeminiChatModel(geminiConfig, {
-    fetcher: async () =>
-      new Response(JSON.stringify({ error: { message: "Not found" } }), { status: 404 }),
+    fetcher: async () => {
+      notFoundCalls += 1;
+      return new Response(
+        JSON.stringify({
+          error: {
+            message:
+              "Model gemini-2.5-flash-lite is no longer available to new users; key super-secret-gemini-key.",
+          },
+        }),
+        { status: 404 },
+      );
+    },
   });
   await assert.rejects(
     () => notFoundModel.invoke([new HumanMessage("hi")]),
-    (err: unknown) => err instanceof GeminiApiError && err.code === "MODEL_NOT_FOUND",
+    (err: unknown) =>
+      err instanceof GeminiApiError &&
+      err.code === "MODEL_NOT_FOUND" &&
+      err.message.includes("no longer available to new users") &&
+      !err.message.includes("super-secret-gemini-key"),
+  );
+  assert.equal(notFoundCalls, 1);
+});
+
+test("createGeminiChatModel retries once on transient HTTP 503 spikes and surfaces clear 503 error if persistent", async () => {
+  const geminiConfig = {
+    provider: "gemini" as const,
+    apiKey: "test-503-key",
+    modelId: "gemini-3.5-flash-lite",
+    baseUrl: DEFAULT_GEMINI_BASE_URL,
+  };
+
+  let recoveryCalls = 0;
+  const recoveringModel = createGeminiChatModel(geminiConfig, {
+    retryDelayMs: 0,
+    fetcher: async () => {
+      recoveryCalls += 1;
+      if (recoveryCalls === 1) {
+        return new Response(
+          JSON.stringify({ error: { code: 503, message: "High demand" } }),
+          { status: 503 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "{\"ok\":true}" }] } }],
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  const recovered = await recoveringModel.invoke([
+    new SystemMessage("json"),
+    new HumanMessage("ping"),
+  ]);
+  assert.equal(recovered.content, "{\"ok\":true}");
+  assert.equal(recoveryCalls, 2);
+
+  let persistentCalls = 0;
+  const persistent503Model = createGeminiChatModel(geminiConfig, {
+    retryDelayMs: 0,
+    fetcher: async () => {
+      persistentCalls += 1;
+      return new Response(
+        JSON.stringify({ error: { code: 503, message: "High demand" } }),
+        { status: 503 },
+      );
+    },
+  });
+
+  await assert.rejects(
+    () => persistent503Model.invoke([new HumanMessage("ping")]),
+    (err: unknown) =>
+      err instanceof GeminiApiError &&
+      err.code === "UNAVAILABLE" &&
+      err.message.includes("503"),
+  );
+  assert.equal(persistentCalls, 2);
+});
+
+test("formatConversationChatError preserves safe LLM provider messages and hides unknown internal errors", () => {
+  const geminiErr = new GeminiApiError(
+    "Ano: Google AI Studio model \"gemini-2.5-flash-lite\" is unavailable: deprecated. Check GEMINI_MODEL.",
+    "MODEL_NOT_FOUND",
+  );
+  assert.equal(formatConversationChatError(geminiErr), geminiErr.message);
+
+  const ollamaConnErr = new OllamaConnectionError("Ano could not reach Ollama at http://127.0.0.1:11434.");
+  assert.equal(formatConversationChatError(ollamaConnErr), ollamaConnErr.message);
+
+  const ollamaModelErr = new OllamaModelNotFoundError("Ano: Ollama model \"foo\" is not installed.");
+  assert.equal(formatConversationChatError(ollamaModelErr), ollamaModelErr.message);
+
+  const serviceErr = new ResearchConversationServiceError("Missing planner configuration.");
+  assert.equal(formatConversationChatError(serviceErr), serviceErr.message);
+
+  assert.equal(
+    formatConversationChatError(new Error("raw stack or internal db message")),
+    "Ano's conversational model could not respond right now. Check your configured model and try again.",
   );
 });
