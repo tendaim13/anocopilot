@@ -3,8 +3,13 @@ import "server-only";
 import type { WorkspaceSession } from "@/contracts/ano";
 import {
   deriveBuyerRoleRecommendations,
+  deriveBuyingCommitteeCriteria,
+  recommendPersonDiscoveryProvider,
+  type CompanyArchetype,
+  type ContactVerificationProvider,
   type DropcontactProviderState,
   type PeopleDiscoveryView,
+  type PersonDiscoveryProvider,
   type WorkspaceContactDirectoryItem,
   type WorkspacePlaybookDirectoryItem,
 } from "@/lib/ano/people-playbooks";
@@ -66,17 +71,46 @@ export async function getPeopleDiscoveryForConversation(
   };
 }
 
+export type BuyerRoleProposalOptions = {
+  providerKey?: PersonDiscoveryProvider;
+  roleOverrides?: string[];
+  departments?: string[];
+  seniorities?: string[];
+  excludeTitles?: string[];
+  archetype?: CompanyArchetype;
+};
+
 export async function proposeBuyerRolesForConversation(
   session: WorkspaceSession,
   conversationId: string,
-  roleOverrides?: string[],
+  optionsInput?: string[] | BuyerRoleProposalOptions,
 ) {
+  const options: BuyerRoleProposalOptions = Array.isArray(optionsInput)
+    ? { roleOverrides: optionsInput }
+    : optionsInput ?? {};
+
   const context = await loadShortlistedContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
+  const buyingCommittee = deriveBuyingCommitteeCriteria({
+    industry: context.industry,
+    brief: context.brief,
+    shortlistedAccounts: context.shortlistedAccounts,
+    overrides: {
+      archetype: options.archetype,
+      departments: options.departments,
+      seniorities: options.seniorities,
+      roleOverrides: options.roleOverrides,
+      excludeTitles: options.excludeTitles,
+    },
+  });
+  const providerKey =
+    options.providerKey ??
+    recommendPersonDiscoveryProvider(context.shortlistedAccounts, context.industry.name);
   const roleRecommendations = deriveBuyerRoleRecommendations(
     context.industry,
     context.brief,
-    roleOverrides,
+    buyingCommittee.includeTitles,
+    buyingCommittee,
   );
 
   const graph = createAccountToPeopleGraph(
@@ -86,6 +120,8 @@ export async function proposeBuyerRolesForConversation(
         saveRoleProposalAndPersonSearchPreview(session, {
           context: { ...context, shortlistedAccounts: input.shortlistedAccounts },
           roleRecommendations,
+          providerKey,
+          buyingCommittee,
         }),
     },
     checkpointer,
@@ -96,10 +132,14 @@ export async function proposeBuyerRolesForConversation(
       stage: "propose_roles",
       conversationId,
       shortlistedAccounts: context.shortlistedAccounts,
-      roleOverrides: roleOverrides ?? [],
+      roleOverrides: buyingCommittee.includeTitles,
       currentNode: "verify_shortlisted_accounts",
     },
-    { configurable: { thread_id: `ano:account-to-people:${context.targetDecisionId}` } },
+    {
+      configurable: {
+        thread_id: `ano:account-to-people:${context.targetDecisionId}:${Date.now()}`,
+      },
+    },
   );
 
   if (!result.view) {
@@ -119,7 +159,9 @@ export async function approvePersonSearchForConversation(
   conversationId: string,
   personSearchId: string,
 ) {
-  if (!prospeoConfiguration().available) {
+  const existingView = await readPeopleDiscoveryForConversation(session, conversationId);
+  const targetProvider = existingView.personSearch?.providerKey ?? "prospeo";
+  if (targetProvider === "prospeo" && !prospeoConfiguration().available) {
     throw new PeoplePlaybookServiceError(
       "Add PROSPEO_KEY on the server before running Prospeo person discovery.",
       "PROSPEO_NOT_CONFIGURED",
@@ -151,13 +193,13 @@ export async function approvePersonSearchForConversation(
     },
     {
       configurable: {
-        thread_id: `ano:account-to-people:${context.targetDecisionId}:person:${personSearchId}`,
+        thread_id: `ano:account-to-people:${context.targetDecisionId}:person:${personSearchId}:${Date.now()}`,
       },
     },
   );
 
   if (!result.view) {
-    throw new PeoplePlaybookServiceError("Ano could not complete Prospeo person search.");
+    throw new PeoplePlaybookServiceError("Ano could not complete person search.");
   }
 
   return {
@@ -166,11 +208,39 @@ export async function approvePersonSearchForConversation(
   };
 }
 
+export async function runWebsiteTeamDiscoveryForConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+  options?: Omit<BuyerRoleProposalOptions, "providerKey">,
+) {
+  const preview = await proposeBuyerRolesForConversation(session, conversationId, {
+    ...options,
+    providerKey: "website_team",
+  });
+  const personSearch = preview.peopleDiscovery.personSearch;
+  if (!personSearch) {
+    return preview;
+  }
+  if (personSearch.status !== "awaiting_approval") {
+    return preview;
+  }
+  return approvePersonSearchForConversation(session, conversationId, personSearch.id);
+}
+
 export async function prepareContactVerificationForConversation(
   session: WorkspaceSession,
   conversationId: string,
   selectedContactIds: string[],
+  requestedProvider?: ContactVerificationProvider,
 ) {
+  const providerKey: ContactVerificationProvider =
+    requestedProvider ??
+    (prospeoConfiguration().available && !dropcontactConfiguration().available
+      ? "prospeo"
+      : dropcontactConfiguration().available
+        ? "dropcontact"
+        : "prospeo");
+
   const context = await loadShortlistedContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
 
@@ -181,6 +251,7 @@ export async function prepareContactVerificationForConversation(
         saveDropcontactVerificationPreview(session, {
           context,
           selectedContactIds: input.selectedContactIds,
+          providerKey: input.providerKey ?? providerKey,
         }),
     },
     checkpointer,
@@ -192,24 +263,26 @@ export async function prepareContactVerificationForConversation(
       conversationId,
       shortlistedAccounts: context.shortlistedAccounts,
       selectedContactIds,
+      verificationProvider: providerKey,
       currentNode: "verify_shortlisted_accounts",
     },
     {
       configurable: {
-        thread_id: `ano:account-to-people:${context.targetDecisionId}:dc-preview`,
+        thread_id: `ano:account-to-people:${context.targetDecisionId}:verify-preview:${Date.now()}`,
       },
     },
   );
 
   if (!result.view) {
     throw new PeoplePlaybookServiceError(
-      "Ano could not prepare the selective Dropcontact preview.",
+      `Ano could not prepare the selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verification preview.`,
     );
   }
 
   return {
     peopleDiscovery: result.view,
     dropcontact: dropcontactConfiguration(),
+    prospeo: prospeoConfiguration(),
   };
 }
 
@@ -218,7 +291,15 @@ export async function approveContactVerificationForConversation(
   conversationId: string,
   verificationRunId: string,
 ) {
-  if (!dropcontactConfiguration().available) {
+  const existingView = await readPeopleDiscoveryForConversation(session, conversationId);
+  const providerKey = existingView.verificationRun?.providerKey ?? "dropcontact";
+  if (providerKey === "prospeo" && !prospeoConfiguration().available) {
+    throw new PeoplePlaybookServiceError(
+      "Add PROSPEO_KEY on the server before running selective Prospeo email enrichment.",
+      "PROSPEO_NOT_CONFIGURED",
+    );
+  }
+  if (providerKey === "dropcontact" && !dropcontactConfiguration().available) {
     throw new PeoplePlaybookServiceError(
       "Add DROPCONTACT_API_KEY on the server before running selective Dropcontact verification.",
       "DROPCONTACT_NOT_CONFIGURED",
@@ -250,18 +331,21 @@ export async function approveContactVerificationForConversation(
     },
     {
       configurable: {
-        thread_id: `ano:account-to-people:${context.targetDecisionId}:dc-exec:${verificationRunId}`,
+        thread_id: `ano:account-to-people:${context.targetDecisionId}:dc-exec:${verificationRunId}:${Date.now()}`,
       },
     },
   );
 
   if (!result.view) {
-    throw new PeoplePlaybookServiceError("Ano could not run selective Dropcontact verification.");
+    throw new PeoplePlaybookServiceError(
+      `Ano could not run selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} email verification.`,
+    );
   }
 
   return {
     peopleDiscovery: result.view,
     dropcontact: dropcontactConfiguration(),
+    prospeo: prospeoConfiguration(),
   };
 }
 

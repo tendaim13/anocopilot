@@ -13,9 +13,11 @@ import type {
   ResearchPlan,
 } from "@/lib/ano/research-conversation";
 import {
+  conversationMessageMetadataSchema,
   conversationTitle,
   researchConversationSummarySchema,
   researchConversationViewSchema,
+  type ConversationMessageMetadata,
 } from "@/lib/ano/research-conversation";
 import {
   classifyConversationWorkItem,
@@ -76,12 +78,16 @@ function isoTimestamp(value: unknown) {
 
 function asMessage(row: Record<string, unknown>): ConversationMessage {
   const content = record(row.content_json);
+  const parsedMeta = content.metadata
+    ? conversationMessageMetadataSchema.safeParse(content.metadata)
+    : null;
   return {
     id: String(row.id),
     role: row.role === "assistant" ? "assistant" : "user",
     kind: ["clarifying_question", "research_plan", "decision"].includes(String(row.message_type)) ? String(row.message_type) as ConversationMessage["kind"] : "message",
     text: String(content.text ?? ""),
     createdAt: isoTimestamp(row.created_at),
+    ...(parsedMeta?.success ? { metadata: parsedMeta.data } : {}),
   };
 }
 
@@ -204,6 +210,61 @@ export async function appendUserMessage(session: WorkspaceSession, conversationI
     created_by: session.actorId,
   });
   if (error) throw new ResearchConversationPersistenceError(failure());
+  return { id, created: true };
+}
+
+export async function appendAssistantMessage(
+  session: WorkspaceSession,
+  conversationId: string,
+  text: string,
+  dedupeKey: string,
+  metadata?: ConversationMessageMetadata,
+) {
+  requireLiveSession(session);
+  await readConversationRow(session, conversationId);
+  const { data: existing, error: existingError } = await session.client
+    .from("ano_messages")
+    .select("id")
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId)
+    .eq("dedupe_key", dedupeKey)
+    .maybeSingle();
+  if (existingError) {
+    console.error("[ano:messages] appendAssistantMessage lookup failed", {
+      code: existingError.code,
+      message: existingError.message,
+    });
+    throw new ResearchConversationPersistenceError(failure());
+  }
+  if (existing?.id) return { id: String(existing.id), created: false };
+
+  const id = crypto.randomUUID();
+  const { error } = await session.client.from("ano_messages").insert({
+    id,
+    workspace_id: session.workspace.id,
+    conversation_id: conversationId,
+    role: "assistant",
+    message_type: "message",
+    content_json: {
+      text,
+      ...(metadata ? { metadata } : {}),
+    },
+    dedupe_key: dedupeKey,
+  });
+  if (error) {
+    console.error("[ano:messages] appendAssistantMessage insert failed", {
+      code: error.code,
+      message: error.message,
+    });
+    throw new ResearchConversationPersistenceError(failure());
+  }
+
+  await session.client
+    .from("ano_conversations")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", conversationId);
+
   return { id, created: true };
 }
 

@@ -6,6 +6,7 @@ import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { AccountCandidateDossier } from "@/lib/ano/company-discovery";
 import type {
   AccountPlaybookView,
+  ContactVerificationProvider,
   ContactVerificationRunView,
   PeopleDiscoveryView,
   PersonSearchView,
@@ -35,6 +36,7 @@ export type AccountToPeopleExecutor = {
   prepareVerificationPreview: (input: {
     conversationId: string;
     selectedContactIds: string[];
+    providerKey?: ContactVerificationProvider;
   }) => Promise<PeopleDiscoveryView>;
   executeApprovedVerification: (input: {
     conversationId: string;
@@ -64,6 +66,10 @@ export const AccountToPeopleGraphState = Annotation.Root({
   selectedContactIds: Annotation<string[]>({
     reducer: (_left, right) => right,
     default: () => [],
+  }),
+  verificationProvider: Annotation<ContactVerificationProvider | null>({
+    reducer: (_left, right) => right,
+    default: () => null,
   }),
   verificationRunId: Annotation<string | null>({
     reducer: (_left, right) => right,
@@ -165,6 +171,7 @@ export function createAccountToPeopleGraph(
     const view = await executor.prepareVerificationPreview({
       conversationId: state.conversationId,
       selectedContactIds: state.selectedContactIds,
+      providerKey: state.verificationProvider ?? undefined,
     });
     return {
       view,

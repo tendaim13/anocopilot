@@ -13,6 +13,7 @@ import type {
   MercuryConnectorState,
   OutreachExecutionView,
 } from "@/lib/ano/outreach-execution";
+import type { OutreachTemplatePackView } from "@/lib/ano/outreach-templates";
 import type {
   DropcontactProviderState,
   PeopleDiscoveryView,
@@ -66,6 +67,7 @@ export function ResearchConversationWorkbench({
   const [dropcontact, setDropcontact] = useState<DropcontactProviderState | null>(null);
   const [outreachExecution, setOutreachExecution] = useState<OutreachExecutionView | null>(null);
   const [mercury, setMercury] = useState<MercuryConnectorState | null>(null);
+  const [templatePack, setTemplatePack] = useState<OutreachTemplatePackView | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [draft, setDraft] = useState("");
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
@@ -173,6 +175,7 @@ export function ResearchConversationWorkbench({
     setDropcontact(null);
     setOutreachExecution(null);
     setMercury(null);
+    setTemplatePack(null);
     setPendingUserMessage(null);
     setError(null);
     setDraft("");
@@ -238,6 +241,10 @@ export function ResearchConversationWorkbench({
         if ("mercury" in record) {
           setMercury((record.mercury ?? null) as MercuryConnectorState | null);
         }
+
+        if ("templatePack" in record) {
+          setTemplatePack((record.templatePack ?? null) as OutreachTemplatePackView | null);
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -263,6 +270,7 @@ export function ResearchConversationWorkbench({
       dropcontact,
       outreachExecution,
       mercury,
+      templatePack,
     });
   }, [
     embeddedInShell,
@@ -277,6 +285,7 @@ export function ResearchConversationWorkbench({
     dropcontact,
     outreachExecution,
     mercury,
+    templatePack,
   ]);
 
   useEffect(() => {
@@ -293,6 +302,7 @@ export function ResearchConversationWorkbench({
         dropcontact: null,
         outreachExecution: null,
         mercury: null,
+        templatePack: null,
       });
     };
   }, [embeddedInShell, setShellContext]);
@@ -384,12 +394,38 @@ export function ResearchConversationWorkbench({
     setPendingUserMessage(messageText);
     setDraft("");
     try {
-      const next = await request(
+      const response = await fetch(
         `/api/v1/conversations/${conversation.conversation.id}/messages`,
-        { message: messageText },
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Ano-Idempotency-Key": window.crypto.randomUUID(),
+          },
+          body: JSON.stringify({ message: messageText }),
+        },
       );
+      const payload = await response.json();
+      if (!response.ok || !payload.conversation) {
+        throw new Error(errorText(payload, "Ano could not send that message."));
+      }
       setPendingUserMessage(null);
-      setConversation(next);
+      setConversation(payload.conversation as ResearchConversationView);
+      if ("companySearch" in payload) {
+        setCompanySearch((payload.companySearch ?? null) as CompanySearchView | null);
+      }
+      if ("prospeo" in payload && payload.prospeo) {
+        setProspeo(payload.prospeo as ProspeoProviderState);
+      }
+      if ("peopleDiscovery" in payload) {
+        setPeopleDiscovery((payload.peopleDiscovery ?? null) as PeopleDiscoveryView | null);
+      }
+      if ("dropcontact" in payload && payload.dropcontact) {
+        setDropcontact(payload.dropcontact as DropcontactProviderState);
+      }
+      if ("templatePack" in payload) {
+        setTemplatePack((payload.templatePack ?? null) as OutreachTemplatePackView | null);
+      }
       if (embeddedInShell) void refreshShellConversations?.();
     } catch (requestError) {
       setPendingUserMessage(null);
@@ -447,18 +483,6 @@ export function ResearchConversationWorkbench({
         {
           kind: "clarification",
           answer: trimmed,
-          messageId: window.crypto.randomUUID(),
-        },
-        trimmed,
-      );
-      return;
-    }
-
-    if (conversation.run.status === "awaiting_plan_approval") {
-      await resume(
-        {
-          kind: "edit",
-          instruction: trimmed,
           messageId: window.crypto.randomUUID(),
         },
         trimmed,
@@ -601,7 +625,11 @@ export function ResearchConversationWorkbench({
   }
 
   async function prepareCompanySearch(options?: {
+    providerKey?: "prospeo" | "openstreetmap";
+    resolveWebsites?: boolean;
     locationOverrides?: string[];
+    keywordOverrides?: string[];
+    industryOverrides?: string[];
     excludedCategories?: string[];
   }) {
     if (!conversation) return;
@@ -618,14 +646,18 @@ export function ResearchConversationWorkbench({
           },
           body: JSON.stringify({
             action: "prepare_preview",
+            providerKey: options?.providerKey,
+            resolveWebsites: options?.resolveWebsites,
             locationOverrides: options?.locationOverrides,
+            keywordOverrides: options?.keywordOverrides,
+            industryOverrides: options?.industryOverrides,
             excludedCategories: options?.excludedCategories,
           }),
         },
       );
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(errorText(payload, "Ano could not prepare the Prospeo search preview."));
+        throw new Error(errorText(payload, "Ano could not prepare the company search preview."));
       }
       setCompanySearch((payload.companySearch ?? null) as CompanySearchView | null);
       if (payload.prospeo) setProspeo(payload.prospeo as ProspeoProviderState);
@@ -634,11 +666,67 @@ export function ResearchConversationWorkbench({
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "Ano could not prepare the Prospeo search preview.",
+          : "Ano could not prepare the company search preview.",
       );
     } finally {
       setIsWorking(false);
     }
+  }
+
+  async function runFreeCompanySearch(options?: {
+    resolveWebsites?: boolean;
+    locationOverrides?: string[];
+    keywordOverrides?: string[];
+    excludedCategories?: string[];
+  }) {
+    if (!conversation) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${conversation.conversation.id}/company-search`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Ano-Idempotency-Key": window.crypto.randomUUID(),
+          },
+          body: JSON.stringify({
+            action: "run_free_search",
+            resolveWebsites: options?.resolveWebsites,
+            locationOverrides: options?.locationOverrides,
+            keywordOverrides: options?.keywordOverrides,
+            excludedCategories: options?.excludedCategories,
+          }),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(errorText(payload, "Ano could not complete OpenStreetMap discovery."));
+      }
+      setCompanySearch((payload.companySearch ?? null) as CompanySearchView | null);
+      if (payload.prospeo) setProspeo(payload.prospeo as ProspeoProviderState);
+      if (embeddedInShell) void refreshShellConversations?.();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Ano could not complete OpenStreetMap discovery.",
+      );
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  function focusComposerWithPrompt(prefill?: string) {
+    if (prefill) {
+      setDraft(prefill);
+    }
+    window.setTimeout(() => {
+      const composer = document.getElementById("ano-chat-composer");
+      composer?.focus();
+      composer?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 40);
   }
 
   async function approveCompanySearch(searchId: string) {
@@ -746,6 +834,9 @@ export function ResearchConversationWorkbench({
       if (payload.dropcontact) {
         setDropcontact(payload.dropcontact as DropcontactProviderState);
       }
+      if (payload.prospeo) {
+        setProspeo(payload.prospeo as ProspeoProviderState);
+      }
       if (embeddedInShell) void refreshShellConversations?.();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : fallbackError);
@@ -786,6 +877,35 @@ export function ResearchConversationWorkbench({
     }
   }
 
+  async function runTemplateAction(body: Record<string, unknown>, fallbackError: string) {
+    if (!conversation) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${conversation.conversation.id}/templates`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Ano-Idempotency-Key": window.crypto.randomUUID(),
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(errorText(payload, fallbackError));
+      }
+      setTemplatePack((payload.templatePack ?? null) as OutreachTemplatePackView | null);
+      if (embeddedInShell) void refreshShellConversations?.();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : fallbackError);
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
   function beginNewResearch() {
     setConversation(null);
     setResearch(null);
@@ -796,6 +916,7 @@ export function ResearchConversationWorkbench({
     setDropcontact(null);
     setOutreachExecution(null);
     setMercury(null);
+    setTemplatePack(null);
     setPendingUserMessage(null);
     setDraft("");
     setMarketChoice("");
@@ -819,6 +940,7 @@ export function ResearchConversationWorkbench({
           dropcontact={dropcontact}
           outreachExecution={outreachExecution}
           mercury={mercury}
+          templatePack={templatePack}
           provider={provider}
           pendingUserMessage={pendingUserMessage}
           error={error}
@@ -849,12 +971,23 @@ export function ResearchConversationWorkbench({
           onSelectIndustry={(industryId) => setIndustryChoice(industryId)}
           onLockTargetRoute={() => void lockTargetRoute()}
           onPrepareCompanySearch={(options) => void prepareCompanySearch(options)}
+          onRunFreeCompanySearch={(options) => void runFreeCompanySearch(options)}
           onApproveCompanySearch={(searchId) => void approveCompanySearch(searchId)}
+          onFocusComposerWithPrompt={focusComposerWithPrompt}
           onUpdateAccountState={(accountId, state) => void updateAccountState(accountId, state)}
-          onProposeBuyerRoles={(roleOverrides) =>
+          onProposeBuyerRoles={(optionsInput) => {
+            const payload = Array.isArray(optionsInput)
+              ? { action: "propose_roles", roleOverrides: optionsInput }
+              : { action: "propose_roles", ...(optionsInput ?? {}) };
             void runPeopleDiscoveryAction(
-              { action: "propose_roles", roleOverrides },
+              payload,
               "Ano could not prepare buyer-role recommendations.",
+            );
+          }}
+          onRunFreePeopleSearch={(options) =>
+            void runPeopleDiscoveryAction(
+              { action: "run_free_people_search", ...(options ?? {}) },
+              "Ano could not scan shortlisted company websites for decision-makers.",
             )
           }
           onApprovePersonSearch={(personSearchId) =>
@@ -863,22 +996,36 @@ export function ResearchConversationWorkbench({
               "Ano could not run the approved Prospeo person search.",
             )
           }
-          onPrepareContactVerification={(contactIds) =>
+          onPrepareContactVerification={(contactIds, providerKey) =>
             void runPeopleDiscoveryAction(
-              { action: "prepare_verification", contactIds },
-              "Ano could not prepare the selective Dropcontact preview.",
+              { action: "prepare_verification", contactIds, providerKey },
+              `Ano could not prepare the selective ${
+                providerKey === "dropcontact" ? "Dropcontact" : "Prospeo"
+              } preview.`,
             )
           }
           onApproveContactVerification={(verificationRunId) =>
             void runPeopleDiscoveryAction(
               { action: "approve_verification", verificationRunId },
-              "Ano could not complete selective Dropcontact verification.",
+              "Ano could not complete selective contact verification.",
             )
           }
           onGeneratePlaybooks={() =>
             void runPeopleDiscoveryAction(
               { action: "generate_playbooks" },
               "Ano could not compile factual account playbooks.",
+            )
+          }
+          onGenerateTemplatePack={(options) =>
+            void runTemplateAction(
+              { action: "generate", ...(options ?? {}) },
+              "Ano could not generate human-voice outreach email templates.",
+            )
+          }
+          onEditTemplateStep={(input) =>
+            void runTemplateAction(
+              { action: "edit_step", ...input },
+              "Ano could not save your outreach template edits.",
             )
           }
           onGenerateOutreachDrafts={(playbookId) =>

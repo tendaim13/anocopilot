@@ -225,3 +225,36 @@ test("an interrupted mission resumes from coverage without replaying its last fe
   }, { configurable: { thread_id: "deep-research-resume-test" } });
   assert.deepEqual(steps, ["assess", "complete"]);
 });
+
+test("normalizeIterativeResearchWave maps small-model dimensions like market_terrain, non-exact sourceClass, and string priorities", () => {
+  const wave = normalizeIterativeResearchWave({
+    objective: "Compare candidate markets",
+    candidateMarkets: ["Australia", "Germany"],
+    queries: [
+      {
+        query: "Dental software market size in Germany",
+        reason: "Assess practice concentration.",
+        sourceClass: "Official health statistics",
+        candidateMarket: "germany",
+        comparisonDimension: "market_terrain",
+        priority: "high",
+      },
+      {
+        query: "Automated patient recall adoption in Australia",
+        reason: "Evaluate readiness.",
+        sourceClass: "Dental industry survey",
+        candidateMarket: "Australia",
+        comparisonDimension: "solution_fit",
+        priority: 40,
+      },
+    ],
+  }, 1, 12);
+
+  assert.equal(wave.queries.length, 2);
+  assert.equal(wave.queries[0]?.comparisonDimension, "market_density");
+  assert.equal(wave.queries[0]?.sourceClass, "Government and official statistics");
+  assert.equal(wave.queries[0]?.candidateMarket, "Germany");
+  assert.equal(wave.queries[0]?.priority, 90);
+  assert.equal(wave.queries[1]?.comparisonDimension, "solution_fit");
+  assert.equal(wave.queries[1]?.sourceClass, "Industry bodies and primary research");
+});

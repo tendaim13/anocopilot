@@ -13,7 +13,7 @@ import {
   type RecommendationMode,
   type SynthesisStatus,
 } from "@/lib/ano/market-synthesis";
-import type { SynthesisSource } from "@/server/agents/market-synthesis-model";
+import { MarketSynthesisModelError, type SynthesisSource } from "@/server/agents/market-synthesis-model";
 import type { ResearchCoverage } from "@/server/research/deep-research-assessment";
 
 export class MarketSynthesisPersistenceError extends Error {
@@ -54,8 +54,11 @@ function strengthFor(sourceCount: number, sourceClassCount: number): EvidenceAss
 }
 
 function hasLockableRoute(draft: MarketSynthesisDraft) {
+  if (draft.markets.length === 0 || draft.industries.length === 0) return false;
   const marketIds = new Set(draft.markets.map((market) => market.id));
-  return draft.industries.some((industry) => industry.marketProfileId && marketIds.has(industry.marketProfileId));
+  return draft.industries.some(
+    (industry) => !industry.marketProfileId || marketIds.has(industry.marketProfileId),
+  );
 }
 
 function recommendationModeFor(assessment: EvidenceAssessment, draft: MarketSynthesisDraft, sources: SynthesisSource[]): RecommendationMode {
@@ -370,9 +373,12 @@ export async function saveMarketSynthesis(session: WorkspaceSession, synthesisId
 
 export async function stopMarketSynthesis(session: WorkspaceSession, synthesisId: string, graphRunId: string, error: unknown) {
   requireLiveSession(session);
-  const message = error instanceof MarketSynthesisPersistenceError || (error instanceof Error && error.message.startsWith("Ano "))
-    ? error.message
-    : "Ano could not safely complete the evidence synthesis. No new web search, company lookup, or sales action was attempted.";
+  const message =
+    error instanceof MarketSynthesisPersistenceError ||
+    error instanceof MarketSynthesisModelError ||
+    (error instanceof Error && error.message.startsWith("Ano"))
+      ? error.message
+      : "Ano could not safely complete the evidence synthesis. No new web search, company lookup, or sales action was attempted.";
   await session.client.from("ano_research_syntheses").update({ status: "failed_safe", failure_message: text(message, 700), completed_at: new Date().toISOString(), heartbeat_at: null }).eq("workspace_id", session.workspace.id).eq("id", synthesisId).eq("status", "running");
   await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: graphRunId, event_key: `phase-c-stop:${synthesisId}`, label: "Evidence synthesis stopped safely", detail: message }, { onConflict: "graph_run_id,event_key" });
 }
@@ -381,16 +387,77 @@ export async function lockTargetDecision(session: WorkspaceSession, conversation
   requireLiveSession(session);
   const checked = lockTargetDecisionInputSchema.parse(input);
   const synthesis = await readMarketSynthesis(session, conversationId);
-  if (!synthesis || synthesis.status !== "ready_for_decision" || !synthesis.decision) throw new MarketSynthesisPersistenceError("Ano cannot lock a target route until the saved evidence is ready for comparison.", "DECISION_NOT_READY");
-  if (synthesis.decision.status === "locked") return synthesis;
+  const canSelectFromRoutes = Boolean(
+    synthesis &&
+      (synthesis.status === "ready_for_decision" || synthesis.status === "ready_for_review") &&
+      (synthesis.decision || (synthesis.markets.length > 0 && synthesis.industries.length > 0)),
+  );
+  if (!synthesis || !canSelectFromRoutes) {
+    throw new MarketSynthesisPersistenceError("Ano cannot lock a target route until the saved evidence is ready for comparison.", "DECISION_NOT_READY");
+  }
+  if (synthesis.decision?.status === "locked") return synthesis;
   const market = synthesis.markets.find((item) => item.id === checked.marketProfileId);
   const industry = synthesis.industries.find((item) => item.id === checked.industryProfileId);
-  if (!market || !industry || (industry.marketProfileId && industry.marketProfileId !== market.id)) throw new MarketSynthesisPersistenceError("Choose a market and an industry that belong to the same evidence-backed route.", "INVALID_TARGET_ROUTE");
+  if (!market || !industry || (industry.marketProfileId && industry.marketProfileId !== market.id)) {
+    throw new MarketSynthesisPersistenceError("Choose a market and an industry that belong to the same evidence-backed route.", "INVALID_TARGET_ROUTE");
+  }
+
   const now = new Date().toISOString();
-  const { data, error } = await session.client.from("target_decisions").update({ status: "locked", market_profile_id: market.id, industry_profile_id: industry.id, rationale: checked.rationale ?? null, selected_by: session.actorId, selected_at: now }).eq("workspace_id", session.workspace.id).eq("id", synthesis.decision.id).eq("status", "awaiting_selection").select("id").maybeSingle();
-  if (error) throw new MarketSynthesisPersistenceError("Ano could not save the selected target route.");
-  if (!data) return (await readMarketSynthesis(session, conversationId))!;
+  let decisionId = synthesis.decision?.id ?? "";
+
+  if (synthesis.decision) {
+    const { data, error } = await session.client
+      .from("target_decisions")
+      .update({
+        status: "locked",
+        market_profile_id: market.id,
+        industry_profile_id: industry.id,
+        rationale: checked.rationale ?? null,
+        selected_by: session.actorId,
+        selected_at: now,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", synthesis.decision.id)
+      .eq("status", "awaiting_selection")
+      .select("id")
+      .maybeSingle();
+    if (error) throw new MarketSynthesisPersistenceError("Ano could not save the selected target route.");
+    if (!data) return (await readMarketSynthesis(session, conversationId))!;
+    decisionId = String(data.id);
+  } else {
+    const { data, error } = await session.client
+      .from("target_decisions")
+      .insert({
+        workspace_id: session.workspace.id,
+        conversation_id: conversationId,
+        synthesis_id: synthesis.id,
+        market_profile_id: market.id,
+        industry_profile_id: industry.id,
+        status: "locked",
+        rationale: checked.rationale ?? null,
+        selected_by: session.actorId,
+        selected_at: now,
+      })
+      .select("id")
+      .single();
+    if (error || !data) throw new MarketSynthesisPersistenceError("Ano could not save the selected target route.");
+    decisionId = String(data.id);
+
+    await session.client
+      .from("ano_research_syntheses")
+      .update({ status: "ready_for_decision" })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", synthesis.id)
+      .eq("status", "ready_for_review");
+  }
+
   const run = await runForConversation(session, conversationId);
-  await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: String(run.graph_run_id), event_key: `phase-c-target:${synthesis.decision.id}`, label: "Target route locked", detail: `You selected ${market.name} / ${industry.name}. Ano has not searched Prospeo, people, or contacts.` }, { onConflict: "graph_run_id,event_key" });
+  await session.client.from("run_events").upsert({
+    workspace_id: session.workspace.id,
+    graph_run_id: String(run.graph_run_id),
+    event_key: `phase-c-target:${decisionId}`,
+    label: "Target route locked",
+    detail: `You selected ${market.name} / ${industry.name}. Ano has not searched Prospeo, people, or contacts.`,
+  }, { onConflict: "graph_run_id,event_key" });
   return (await readMarketSynthesis(session, conversationId))!;
 }

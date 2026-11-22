@@ -15,6 +15,10 @@ import {
   OutreachExecutionServiceError,
 } from "@/server/domain/outreach-execution-service";
 import {
+  getOutreachTemplatePackForConversation,
+  OutreachTemplateServiceError,
+} from "@/server/domain/outreach-template-service";
+import {
   getPeopleDiscoveryForConversation,
   PeoplePlaybookServiceError,
 } from "@/server/domain/people-playbook-service";
@@ -30,6 +34,7 @@ import {
 import { EvidenceResearchPersistenceError } from "@/server/persistence/evidence-research-store";
 import { MarketSynthesisPersistenceError } from "@/server/persistence/market-synthesis-store";
 import { OutreachExecutionPersistenceError } from "@/server/persistence/outreach-execution-store";
+import { OutreachTemplatePersistenceError } from "@/server/persistence/outreach-template-store";
 import { PeoplePlaybookPersistenceError } from "@/server/persistence/people-playbook-store";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
 import { TargetAccountDiscoveryPersistenceError } from "@/server/persistence/target-account-discovery-store";
@@ -54,13 +59,21 @@ function errorResponse(error: unknown) {
     error instanceof PeoplePlaybookServiceError ||
     error instanceof PeoplePlaybookPersistenceError ||
     error instanceof OutreachExecutionServiceError ||
-    error instanceof OutreachExecutionPersistenceError
+    error instanceof OutreachExecutionPersistenceError ||
+    error instanceof OutreachTemplateServiceError ||
+    error instanceof OutreachTemplatePersistenceError
   ) {
     return NextResponse.json(
       { error: error.message, code: "RESEARCH_CONVERSATION_UNAVAILABLE" },
       { status: 422 },
     );
   }
+  console.error(
+    "Ano conversation route failed",
+    error instanceof Error
+      ? { name: error.name, message: error.message.slice(0, 600) }
+      : { type: typeof error },
+  );
   return NextResponse.json({ error: "Ano could not read this conversation." }, { status: 500 });
 }
 
@@ -71,13 +84,24 @@ export async function GET(
   try {
     const session = await requireWorkspaceSession();
     const { conversationId } = await context.params;
-    const [conversation, research, synthesis, companyDiscovery, peopleState, outreachState] = await Promise.all([
+    const [
+      conversation,
+      research,
+      synthesis,
+      companyDiscovery,
+      peopleState,
+      outreachState,
+      templateState,
+    ] = await Promise.all([
       getResearchConversation(session, conversationId),
       getEvidenceResearchForConversation(session, conversationId),
       getMarketSynthesisForConversation(session, conversationId),
       getCompanySearchForConversation(session, conversationId),
       getPeopleDiscoveryForConversation(session, conversationId),
       getOutreachExecutionForConversation(session, conversationId),
+      getOutreachTemplatePackForConversation(session, conversationId).catch(() => ({
+        templatePack: null,
+      })),
     ]);
     const provider = searxngConfiguration();
     const messageParts = buildConversationMessageParts(
@@ -87,6 +111,7 @@ export async function GET(
       companyDiscovery.companySearch,
       peopleState.peopleDiscovery,
       outreachState.outreachExecution,
+      templateState.templatePack,
     );
     return NextResponse.json({
       conversation,
@@ -99,6 +124,7 @@ export async function GET(
       dropcontact: peopleState.dropcontact,
       outreachExecution: outreachState.outreachExecution,
       mercury: outreachState.mercury,
+      templatePack: templateState.templatePack,
       messageParts,
     });
   } catch (error) {

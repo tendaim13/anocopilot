@@ -14,6 +14,7 @@ import type {
   MercuryConnectorState,
   OutreachExecutionView,
 } from "@/lib/ano/outreach-execution";
+import type { OutreachTemplatePackView } from "@/lib/ano/outreach-templates";
 import type {
   DropcontactProviderState,
   PeopleDiscoveryView,
@@ -44,6 +45,7 @@ export type ShellActiveContext = {
   dropcontact?: DropcontactProviderState | null;
   outreachExecution?: OutreachExecutionView | null;
   mercury?: MercuryConnectorState | null;
+  templatePack?: OutreachTemplatePackView | null;
 };
 
 export type AppShellContextValue = {
@@ -76,6 +78,7 @@ const EMPTY_CONTEXT: ShellActiveContext = {
   dropcontact: null,
   outreachExecution: null,
   mercury: null,
+  templatePack: null,
 };
 
 const EMPTY_WORK_QUEUE: WorkQueueSummary = {
@@ -522,6 +525,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               dropcontact={activeContext.dropcontact}
               outreachExecution={activeContext.outreachExecution}
               mercury={activeContext.mercury}
+              templatePack={activeContext.templatePack}
             />
           </div>
         </div>

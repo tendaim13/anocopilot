@@ -5,7 +5,7 @@ import { MemorySaver } from "@langchain/langgraph";
 
 import type { MarketSynthesisDraft } from "@/lib/ano/market-synthesis";
 import type { ResearchBrief, ResearchPlan } from "@/lib/ano/research-conversation";
-import type { SynthesisSource } from "@/server/agents/market-synthesis-model";
+import { normaliseSynthesisDraft, type SynthesisSource } from "@/server/agents/market-synthesis-model";
 import { createMarketSynthesisGraph, type MarketSynthesisExecutor, type MarketSynthesisModel } from "@/server/langgraph/market-synthesis-graph";
 import { assessSourceLedger, auditMarketSynthesisDraft, MarketSynthesisPersistenceError } from "@/server/persistence/market-synthesis-store";
 
@@ -112,4 +112,104 @@ test("Phase C synthesizes then persists only after the citation-audit boundary",
   const config = { configurable: { thread_id: "phase-c-ready" } };
   await graph.invoke({ synthesisId: ids.synthesis, graphRunId: ids.graphRun, brief, plan, sources, status: "running", currentNode: "assess_evidence_coverage" }, config);
   assert.deepEqual(steps, ["model", "audit-and-save"]);
+});
+
+test("Phase C resolves short source aliases to exact UUIDs while rejecting unknown citations", () => {
+  const normalized = normaliseSynthesisDraft({
+    claims: [
+      {
+        id: "claim-1",
+        kind: "OBSERVATION",
+        statement: "Saved public sources document multi-chair dental recall delays.",
+        sourceIds: ["S1", "S2"],
+        evidenceStrength: "MODERATE",
+        citationStatus: "SUPPORTED",
+      },
+    ],
+    markets: [
+      {
+        id: "market-1",
+        name: "Australia",
+        summary: "Testable candidate based on cited clinical utilization data.",
+        evidenceStrength: "moderate",
+        claimIds: ["claim-1"],
+      },
+    ],
+    industries: [
+      {
+        id: "industry-1",
+        marketProfileId: "market-1",
+        name: "Multi-chair dental practices",
+        summary: "Practices managing recurring hygiene recall.",
+        operationalProblems: ["Manual phone recall overhead"],
+        solutionFit: ["Automated recall reminders"],
+        buyerRoleHypotheses: ["Practice Manager"],
+        evidenceStrength: "moderate",
+        claimIds: ["claim-1"],
+      },
+    ],
+    summary: "Evidence supports an initial Australian dental route.",
+  }, sources);
+
+  assert.deepEqual(normalized.claims[0]?.sourceIds, [ids.sourceOne, ids.sourceTwo]);
+  assert.equal(normalized.claims[0]?.kind, "observation");
+  assert.equal(normalized.industries[0]?.marketProfileId, normalized.markets[0]?.id);
+
+  assert.throws(() =>
+    normaliseSynthesisDraft({
+      claims: [
+        {
+          id: "claim-1",
+          kind: "observation",
+          statement: "Invalid fabricated source reference.",
+          sourceIds: ["S99"],
+          evidenceStrength: "moderate",
+          citationStatus: "supported",
+        },
+      ],
+      markets: [],
+      industries: [],
+      summary: "Should fail.",
+    }, sources),
+  );
+});
+
+test("Phase C auto-links single market profile when industry marketProfileId is omitted or null", () => {
+  const normalized = normaliseSynthesisDraft({
+    claims: [
+      {
+        id: "claim-1",
+        kind: "observation",
+        statement: "Saved public sources document multi-chair dental utilization.",
+        sourceIds: ["S1"],
+        evidenceStrength: "moderate",
+        citationStatus: "supported",
+      },
+    ],
+    markets: [
+      {
+        id: "market-1",
+        name: "Australia",
+        summary: "Testable candidate.",
+        evidenceStrength: "moderate",
+        claimIds: ["claim-1"],
+      },
+    ],
+    industries: [
+      {
+        id: "industry-1",
+        marketProfileId: null,
+        name: "Multi-chair dental practices",
+        summary: "Dental clinics.",
+        operationalProblems: ["Recall delays"],
+        solutionFit: ["Automated reminders"],
+        buyerRoleHypotheses: ["Practice Manager"],
+        evidenceStrength: "moderate",
+        claimIds: ["claim-1"],
+      },
+    ],
+    summary: "Linked single-market route ready.",
+  }, sources);
+
+  assert.equal(normalized.industries[0]?.marketProfileId, normalized.markets[0]?.id);
 });

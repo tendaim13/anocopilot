@@ -59,7 +59,7 @@ export function AccountDossierCard({
           <p className="m3-helper-note">
             {[account.location, account.industry, account.employeeBand]
               .filter(Boolean)
-              .join(" · ") || "Limited Prospeo firmographic attributes"}
+              .join(" · ") || "Observed company attributes"}
           </p>
         </div>
         <span className={`m3-status-badge ${stateBadgeClass(account.lifecycleState)}`}>
@@ -94,7 +94,7 @@ export function AccountDossierCard({
       </div>
 
       <section className="m3-artifact-section">
-        <h3>Confirmed company signals (Prospeo facts)</h3>
+        <h3>Confirmed company signals</h3>
         <div className="m3-evidence-source-grid">
           {account.signals.map((signal) => (
             <div key={signal.id} className="m3-evidence-source-item">

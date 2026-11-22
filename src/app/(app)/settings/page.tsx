@@ -77,7 +77,7 @@ export default function SettingsPage() {
         <article className="ano-surface-card">
           <h2>Provider & safety boundaries</h2>
           <p>
-            <strong>Amazon Bedrock:</strong> Reasoning and citation-bound synthesis only; no direct tool or DB credentials.
+            <strong>Reasoning LLM (Google AI Studio Gemini, Ollama, or Amazon Bedrock):</strong> Reasoning, planning, and citation-bound synthesis only; no direct tool or DB credentials. Configured on server via <code>ANO_AGENT_MODE</code>.
           </p>
           <p>
             <strong>Private SearXNG:</strong> Approval-gated public discovery up to 50 searches / 100 fetches per mission.

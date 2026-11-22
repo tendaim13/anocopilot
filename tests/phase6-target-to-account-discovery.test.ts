@@ -5,7 +5,9 @@ import { MemorySaver } from "@langchain/langgraph";
 
 import {
   buildTargetCompanySearchPreview,
+  deriveProspeoIndustryCandidates,
   deriveRequestedLocations,
+  deriveSearchKeywords,
   scoreAndBuildAccountDossier,
   summarizeAccountCohort,
   type CompanySearchView,
@@ -20,6 +22,8 @@ import {
   createTargetToAccountGraph,
   type TargetToAccountExecutor,
 } from "@/server/langgraph/target-to-account-graph";
+import { normalizeLocationQuery } from "@/server/domain/prospeo-company-discovery";
+import { selectAccountsForCompanySearchView } from "@/server/persistence/target-account-discovery-store";
 
 const convId = "00000000-0000-4000-8000-000000000301";
 const decisionId = "00000000-0000-4000-8000-000000000302";
@@ -434,4 +438,152 @@ test("Phase D message parts and work queue classify preview approval, completion
     companySearch: { status: "completed", updatedAt: now },
   });
   assert.equal(workQueueDone, null);
+});
+
+test("normalizeLocationQuery expands common country abbreviations for Prospeo lookup", () => {
+  assert.equal(normalizeLocationQuery("UK"), "United Kingdom");
+  assert.equal(normalizeLocationQuery("us"), "United States");
+  assert.equal(normalizeLocationQuery("USA"), "United States");
+  assert.equal(normalizeLocationQuery("au"), "Australia");
+  assert.equal(normalizeLocationQuery("Malaysia"), "Malaysia");
+});
+
+test("buildTargetCompanySearchPreview emits keyword/industry filters and penalizes off-target companies", () => {
+  const dentalIndustry: IndustryProfile = {
+    ...industry,
+    name: "Dental industry",
+  };
+  const derivedKeywords = deriveSearchKeywords(dentalIndustry, null);
+  assert.deepEqual(derivedKeywords, ["dental clinic", "dental practice", "dentist", "dental"]);
+  assert.deepEqual(deriveProspeoIndustryCandidates(dentalIndustry.name), [
+    "Medical Practices",
+    "Hospitals and Health Care",
+  ]);
+
+  const preview = buildTargetCompanySearchPreview({
+    searchId,
+    conversationId: convId,
+    targetDecisionId: decisionId,
+    market: { ...market, name: "Australia" },
+    industry: dentalIndustry,
+    requestedLocations: ["Australia"],
+    canonicalLocations: ["Australia"],
+    canonicalIndustries: ["Medical Practices"],
+    searchKeywords: ["dental", "dentist", "dental clinic"],
+    excludedCategories: ["investment", "capital"],
+    nowIso: now,
+  });
+
+  assert.deepEqual(preview.providerFilters, {
+    company_location_search: { include: ["Australia"] },
+    company_industry: { include: ["Medical Practices"] },
+    company_keywords: {
+      include: ["dental", "dentist", "dental clinic"],
+      include_all: false,
+      search_everywhere: false,
+      sources: [
+        "specialties",
+        "social_media_description",
+        "seo_description",
+        "ai_description",
+        "products_services",
+      ],
+      exclude: ["investment", "capital"],
+    },
+  });
+
+  const offTarget = scoreAndBuildAccountDossier(
+    {
+      id: "off-target-1",
+      name: "Prime Value Asset Management",
+      domain: "primevalue.com.au",
+      website: "https://primevalue.com.au",
+      industry: "Investment Management",
+      employeeRange: "21-50",
+      location: { city: "Melbourne", state: "Victoria", country: "Australia" },
+      linkedInUrl: "https://www.linkedin.com/company/prime-value",
+    },
+    {
+      dossierId,
+      conversationId: convId,
+      targetDecisionId: decisionId,
+      companySearchId: searchId,
+      targetMarketName: "Australia",
+      targetIndustryName: "Dental industry",
+      canonicalLocations: ["Australia"],
+      canonicalIndustries: ["Medical Practices"],
+      targetKeywords: ["dental", "dentist", "dental clinic"],
+      linkedClaimIds: [claimId],
+      capturedAt: now,
+    },
+  );
+
+  assert.equal(offTarget.fit.industryScore, 0);
+  assert.ok(offTarget.fit.totalScore <= 35);
+  assert.equal(offTarget.fit.confidence, "low");
+
+  const onTarget = scoreAndBuildAccountDossier(
+    {
+      id: "on-target-1",
+      name: "Bright Smile Dental Clinic",
+      domain: "brightsmile.com.au",
+      website: "https://brightsmile.com.au",
+      industry: "Medical Practices",
+      employeeRange: "11-50",
+      location: { city: "Melbourne", state: "Victoria", country: "Australia" },
+      description: "Multi-chair family dental clinic providing preventive hygiene and orthodontics.",
+      linkedInUrl: "https://www.linkedin.com/company/bright-smile-dental",
+    },
+    {
+      dossierId,
+      conversationId: convId,
+      targetDecisionId: decisionId,
+      companySearchId: searchId,
+      targetMarketName: "Australia",
+      targetIndustryName: "Dental industry",
+      canonicalLocations: ["Australia"],
+      canonicalIndustries: ["Medical Practices"],
+      targetKeywords: ["dental", "dentist", "dental clinic"],
+      linkedClaimIds: [claimId],
+      capturedAt: now,
+    },
+  );
+
+  assert.equal(onTarget.fit.industryScore, 35);
+  assert.equal(onTarget.fit.totalScore, 100);
+  assert.equal(onTarget.fit.confidence, "high");
+});
+
+test("selectAccountsForCompanySearchView keeps latest run + shortlisted rows and bounds awaiting_approval revisions", () => {
+  const run1Rows = Array.from({ length: 25 }, (_, index) => ({
+    id: `run1-${index}`,
+    provider_action_request_id: "action-run-1",
+    lifecycle_state: index < 3 ? "shortlisted" : "discovered",
+    retrieved_at: "2026-11-21T10:00:00.000Z",
+    created_at: "2026-11-21T10:00:00.000Z",
+  }));
+  const run2Rows = Array.from({ length: 25 }, (_, index) => ({
+    id: `run2-${index}`,
+    provider_action_request_id: "action-run-2",
+    lifecycle_state: "discovered",
+    retrieved_at: "2026-11-21T11:00:00.000Z",
+    created_at: "2026-11-21T11:00:00.000Z",
+  }));
+
+  const completedSelection = selectAccountsForCompanySearchView(
+    "completed",
+    "action-run-2",
+    [...run2Rows, ...run1Rows],
+  );
+  assert.equal(completedSelection.length, 28);
+  assert.ok(completedSelection.every((row) => String(row.provider_action_request_id) === "action-run-2" || String(row.lifecycle_state) === "shortlisted"));
+
+  const unshortlistedRun1Rows = run1Rows.map((row) => ({ ...row, lifecycle_state: "discovered" }));
+  const revisionSelection = selectAccountsForCompanySearchView(
+    "awaiting_approval",
+    "action-preview-3",
+    [...unshortlistedRun1Rows, ...run2Rows],
+  );
+  assert.equal(revisionSelection.length, 25);
+  assert.ok(revisionSelection.every((row) => String(row.provider_action_request_id) === "action-run-2"));
 });

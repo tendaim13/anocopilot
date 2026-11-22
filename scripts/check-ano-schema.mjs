@@ -18,6 +18,7 @@ const requiredTables = [
   "ano_research_syntheses", "research_claims", "market_profiles", "industry_profiles", "target_decisions",
   "research_waves", "research_queries", "research_source_assessments",
   "provider_person_searches", "contact_verification_runs", "account_playbooks", "outreach_drafts",
+  "outreach_template_packs",
 ];
 const requiredMigrations = [
   "20261021_000001_ano_workspace_and_research",
@@ -39,12 +40,24 @@ const requiredMigrations = [
   "20261121_000017_phase_d_target_to_account_discovery",
   "20261121_000018_phase_e_people_verification_playbooks",
   "20261121_000019_phase_f_outreach_and_mercury_proposals",
+  "20261121_000020_phase_d_openstreetmap_discovery",
+  "20261121_000021_phase_e_dual_source_buying_committee",
+  "20261122_000022_phase_9a_multi_source_email_enrichment",
+  "20261122_000023_phase_9b_outreach_template_packs",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
 
 async function databaseSslConfig(url) {
   if (url.includes("localhost") || url.includes("127.0.0.1")) return false;
+
+  const inlineCa = process.env.SUPABASE_DB_SSL_CA?.trim();
+  if (inlineCa) {
+    const ca = inlineCa.includes("BEGIN CERTIFICATE")
+      ? inlineCa
+      : Buffer.from(inlineCa, "base64").toString("utf8");
+    return { rejectUnauthorized: true, ca };
+  }
 
   const certificatePath = process.env.SUPABASE_DB_SSL_CA_PATH;
   if (!certificatePath) return { rejectUnauthorized: true };
@@ -137,8 +150,9 @@ try {
   const phaseFOutreachProposalsReady =
     present.has("outreach_drafts") &&
     phaseFColumns.rows.length === 2;
+  const phase9bTemplatesReady = present.has("outreach_template_packs");
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -153,8 +167,9 @@ try {
     phaseDCompanyDiscoveryReady,
     phaseEPeoplePlaybooksReady,
     phaseFOutreachProposalsReady,
+    phase9bTemplatesReady,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

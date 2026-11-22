@@ -83,6 +83,22 @@ const migrations = [
     id: "20261121_000019_phase_f_outreach_and_mercury_proposals",
     file: path.join(projectRoot, "supabase/migrations/20261121_000019_phase_f_outreach_and_mercury_proposals.sql"),
   },
+  {
+    id: "20261121_000020_phase_d_openstreetmap_discovery",
+    file: path.join(projectRoot, "supabase/migrations/20261121_000020_phase_d_openstreetmap_discovery.sql"),
+  },
+  {
+    id: "20261121_000021_phase_e_dual_source_buying_committee",
+    file: path.join(projectRoot, "supabase/migrations/20261121_000021_phase_e_dual_source_buying_committee.sql"),
+  },
+  {
+    id: "20261122_000022_phase_9a_multi_source_email_enrichment",
+    file: path.join(projectRoot, "supabase/migrations/20261122_000022_phase_9a_multi_source_email_enrichment.sql"),
+  },
+  {
+    id: "20261122_000023_phase_9b_outreach_template_packs",
+    file: path.join(projectRoot, "supabase/migrations/20261122_000023_phase_9b_outreach_template_packs.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {
@@ -102,6 +118,14 @@ const databaseUrl = requireAnoDatabaseUrl();
 
 async function databaseSslConfig(url) {
   if (url.includes("localhost") || url.includes("127.0.0.1")) return false;
+
+  const inlineCa = process.env.SUPABASE_DB_SSL_CA?.trim();
+  if (inlineCa) {
+    const ca = inlineCa.includes("BEGIN CERTIFICATE")
+      ? inlineCa
+      : Buffer.from(inlineCa, "base64").toString("utf8");
+    return { rejectUnauthorized: true, ca };
+  }
 
   const certificatePath = process.env.SUPABASE_DB_SSL_CA_PATH;
   if (!certificatePath) return { rejectUnauthorized: true };

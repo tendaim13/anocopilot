@@ -1,11 +1,11 @@
 import "server-only";
 
-import { ChatBedrockConverse } from "@langchain/aws";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 import type { ResearchBrief, ResearchInterpretation, ResearchPlanDraft } from "@/lib/ano/research-conversation";
 import { interpretationSchema, researchPlanDraftSchema } from "@/lib/ano/research-conversation";
-import type { BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
+import type { InvokableChatModel, LlmPlannerConfig } from "@/server/agents/bedrock-contracts";
+import { createPlannerChatModel } from "@/server/agents/ollama-chat-model";
 
 export type ResearchPlanningMessage = {
   id: string;
@@ -19,19 +19,76 @@ export interface ResearchPlanningModel {
 }
 
 export class ResearchPlanningModelError extends Error {
-  constructor(message: string, public readonly reason?: string) {
+  constructor(
+    message: string,
+    public readonly reason?: string,
+    public readonly fatal: boolean = false,
+  ) {
     super(message);
     this.name = "ResearchPlanningModelError";
   }
 }
 
+export type InvokableBedrockModel = InvokableChatModel;
+
+const FATAL_BEDROCK_ERROR_NAMES = new Set([
+  "CredentialsProviderError",
+  "AccessDeniedException",
+  "UnauthorizedException",
+  "ResourceNotFoundException",
+  "ValidationException",
+  "OllamaConnectionError",
+  "OllamaModelNotFoundError",
+  "GeminiApiError",
+]);
+
+function isFatalBedrockError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (FATAL_BEDROCK_ERROR_NAMES.has(error.name)) return true;
+  return /CredentialsProviderError|AccessDeniedException|ResourceNotFoundException|ValidationException|OllamaConnectionError|OllamaModelNotFoundError|GeminiApiError/i.test(
+    error.message ?? "",
+  );
+}
+
+function isUnsupportedSystemMessageError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /system\s+message|doesn't support system|does not support system|unsupported.*system/i.test(
+    error.message ?? "",
+  );
+}
+
 function modelError(error: unknown, fallback: string): ResearchPlanningModelError {
   const name = error instanceof Error ? error.name : "";
   const reason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : "Unknown model adapter error";
-  if (name === "CredentialsProviderError") return new ResearchPlanningModelError("Ano’s server cannot access Bedrock with the configured AWS credentials.");
-  if (name === "AccessDeniedException" || name === "UnauthorizedException") return new ResearchPlanningModelError("Ano’s AWS identity cannot invoke the configured Bedrock model or guardrail.");
-  if (name === "ResourceNotFoundException" || name === "ValidationException") return new ResearchPlanningModelError("Ano’s configured Bedrock model or guardrail is unavailable in this AWS region.");
-  return new ResearchPlanningModelError(fallback, reason);
+  if (
+    name === "OllamaConnectionError" ||
+    name === "OllamaModelNotFoundError" ||
+    name === "GeminiApiError"
+  ) {
+    return new ResearchPlanningModelError(error instanceof Error ? error.message : fallback, reason, true);
+  }
+  if (name === "CredentialsProviderError") {
+    return new ResearchPlanningModelError(
+      "Ano’s server cannot access Bedrock with the configured AWS credentials.",
+      reason,
+      true,
+    );
+  }
+  if (name === "AccessDeniedException" || name === "UnauthorizedException") {
+    return new ResearchPlanningModelError(
+      "Ano’s AWS identity cannot invoke the configured Bedrock model or guardrail.",
+      reason,
+      true,
+    );
+  }
+  if (name === "ResourceNotFoundException" || name === "ValidationException") {
+    return new ResearchPlanningModelError(
+      "Ano’s configured Bedrock model or guardrail is unavailable in this AWS region.",
+      reason,
+      true,
+    );
+  }
+  return new ResearchPlanningModelError(fallback, reason, isFatalBedrockError(error));
 }
 
 function interpretationPrompt(messages: ResearchPlanningMessage[]) {
@@ -69,12 +126,48 @@ function textFromModel(value: unknown): string {
   return "";
 }
 
-function jsonCandidate(text: string) {
-  return text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "");
+/**
+ * Extracts JSON from fenced markdown blocks or from the outermost `{...}` span
+ * so small models that emit prose around JSON remain parseable.
+ */
+export function extractJsonCandidate(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced?.[1] ?? text).trim();
+  const first = candidate.indexOf("{");
+  const last = candidate.lastIndexOf("}");
+  return first >= 0 && last > first ? candidate.slice(first, last + 1) : candidate;
+}
+
+/**
+ * Invokes Bedrock Converse and retries once with a merged HumanMessage when a
+ * configured model (such as Gemma 3) rejects system instructions.
+ */
+export async function invokeBedrockPrompt(
+  model: InvokableBedrockModel,
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  try {
+    const response = await model.invoke([
+      new SystemMessage(systemPrompt),
+      new HumanMessage(userPrompt),
+    ]);
+    return textFromModel(response.content);
+  } catch (error) {
+    if (isUnsupportedSystemMessageError(error)) {
+      const response = await model.invoke([
+        new HumanMessage(`${systemPrompt}\n\n${userPrompt}`),
+      ]);
+      return textFromModel(response.content);
+    }
+    throw error;
+  }
 }
 
 function truncateStrings(value: unknown, maximum: number) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, maximum) : value;
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()).slice(0, maximum)
+    : [];
 }
 
 function normalizedUserMessages(messages: ResearchPlanningMessage[]) {
@@ -87,15 +180,15 @@ function hasResearchDecision(message: string) {
 
 /**
  * Bedrock is helpful for interpreting nuance, but it must not be a single point
- * of failure before Ano can ask a basic, decision-changing question. This is a
- * local fallback only: it makes no market claim and invokes no provider.
+ * of failure before Ano can clarify or advance a clear request. This is a local
+ * fallback only: it makes no market claim and invokes no provider.
  */
 export function fallbackOfferInterpretation(messages: ResearchPlanningMessage[]): ResearchInterpretation | null {
   const userMessages = normalizedUserMessages(messages);
   const offer = userMessages[0];
   if (!offer) return null;
 
-  if (userMessages.length === 1) {
+  if (userMessages.length === 1 && !hasResearchDecision(offer)) {
     return interpretationSchema.parse({
       outcome: "needs_context",
       brief: {
@@ -114,7 +207,7 @@ export function fallbackOfferInterpretation(messages: ResearchPlanningMessage[])
     });
   }
 
-  const answer = userMessages.at(-1) ?? "";
+  const answer = userMessages.at(-1) ?? offer;
   return interpretationSchema.parse({
     outcome: "ready",
     brief: {
@@ -129,76 +222,205 @@ export function fallbackOfferInterpretation(messages: ResearchPlanningMessage[])
   });
 }
 
+/**
+ * Deterministic Phase A fallback plan derived strictly from the user's brief.
+ * Makes zero market recommendations and invokes zero external providers.
+ */
+export function fallbackResearchPlan(brief: ResearchBrief, editInstruction?: string): ResearchPlanDraft {
+  const focus = brief.locationHints.length
+    ? brief.locationHints.join(", ")
+    : brief.marketHints.length
+      ? brief.marketHints.join(", ")
+      : "candidate target markets";
+  const editNote = editInstruction?.trim()
+    ? `Adjusted to prioritize: ${editInstruction.trim().slice(0, 180)}. `
+    : "";
+
+  return researchPlanDraftSchema.parse({
+    summary: `${editNote}Compare ${focus} for "${brief.offer.slice(0, 220)}" using public evidence to support: ${brief.goal.slice(0, 220)}.`.slice(0, 900),
+    researchQuestions: [
+      `Which markets or sub-segments show documented operational demand and scale aligned with "${brief.offer.slice(0, 140)}"?`,
+      `What buyer conditions, adoption friction, or regulatory factors distinguish candidate segments for "${brief.goal.slice(0, 140)}"?`,
+    ],
+    comparisonCriteria: [
+      "Documented operational urgency",
+      "Reachable buyer density and market scale",
+      "Evidence of budget or buyer readiness",
+    ],
+    intendedSourceClasses: [
+      "Government and official statistics",
+      "Industry bodies and primary research",
+      "Public company reports and filings",
+      "Independent reporting",
+    ],
+    plannedScope: {
+      markets: brief.locationHints.slice(0, 5),
+      industries: brief.marketHints.slice(0, 8),
+      buyerRoles: brief.buyerHints.slice(0, 8),
+    },
+    budget: {
+      maximumSearches: 50,
+      maximumFetches: 100,
+      providerSpend: "not_available_in_phase_a",
+    },
+    uncertainties: brief.unknowns.length
+      ? brief.unknowns.slice(0, 6)
+      : ["Relative conversion potential across candidate segments remains untested until Phase B public evidence is collected."],
+  });
+}
+
 /** An offer without a decision can be clarified locally; there is no need to wait for a model call. */
 function shouldAskOfferClarificationLocally(messages: ResearchPlanningMessage[]) {
   const userMessages = normalizedUserMessages(messages);
   return userMessages.length === 1 && !hasResearchDecision(userMessages[0] ?? "");
 }
 
-/** Keeps valid model intent concise without inventing any research content. */
-function normalizePlanShape(value: unknown) {
+const ALLOWED_SOURCE_CLASSES = [
+  "Government and official statistics",
+  "Industry bodies and primary research",
+  "Public company reports and filings",
+  "Independent reporting",
+] as const;
+
+export type SourceClassLiteral = (typeof ALLOWED_SOURCE_CLASSES)[number];
+
+export function mapSourceClass(raw: string): SourceClassLiteral | null {
+  const trimmed = raw.trim();
+  const exact = ALLOWED_SOURCE_CLASSES.find((item) => item.toLowerCase() === trimmed.toLowerCase());
+  if (exact) return exact;
+  if (/gov|official|stat|census|ministry|regulat/i.test(trimmed)) return "Government and official statistics";
+  if (/industr|primary|assoc|trade|benchmark|survey/i.test(trimmed)) return "Industry bodies and primary research";
+  if (/company|filing|annual|report|sec|10-k|earning/i.test(trimmed)) return "Public company reports and filings";
+  if (/independen|news|journal|media|press|analys/i.test(trimmed)) return "Independent reporting";
+  return null;
+}
+
+/** Coerces optional arrays and strips stray clarifications when outcome is ready. */
+export function normalizeInterpretationShape(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const raw = value as Record<string, unknown>;
+  const briefObj = raw.brief && typeof raw.brief === "object" ? (raw.brief as Record<string, unknown>) : {};
+  const outcome = raw.outcome === "needs_context" ? "needs_context" : "ready";
+  const clarificationObj =
+    outcome === "needs_context" && raw.clarification && typeof raw.clarification === "object"
+      ? (raw.clarification as Record<string, unknown>)
+      : undefined;
+
+  return {
+    outcome,
+    brief: {
+      offer: typeof briefObj.offer === "string" ? briefObj.offer.trim().slice(0, 1000) : "",
+      goal: typeof briefObj.goal === "string" ? briefObj.goal.trim().slice(0, 1000) : "",
+      marketHints: truncateStrings(briefObj.marketHints, 6),
+      locationHints: truncateStrings(briefObj.locationHints, 6),
+      buyerHints: truncateStrings(briefObj.buyerHints, 6),
+      constraints: truncateStrings(briefObj.constraints, 8),
+      unknowns: truncateStrings(briefObj.unknowns, 8),
+    },
+    ...(clarificationObj
+      ? {
+          clarification: {
+            question: typeof clarificationObj.question === "string" ? clarificationObj.question.trim().slice(0, 360) : "",
+            purpose: typeof clarificationObj.purpose === "string" ? clarificationObj.purpose.trim().slice(0, 360) : "",
+          },
+        }
+      : {}),
+  };
+}
+
+/** Keeps valid model intent concise and schema-safe without inventing market evidence. */
+export function normalizePlanShape(value: unknown, brief?: ResearchBrief) {
   if (!value || typeof value !== "object") return value;
   const plan = value as Record<string, unknown>;
-  const scope = plan.plannedScope && typeof plan.plannedScope === "object" ? plan.plannedScope as Record<string, unknown> : null;
-  const budget = plan.budget && typeof plan.budget === "object" ? plan.budget as Record<string, unknown> : null;
+  const scope = plan.plannedScope && typeof plan.plannedScope === "object" ? (plan.plannedScope as Record<string, unknown>) : null;
+  const mappedSources = Array.from(
+    new Set(
+      truncateStrings(plan.intendedSourceClasses, 8)
+        .map(mapSourceClass)
+        .filter((item): item is SourceClassLiteral => item !== null),
+    ),
+  ).slice(0, 4);
+
+  const questions = truncateStrings(plan.researchQuestions, 5).map((q) => q.slice(0, 360));
+  if (questions.length < 2) {
+    questions.push(
+      `What verifiable public evidence differentiates target markets for ${brief?.offer?.slice(0, 100) || "this offer"}?`,
+      `Which operational indicators and buyer conditions affect adoption readiness for ${brief?.goal?.slice(0, 100) || "this outcome"}?`,
+    );
+  }
+
+  const criteria = truncateStrings(plan.comparisonCriteria, 6).map((c) => c.slice(0, 180));
+  if (criteria.length < 2) {
+    criteria.push("Documented operational urgency", "Reachable target segment density");
+  }
+
+  const rawSummary = typeof plan.summary === "string" && plan.summary.trim()
+    ? plan.summary.trim().slice(0, 900)
+    : brief
+      ? `Compare candidate segments for ${brief.offer.slice(0, 200)} toward: ${brief.goal.slice(0, 200)}.`.slice(0, 900)
+      : "Structured comparative market research plan.";
+
   return {
     ...plan,
-    researchQuestions: truncateStrings(plan.researchQuestions, 5),
-    comparisonCriteria: truncateStrings(plan.comparisonCriteria, 6),
-    intendedSourceClasses: truncateStrings(plan.intendedSourceClasses, 4),
-    uncertainties: truncateStrings(plan.uncertainties, 6),
-    plannedScope: scope ? {
-      ...scope,
-      markets: truncateStrings(scope.markets, 5),
-      industries: truncateStrings(scope.industries, 8),
-      buyerRoles: truncateStrings(scope.buyerRoles, 8),
-    } : plan.plannedScope,
-    budget: budget ? {
-      ...budget,
+    summary: rawSummary,
+    researchQuestions: questions.slice(0, 5),
+    comparisonCriteria: criteria.slice(0, 6),
+    intendedSourceClasses: mappedSources.length > 0 ? mappedSources : [...ALLOWED_SOURCE_CLASSES],
+    uncertainties: truncateStrings(plan.uncertainties, 6).map((u) => u.slice(0, 360)),
+    plannedScope: scope
+      ? {
+          markets: truncateStrings(scope.markets, 5),
+          industries: truncateStrings(scope.industries, 8),
+          buyerRoles: truncateStrings(scope.buyerRoles, 8),
+        }
+      : {
+          markets: brief?.locationHints.slice(0, 5) ?? [],
+          industries: brief?.marketHints.slice(0, 8) ?? [],
+          buyerRoles: brief?.buyerHints.slice(0, 8) ?? [],
+        },
+    budget: {
       maximumSearches: 50,
       maximumFetches: 100,
       providerSpend: "not_available_in_phase_a",
-    } : plan.budget,
+    },
   };
 }
 
 async function invokeValidatedJson<T>(
-  model: ChatBedrockConverse,
+  model: InvokableBedrockModel,
   prompt: string,
   parse: (value: unknown) => T,
   fallback: string,
 ): Promise<T> {
+  const systemPrompt =
+    "Return only the requested JSON. Do not use a tool call, Markdown, an explanation, or a prefatory sentence.";
   let lastReason = "Bedrock did not return valid JSON.";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await model.invoke([
-        new SystemMessage("Return only the requested JSON. Do not use a tool call, Markdown, an explanation, or a prefatory sentence."),
-        new HumanMessage(attempt === 0 ? prompt : `${prompt}\n\nYour previous response was not valid for Ano. Return the exact JSON object now.`),
-      ]);
-      const text = textFromModel(response.content);
+      const userPrompt =
+        attempt === 0
+          ? prompt
+          : `${prompt}\n\nYour previous response was not valid for Ano. Return the exact JSON object now.`;
+      const text = await invokeBedrockPrompt(model, systemPrompt, userPrompt);
       if (!text) throw new Error("Bedrock returned no textual JSON output.");
-      return parse(JSON.parse(jsonCandidate(text)));
+      return parse(JSON.parse(extractJsonCandidate(text)));
     } catch (error) {
+      if (isFatalBedrockError(error)) {
+        throw modelError(error, fallback);
+      }
       lastReason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : "Unknown JSON validation error";
     }
   }
-  throw new ResearchPlanningModelError(fallback, lastReason);
+  throw new ResearchPlanningModelError(fallback, lastReason, false);
 }
 
-/** Server-only Bedrock adapter. The model gets no database or provider capability. */
-export function createBedrockResearchPlanningModel(config: BedrockPlannerConfig): ResearchPlanningModel {
-  const model = new ChatBedrockConverse({
-    model: config.modelId,
-    region: config.region,
-    temperature: 0,
-    maxTokens: 1_200,
-    maxRetries: 0,
-    guardrailConfig: {
-      guardrailIdentifier: config.guardrailIdentifier,
-      guardrailVersion: config.guardrailVersion,
-      trace: "enabled",
-    },
-  });
+/** Server-only reasoning adapter (Ollama or Bedrock). No database or provider tools. */
+export function createBedrockResearchPlanningModel(
+  config: LlmPlannerConfig,
+  modelOverride?: InvokableBedrockModel,
+): ResearchPlanningModel {
+  const model: InvokableBedrockModel =
+    modelOverride ?? createPlannerChatModel(config, { maxTokens: 1_200 });
 
   return {
     async interpret(messages) {
@@ -207,8 +429,19 @@ export function createBedrockResearchPlanningModel(config: BedrockPlannerConfig)
         if (fallback) return fallback;
       }
       try {
-        return await invokeValidatedJson(model, interpretationPrompt(messages), (value) => interpretationSchema.parse(value), "Ano could not understand that message as a structured research brief. Nothing else was attempted.");
+        return await invokeValidatedJson(
+          model,
+          interpretationPrompt(messages),
+          (value) => interpretationSchema.parse(normalizeInterpretationShape(value)),
+          "Ano could not understand that message as a structured research brief. Nothing else was attempted.",
+        );
       } catch (error) {
+        if (error instanceof ResearchPlanningModelError && error.fatal) {
+          throw error;
+        }
+        if (isFatalBedrockError(error)) {
+          throw modelError(error, "Ano could not understand that message as a structured research brief. Nothing else was attempted.");
+        }
         const fallback = fallbackOfferInterpretation(messages);
         if (fallback) return fallback;
         if (error instanceof ResearchPlanningModelError) throw error;
@@ -217,10 +450,20 @@ export function createBedrockResearchPlanningModel(config: BedrockPlannerConfig)
     },
     async createPlan(brief, editInstruction) {
       try {
-        return await invokeValidatedJson(model, planPrompt(brief, editInstruction), (value) => researchPlanDraftSchema.parse(normalizePlanShape(value)), "Ano could not create the structured research plan. No research or provider action was attempted.");
+        return await invokeValidatedJson(
+          model,
+          planPrompt(brief, editInstruction),
+          (value) => researchPlanDraftSchema.parse(normalizePlanShape(value, brief)),
+          "Ano could not create the structured research plan. No research or provider action was attempted.",
+        );
       } catch (error) {
-        if (error instanceof ResearchPlanningModelError) throw error;
-        throw modelError(error, "Ano could not create the structured research plan. No research or provider action was attempted.");
+        if (error instanceof ResearchPlanningModelError && error.fatal) {
+          throw error;
+        }
+        if (isFatalBedrockError(error)) {
+          throw modelError(error, "Ano could not create the structured research plan. No research or provider action was attempted.");
+        }
+        return fallbackResearchPlan(brief, editInstruction);
       }
     },
   };

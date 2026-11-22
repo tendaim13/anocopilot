@@ -1,11 +1,10 @@
 import "server-only";
 
-import { ChatBedrockConverse } from "@langchain/aws";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-
 import type { ResearchBrief, ResearchPlan } from "@/lib/ano/research-conversation";
 import { researchQueryPlanSchema, type ResearchQueryPlan } from "@/lib/ano/evidence-research";
-import type { BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
+import type { LlmPlannerConfig } from "@/server/agents/bedrock-contracts";
+import { createPlannerChatModel } from "@/server/agents/ollama-chat-model";
+import { extractJsonCandidate, invokeBedrockPrompt } from "@/server/agents/research-planning-model";
 
 export class EvidenceResearchPlannerError extends Error {
   constructor(message: string, public readonly reason?: string) {
@@ -14,26 +13,9 @@ export class EvidenceResearchPlannerError extends Error {
   }
 }
 
-function contentText(value: unknown) {
-  if (typeof value === "string") return value.trim();
-  if (!Array.isArray(value)) return "";
-  return value.flatMap((item) => typeof item === "string" ? [item] : item && typeof item === "object" && "text" in item && typeof item.text === "string" ? [item.text] : []).join("\n").trim();
-}
-
-function jsonCandidate(value: string) {
-  return value.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "");
-}
-
 /** Generates only bounded search intents. It cannot search, fetch, or evaluate sources. */
-export function createEvidenceResearchPlanner(config: BedrockPlannerConfig) {
-  const model = new ChatBedrockConverse({
-    model: config.modelId,
-    region: config.region,
-    temperature: 0,
-    maxTokens: 1_000,
-    maxRetries: 0,
-    guardrailConfig: { guardrailIdentifier: config.guardrailIdentifier, guardrailVersion: config.guardrailVersion, trace: "enabled" },
-  });
+export function createEvidenceResearchPlanner(config: LlmPlannerConfig) {
+  const model = createPlannerChatModel(config, { maxTokens: 1_000 });
 
   return {
     async planQueries(brief: ResearchBrief, plan: ResearchPlan): Promise<ResearchQueryPlan> {
@@ -44,16 +26,17 @@ export function createEvidenceResearchPlanner(config: BedrockPlannerConfig) {
         "Return JSON only: {queries:[{id:string UUID,query:string,reason:string,sourceClass:'Government and official statistics'|'Industry bodies and primary research'|'Public company reports and filings'|'Independent reporting'}]}.",
         JSON.stringify({ brief, approvedPlan: { researchQuestions: plan.researchQuestions, comparisonCriteria: plan.comparisonCriteria, intendedSourceClasses: plan.intendedSourceClasses, plannedScope: plan.plannedScope } }),
       ].join("\n\n");
+      const systemPrompt = "Return only the requested JSON object. Do not include Markdown or an explanation.";
       let reason = "Bedrock did not return a valid query plan.";
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const response = await model.invoke([
-            new SystemMessage("Return only the requested JSON object. Do not include Markdown or an explanation."),
-            new HumanMessage(attempt ? `${prompt}\n\nReturn the exact JSON object now.` : prompt),
-          ]);
-          const text = contentText(response.content);
+          const text = await invokeBedrockPrompt(
+            model,
+            systemPrompt,
+            attempt ? `${prompt}\n\nReturn the exact JSON object now.` : prompt,
+          );
           if (!text) throw new Error("Bedrock returned no textual JSON.");
-          return researchQueryPlanSchema.parse(JSON.parse(jsonCandidate(text)));
+          return researchQueryPlanSchema.parse(JSON.parse(extractJsonCandidate(text)));
         } catch (error) {
           reason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : reason;
         }

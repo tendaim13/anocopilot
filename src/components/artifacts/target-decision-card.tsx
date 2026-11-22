@@ -58,7 +58,10 @@ export function TargetDecisionCard({
     );
   }
 
-  if (synthesis.decision?.status !== "awaiting_selection") {
+  if (
+    synthesis.decision?.status !== "awaiting_selection" &&
+    !(synthesis.decision == null && synthesis.markets.length > 0 && selectableIndustries.length > 0)
+  ) {
     return null;
   }
 

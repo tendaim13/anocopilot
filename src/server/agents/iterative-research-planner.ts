@@ -1,13 +1,22 @@
 import "server-only";
 
-import { ChatBedrockConverse } from "@langchain/aws";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 
 import { researchQuerySchema, type ResearchQuery } from "@/lib/ano/evidence-research";
 import type { ResearchBrief, ResearchPlan } from "@/lib/ano/research-conversation";
+import {
+  createPlannerChatModel,
+  OllamaConnectionError,
+  OllamaModelNotFoundError,
+} from "@/server/agents/ollama-chat-model";
+import { GeminiApiError } from "@/server/agents/gemini-chat-model";
+import {
+  extractJsonCandidate,
+  invokeBedrockPrompt,
+  mapSourceClass,
+} from "@/server/agents/research-planning-model";
 import type { ResearchCoverage } from "@/server/research/deep-research-assessment";
-import type { BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
+import type { LlmPlannerConfig } from "@/server/agents/bedrock-contracts";
 
 const text = z.string().trim().min(1).max(500);
 // Ano, not Bedrock, owns durable identifiers and wave sequencing. Keeping them
@@ -33,20 +42,6 @@ export class IterativeResearchPlannerError extends Error {
     super(message);
     this.name = "IterativeResearchPlannerError";
   }
-}
-
-function contentText(value: unknown) {
-  if (typeof value === "string") return value.trim();
-  if (!Array.isArray(value)) return "";
-  return value.flatMap((item) => typeof item === "string" ? [item] : item && typeof item === "object" && "text" in item && typeof item.text === "string" ? [item.text] : []).join("\n").trim();
-}
-
-function jsonCandidate(value: string) {
-  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) return fenced[1].trim();
-  const first = value.indexOf("{");
-  const last = value.lastIndexOf("}");
-  return first >= 0 && last > first ? value.slice(first, last + 1) : value.trim();
 }
 
 function planInput(brief: ResearchBrief, plan: ResearchPlan) {
@@ -100,8 +95,155 @@ function normalisedQueryKey(value: string) {
   return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
 }
 
+const ALLOWED_DIMENSIONS = [
+  "problem_urgency",
+  "market_density",
+  "buyer_conditions",
+  "market_access",
+  "solution_fit",
+  "counter_evidence",
+] as const;
+
+type ComparisonDimensionLiteral = (typeof ALLOWED_DIMENSIONS)[number];
+
+function mapComparisonDimension(raw: unknown): ComparisonDimensionLiteral {
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const exact = ALLOWED_DIMENSIONS.find((item) => item === normalized);
+    if (exact) return exact;
+    if (/counter|risk|barrier|downside|challenge|drawback|objection|negative|con\b/.test(normalized)) {
+      return "counter_evidence";
+    }
+    if (/terrain|density|size|volume|count|number|practice|clinic|concentration|scale/.test(normalized)) {
+      return "market_density";
+    }
+    if (/buyer|budget|willing|spend|decision|procure|authority|condition|financ/.test(normalized)) {
+      return "buyer_conditions";
+    }
+    if (/access|regulat|legal|compli|channel|reach|distribut|entry/.test(normalized)) {
+      return "market_access";
+    }
+    if (/fit|integrat|workflow|adopt|compat|solut/.test(normalized)) {
+      return "solution_fit";
+    }
+    if (/urgen|pain|problem|need|missed|no_show|churn|cost|inefficien/.test(normalized)) {
+      return "problem_urgency";
+    }
+  }
+  return "problem_urgency";
+}
+
+function normalizePriority(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.min(100, Math.max(1, Math.round(raw)));
+  }
+  if (typeof raw === "string") {
+    const lowered = raw.trim().toLowerCase();
+    if (lowered === "high") return 90;
+    if (lowered === "medium") return 60;
+    if (lowered === "low") return 30;
+    const numeric = Number(lowered);
+    if (Number.isFinite(numeric)) {
+      return Math.min(100, Math.max(1, Math.round(numeric)));
+    }
+  }
+  return 50;
+}
+
+function resolveCandidateMarket(rawMarket: unknown, candidateMarkets: string[]): string | null {
+  if (typeof rawMarket !== "string") return null;
+  const trimmed = rawMarket.trim().slice(0, 140);
+  if (!trimmed) return null;
+  const matched = candidateMarkets.find((item) => item.toLowerCase() === trimmed.toLowerCase());
+  return matched ?? trimmed;
+}
+
+function preNormalizeWaveShape(value: unknown, expectedCandidates?: string[]) {
+  if (!value || typeof value !== "object") return value;
+  const raw = value as Record<string, unknown>;
+  const objectiveRaw =
+    typeof raw.objective === "string" && raw.objective.trim()
+      ? raw.objective
+      : typeof raw.goal === "string" && raw.goal.trim()
+        ? raw.goal
+        : "Compare candidate markets across decision dimensions";
+  const objective = objectiveRaw.trim().slice(0, 500);
+
+  const rawMarketsSource = Array.isArray(raw.candidateMarkets) ? raw.candidateMarkets : [];
+  const extractedMarkets = rawMarketsSource
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object" && "name" in item && typeof item.name === "string") {
+        return item.name.trim();
+      }
+      return "";
+    })
+    .filter((item) => item.length > 0)
+    .map((item) => item.slice(0, 140));
+
+  const seenMarkets = new Set<string>();
+  const candidateMarkets: string[] = [];
+  for (const market of [...(expectedCandidates ?? []), ...extractedMarkets]) {
+    const key = market.toLowerCase();
+    if (!seenMarkets.has(key)) {
+      seenMarkets.add(key);
+      candidateMarkets.push(market);
+    }
+  }
+
+  const rawQueries = Array.isArray(raw.queries) ? raw.queries : [];
+  if (candidateMarkets.length < 2) {
+    for (const entry of rawQueries) {
+      if (entry && typeof entry === "object" && "candidateMarket" in entry && typeof entry.candidateMarket === "string") {
+        const cleaned = entry.candidateMarket.trim().slice(0, 140);
+        if (cleaned && !seenMarkets.has(cleaned.toLowerCase())) {
+          seenMarkets.add(cleaned.toLowerCase());
+          candidateMarkets.push(cleaned);
+        }
+      }
+    }
+  }
+  if (candidateMarkets.length === 1) {
+    candidateMarkets.push("Adjacent comparison segment");
+  }
+  const boundedMarkets = candidateMarkets.slice(0, 5);
+
+  const normalizedQueries = rawQueries
+    .slice(0, 12)
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const q = entry as Record<string, unknown>;
+      const queryText = typeof q.query === "string" ? q.query.trim().slice(0, 380) : "";
+      if (queryText.length < 3) return [];
+      const reasonText =
+        typeof q.reason === "string" && q.reason.trim()
+          ? q.reason.trim().slice(0, 320)
+          : "Evaluates decision-relevant public evidence.";
+      const sourceClass =
+        (typeof q.sourceClass === "string" ? mapSourceClass(q.sourceClass) : null) ??
+        "Industry bodies and primary research";
+      const candidateMarket = resolveCandidateMarket(q.candidateMarket, boundedMarkets);
+      return [
+        {
+          query: queryText,
+          reason: reasonText,
+          sourceClass,
+          candidateMarket,
+          comparisonDimension: mapComparisonDimension(q.comparisonDimension),
+          priority: normalizePriority(q.priority),
+        },
+      ];
+    });
+
+  return {
+    objective,
+    candidateMarkets: boundedMarkets,
+    queries: normalizedQueries,
+  };
+}
+
 export function normalizeIterativeResearchWave(value: unknown, waveNumber: number, maximumQueries: number, expectedCandidates?: string[], priorQueries: string[] = []) {
-  const parsed = iterativeResearchWavePlanSchema.parse(value);
+  const parsed = iterativeResearchWavePlanSchema.parse(preNormalizeWaveShape(value, expectedCandidates));
   const candidateMarkets = expectedCandidates?.length ? expectedCandidates : parsed.candidateMarkets;
   const allowedCandidates = new Set(candidateMarkets);
   const knownQueries = new Set(priorQueries.map(normalisedQueryKey));
@@ -118,29 +260,30 @@ export function normalizeIterativeResearchWave(value: unknown, waveNumber: numbe
   return { objective: parsed.objective, candidateMarkets, queries };
 }
 
-/** Bedrock proposes only the next bounded question set. Ano owns all provider access and stopping conditions. */
-export function createIterativeResearchPlanner(config: BedrockPlannerConfig) {
-  const model = new ChatBedrockConverse({
-    model: config.modelId,
-    region: config.region,
-    temperature: 0,
-    maxTokens: 2_000,
-    maxRetries: 0,
-    guardrailConfig: { guardrailIdentifier: config.guardrailIdentifier, guardrailVersion: config.guardrailVersion, trace: "enabled" },
-  });
+/** LLM proposes only the next bounded question set. Ano owns all provider access and stopping conditions. */
+export function createIterativeResearchPlanner(config: LlmPlannerConfig) {
+  const model = createPlannerChatModel(config, { maxTokens: 2_000 });
 
   async function invoke(prompt: string, waveNumber: number, maximumQueries: number, expectedCandidates?: string[], priorQueries: string[] = []) {
-    let reason = "Bedrock did not return a valid iterative query plan.";
+    const systemPrompt = "Return only the requested JSON object. Do not include Markdown, recommendations, or explanatory text.";
+    let reason = "LLM did not return a valid iterative query plan.";
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await model.invoke([
-          new SystemMessage("Return only the requested JSON object. Do not include Markdown, recommendations, or explanatory text."),
-          new HumanMessage(attempt ? `${prompt}\n\nReturn the exact JSON object now.` : prompt),
-        ]);
-        const output = contentText(response.content);
-        if (!output) throw new Error("Bedrock returned no textual JSON.");
-        return normalizeIterativeResearchWave(JSON.parse(jsonCandidate(output)), waveNumber, maximumQueries, expectedCandidates, priorQueries);
+        const output = await invokeBedrockPrompt(
+          model,
+          systemPrompt,
+          attempt ? `${prompt}\n\nReturn the exact JSON object now.` : prompt,
+        );
+        if (!output) throw new Error("LLM returned no textual JSON.");
+        return normalizeIterativeResearchWave(JSON.parse(extractJsonCandidate(output)), waveNumber, maximumQueries, expectedCandidates, priorQueries);
       } catch (error) {
+        if (
+          error instanceof OllamaConnectionError ||
+          error instanceof OllamaModelNotFoundError ||
+          error instanceof GeminiApiError
+        ) {
+          throw new IterativeResearchPlannerError(error.message, `${error.name}: ${error.message}`.slice(0, 600));
+        }
         reason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : reason;
       }
     }

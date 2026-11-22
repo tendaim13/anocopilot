@@ -6,6 +6,7 @@
 # next
 /.next/
 /out/
+/.vercel
 
 # local environment configuration
 .env*
@@ -15,3 +16,4 @@
 # system
 .DS_Store
 *.tsbuildinfo
+.vercel

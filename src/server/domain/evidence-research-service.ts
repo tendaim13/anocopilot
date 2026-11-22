@@ -2,7 +2,7 @@ import "server-only";
 
 import type { WorkspaceSession } from "@/contracts/ano";
 import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
-import { BedrockConfigurationError, getAnoAgentMode, getBedrockPlannerConfig } from "@/server/agents/bedrock";
+import { BedrockConfigurationError, getActivePlannerConfig } from "@/server/agents/bedrock";
 import { createIterativeResearchPlanner, IterativeResearchPlannerError } from "@/server/agents/iterative-research-planner";
 import { getResearchCheckpointer } from "@/server/langgraph/checkpointer";
 import {
@@ -26,14 +26,13 @@ export class EvidenceResearchServiceError extends Error {
   }
 }
 
-function requireBedrock() {
-  if (getAnoAgentMode() !== "bedrock") {
-    throw new EvidenceResearchServiceError("Ano needs Bedrock mode enabled before it can turn the approved plan into a bounded query set.", "BEDROCK_DISABLED");
-  }
+function requirePlannerConfig() {
   try {
-    return getBedrockPlannerConfig();
+    return getActivePlannerConfig();
   } catch (error) {
-    if (error instanceof BedrockConfigurationError) throw new EvidenceResearchServiceError(error.message, "BEDROCK_NOT_CONFIGURED");
+    if (error instanceof BedrockConfigurationError) {
+      throw new EvidenceResearchServiceError(error.message, "PLANNER_NOT_CONFIGURED");
+    }
     throw error;
   }
 }
@@ -67,7 +66,7 @@ export async function startApprovedEvidenceResearch(session: WorkspaceSession, c
     if (!conversation.brief || !conversation.plan || conversation.plan.approvalStatus !== "approved") {
       throw new EvidenceResearchServiceError("Ano could not verify the approved research brief before contacting a provider.", "PLAN_NOT_APPROVED");
     }
-    const configuration = requireBedrock();
+    const configuration = requirePlannerConfig();
     const graph = createIterativeEvidenceResearchGraph(
       createIterativeResearchPlanner(configuration),
       createIterativeEvidenceResearchExecutor(session),
@@ -92,6 +91,9 @@ export async function startApprovedEvidenceResearch(session: WorkspaceSession, c
       recursionLimit: ITERATIVE_EVIDENCE_RESEARCH_RECURSION_LIMIT,
     });
   } catch (error) {
+    if (error instanceof IterativeResearchPlannerError && error.reason) {
+      console.error("[ano:phase-b]", error.message, error.reason);
+    }
     await stopEvidenceResearchRun(session, runId, error);
     if (error instanceof IterativeResearchPlannerError) return getEvidenceResearchForConversation(session, conversationId);
     if (error instanceof EvidenceResearchPersistenceError || error instanceof EvidenceResearchServiceError) return getEvidenceResearchForConversation(session, conversationId);

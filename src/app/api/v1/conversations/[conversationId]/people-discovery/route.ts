@@ -10,6 +10,7 @@ import {
   PeoplePlaybookServiceError,
   prepareContactVerificationForConversation,
   proposeBuyerRolesForConversation,
+  runWebsiteTeamDiscoveryForConversation,
 } from "@/server/domain/people-playbook-service";
 import { TargetAccountDiscoveryServiceError } from "@/server/domain/target-account-discovery-service";
 import { PeoplePlaybookPersistenceError } from "@/server/persistence/people-playbook-store";
@@ -76,7 +77,25 @@ export async function POST(
 
     if (action.action === "propose_roles") {
       return NextResponse.json(
-        await proposeBuyerRolesForConversation(session, conversationId, action.roleOverrides),
+        await proposeBuyerRolesForConversation(session, conversationId, {
+          providerKey: action.providerKey,
+          roleOverrides: action.roleOverrides,
+          departments: action.departments,
+          seniorities: action.seniorities,
+          excludeTitles: action.excludeTitles,
+          archetype: action.archetype,
+        }),
+      );
+    }
+    if (action.action === "run_free_people_search") {
+      return NextResponse.json(
+        await runWebsiteTeamDiscoveryForConversation(session, conversationId, {
+          roleOverrides: action.roleOverrides,
+          departments: action.departments,
+          seniorities: action.seniorities,
+          excludeTitles: action.excludeTitles,
+          archetype: action.archetype,
+        }),
       );
     }
     if (action.action === "approve_person_search") {
@@ -90,6 +109,7 @@ export async function POST(
           session,
           conversationId,
           action.contactIds,
+          action.providerKey,
         ),
       );
     }

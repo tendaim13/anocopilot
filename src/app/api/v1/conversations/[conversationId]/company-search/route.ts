@@ -6,6 +6,7 @@ import {
   approveCompanySearchForConversation,
   getCompanySearchForConversation,
   prepareCompanySearchPreviewForConversation,
+  runOpenStreetMapSearchForConversation,
   TargetAccountDiscoveryServiceError,
 } from "@/server/domain/target-account-discovery-service";
 import { TargetAccountDiscoveryPersistenceError } from "@/server/persistence/target-account-discovery-store";
@@ -68,7 +69,22 @@ export async function POST(
     if (parsed.data.action === "prepare_preview") {
       return NextResponse.json(
         await prepareCompanySearchPreviewForConversation(session, conversationId, {
+          providerKey: parsed.data.providerKey,
+          resolveWebsites: parsed.data.resolveWebsites,
           locationOverrides: parsed.data.locationOverrides,
+          keywordOverrides: parsed.data.keywordOverrides,
+          industryOverrides: parsed.data.industryOverrides,
+          excludedCategories: parsed.data.excludedCategories,
+        }),
+      );
+    }
+
+    if (parsed.data.action === "run_free_search") {
+      return NextResponse.json(
+        await runOpenStreetMapSearchForConversation(session, conversationId, {
+          resolveWebsites: parsed.data.resolveWebsites,
+          locationOverrides: parsed.data.locationOverrides,
+          keywordOverrides: parsed.data.keywordOverrides,
           excludedCategories: parsed.data.excludedCategories,
         }),
       );

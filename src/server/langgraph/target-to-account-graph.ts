@@ -3,24 +3,41 @@ import "server-only";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 
-import type { CompanySearchStatus, CompanySearchView } from "@/lib/ano/company-discovery";
+import type {
+  CompanyDiscoveryProvider,
+  CompanySearchStatus,
+  CompanySearchView,
+  OsmResolvedArea,
+  OsmTagFilter,
+} from "@/lib/ano/company-discovery";
 import type { IndustryProfile, MarketProfile } from "@/lib/ano/market-synthesis";
 
 export const TARGET_TO_ACCOUNT_GRAPH_NAME = "target-to-account-discovery";
-export const TARGET_TO_ACCOUNT_GRAPH_VERSION = "phase-d-v1";
+export const TARGET_TO_ACCOUNT_GRAPH_VERSION = "phase-d-v2";
 
 export type TargetToAccountStage = "preview" | "execute";
 
 export type TargetToAccountExecutor = {
   canonicalizeLocations: (requestedLocations: string[]) => Promise<string[]>;
+  canonicalizeIndustries?: (requestedIndustries: string[]) => Promise<string[]>;
+  resolveOsmPreview?: (
+    requestedLocations: string[],
+    tags: OsmTagFilter[],
+  ) => Promise<OsmResolvedArea[]>;
   savePreview: (input: {
     conversationId: string;
     targetDecisionId: string;
     market: MarketProfile;
     industry: IndustryProfile;
+    providerKey: CompanyDiscoveryProvider;
     requestedLocations: string[];
     canonicalLocations: string[];
+    canonicalIndustries: string[];
+    searchKeywords: string[];
     excludedCategories: string[];
+    osmAreas?: OsmResolvedArea[];
+    osmTags?: OsmTagFilter[];
+    resolveWebsites?: boolean;
   }) => Promise<CompanySearchView>;
   executeApprovedSearch: (input: {
     conversationId: string;
@@ -40,7 +57,27 @@ export const TargetToAccountGraphState = Annotation.Root({
     reducer: (_left, right) => right,
     default: () => null,
   }),
+  providerKey: Annotation<CompanyDiscoveryProvider>({
+    reducer: (_left, right) => right,
+    default: () => "prospeo",
+  }),
+  resolveWebsites: Annotation<boolean>({
+    reducer: (_left, right) => right,
+    default: () => true,
+  }),
+  osmTags: Annotation<OsmTagFilter[]>({
+    reducer: (_left, right) => right,
+    default: () => [],
+  }),
   requestedLocations: Annotation<string[]>({
+    reducer: (_left, right) => right,
+    default: () => [],
+  }),
+  requestedIndustries: Annotation<string[]>({
+    reducer: (_left, right) => right,
+    default: () => [],
+  }),
+  searchKeywords: Annotation<string[]>({
     reducer: (_left, right) => right,
     default: () => [],
   }),
@@ -64,9 +101,9 @@ export type TargetToAccountGraphStateValue = typeof TargetToAccountGraphState.St
 
 /**
  * Phase D subflow anchored strictly to a locked Phase C target decision.
- * Preview canonicalization calls only Prospeo's free suggestion endpoint and
- * terminates before any credit-bearing /search-company call. Execution requires
- * a persisted awaiting_approval preview and runs strictly one page (25 max).
+ * Preview canonicalization calls only Prospeo's free suggestion endpoint or
+ * OpenStreetMap Nominatim and terminates before any search execution. Execution
+ * requires a persisted awaiting_approval preview and runs strictly one bounded batch (25 max).
  */
 export function createTargetToAccountGraph(
   executor: TargetToAccountExecutor,
@@ -84,7 +121,7 @@ export function createTargetToAccountGraph(
     }
     if (state.stage === "preview") {
       if (state.requestedLocations.length === 0) {
-        throw new Error("At least one target location is required before generating a Prospeo preview.");
+        throw new Error("At least one target location is required before generating a company-search preview.");
       }
       return {
         currentNode: "prepare_canonical_preview",
@@ -102,15 +139,40 @@ export function createTargetToAccountGraph(
     if (!state.targetMarket || !state.targetIndustry) {
       throw new Error("Locked market and industry profiles are required.");
     }
-    const canonicalLocations = await executor.canonicalizeLocations(state.requestedLocations);
+
+    const providerKey = state.providerKey ?? "prospeo";
+    let canonicalLocations: string[];
+    let canonicalIndustries: string[] = [];
+    let osmAreas: OsmResolvedArea[] | undefined;
+
+    if (providerKey === "openstreetmap" && executor.resolveOsmPreview) {
+      osmAreas = await executor.resolveOsmPreview(state.requestedLocations, state.osmTags);
+      canonicalLocations = osmAreas.map((area) => area.requestedQuery);
+    } else {
+      const [resolvedLocations, resolvedIndustries] = await Promise.all([
+        executor.canonicalizeLocations(state.requestedLocations),
+        executor.canonicalizeIndustries && state.requestedIndustries.length > 0
+          ? executor.canonicalizeIndustries(state.requestedIndustries)
+          : Promise.resolve([]),
+      ]);
+      canonicalLocations = resolvedLocations;
+      canonicalIndustries = resolvedIndustries;
+    }
+
     const search = await executor.savePreview({
       conversationId: state.conversationId,
       targetDecisionId: state.targetDecisionId,
       market: state.targetMarket,
       industry: state.targetIndustry,
+      providerKey,
       requestedLocations: state.requestedLocations,
       canonicalLocations,
+      canonicalIndustries,
+      searchKeywords: state.searchKeywords,
       excludedCategories: state.excludedCategories,
+      osmAreas,
+      osmTags: providerKey === "openstreetmap" ? state.osmTags : undefined,
+      resolveWebsites: providerKey === "openstreetmap" ? state.resolveWebsites : undefined,
     });
     return {
       search,

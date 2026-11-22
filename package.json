@@ -2,11 +2,16 @@
   "name": "ano-copilot",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
     "typecheck": "tsc --noEmit --incremental false",
+    "test": "node --conditions=react-server --import tsx --test tests/*.test.ts",
+    "check:migrations": "node scripts/check-migrations-registered.mjs",
     "test:phase4a": "tsx --test tests/phase4a-runtime.test.ts",
     "test:phase4b": "tsx --test tests/phase4b-bedrock-runtime.test.ts",
     "test:standalone": "tsx --test tests/standalone-brief-runtime.test.ts",
@@ -23,7 +28,9 @@
     "test:searxng-contract": "node --conditions=react-server --import tsx --test tests/searxng-provider.test.ts tests/evidence-source-retriever.test.ts",
     "smoke:research-phase-a": "node --env-file=.env.local --conditions=react-server --import tsx scripts/smoke-research-phase-a.ts",
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
-    "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs"
+    "db:apply:ci": "node scripts/apply-ano-schema.mjs",
+    "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs",
+    "db:status:ci": "node scripts/check-ano-schema.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1154.0",

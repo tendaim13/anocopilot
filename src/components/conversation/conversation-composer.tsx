@@ -33,15 +33,9 @@ export function ConversationComposer({
 
   const status = conversation?.run.status;
   const isClarifying = status === "awaiting_context" && Boolean(conversation?.pendingQuestion);
-  const isPlanApproval = status === "awaiting_plan_approval";
   const isRunningResearch = research?.run.status === "running";
-  const canSubmitFollowUp = status === "draft" || status === "complete_without_research";
 
-  const isDisabled =
-    isWorking ||
-    needsSignIn ||
-    isRunningResearch ||
-    Boolean(conversation && !isClarifying && !isPlanApproval && !canSubmitFollowUp);
+  const isDisabled = isWorking || needsSignIn || isRunningResearch;
 
   let label = "Ask Ano";
   let placeholder =
@@ -58,26 +52,18 @@ export function ConversationComposer({
     placeholder = "Answer in your own words…";
     helper = "Your reply resumes the paused research graph via a typed clarification event.";
     buttonLabel = isWorking ? "Updating…" : "Reply";
-  } else if (isPlanApproval) {
-    label = "Request a plan revision (optional)";
-    placeholder = "Describe how Ano should change the plan (never triggers approval)…";
-    helper = "Sending text requests a plan revision; use Approve plan in the card above to lock it.";
-    buttonLabel = isWorking ? "Revising…" : "Revise plan";
   } else if (isRunningResearch) {
     label = "Research in progress";
     placeholder = "Ano is executing the approved SearXNG research scope…";
-    helper = "Free-form messages cannot alter or restart an active provider scope.";
+    helper = "Free-form messages pause briefly while public evidence retrieval finishes.";
     buttonLabel = "Running";
-  } else if (conversation.plan?.approvalStatus === "approved") {
-    label = "Research workflow active";
-    placeholder = "Use the approval and recommendation cards above, or start a new conversation.";
-    helper = "Provider actions and target selection are always explicit card controls.";
-    buttonLabel = "Send";
   } else {
-    label = "Continue conversation";
-    placeholder = "Ask Ano to explore a new direction or angle…";
-    helper = "No external provider request runs without a separate approval card.";
-    buttonLabel = isWorking ? "Sending…" : "Send";
+    label = "Chat with Ano";
+    placeholder =
+      "Ask about what you see, compare companies, or tell Ano how to refine the search…";
+    helper =
+      "Enter to send · Shift+Enter for new line. OpenStreetMap local refinements run automatically ($0); paid credits still stay gated.";
+    buttonLabel = isWorking ? "Thinking…" : "Send";
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -107,7 +93,11 @@ export function ConversationComposer({
           value={value}
           onValueChange={onChange}
           placeholder={placeholder}
-          supportingText={needsSignIn ? "Sign in to start or continue a durable workspace conversation." : helper}
+          supportingText={
+            needsSignIn
+              ? "Sign in to start or continue a durable workspace conversation."
+              : helper
+          }
           disabled={isDisabled}
           onKeyDown={handleKeyDown}
         />
@@ -122,7 +112,11 @@ export function ConversationComposer({
           </div>
           <div className="m3-composer-right">
             {isWorking && (
-              <md-circular-progress indeterminate aria-label="Ano is working" className="m3-inline-spinner" />
+              <md-circular-progress
+                indeterminate
+                aria-label="Ano is working"
+                className="m3-inline-spinner"
+              />
             )}
             <MaterialButton
               variant="filled"

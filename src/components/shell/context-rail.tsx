@@ -10,6 +10,7 @@ import type {
   MercuryConnectorState,
   OutreachExecutionView,
 } from "@/lib/ano/outreach-execution";
+import type { OutreachTemplatePackView } from "@/lib/ano/outreach-templates";
 import type {
   DropcontactProviderState,
   PeopleDiscoveryView,
@@ -39,6 +40,7 @@ export interface ContextRailProps {
   dropcontact?: DropcontactProviderState | null;
   outreachExecution?: OutreachExecutionView | null;
   mercury?: MercuryConnectorState | null;
+  templatePack?: OutreachTemplatePackView | null;
 }
 
 function approvalLabel(status: string) {
@@ -64,6 +66,7 @@ export function ContextRail({
   dropcontact = null,
   outreachExecution = null,
   mercury = null,
+  templatePack = null,
 }: ContextRailProps) {
   if (!open) return null;
 
@@ -189,18 +192,22 @@ export function ContextRail({
           {companySearch ? (
             <dl className="ano-rail-dl">
               <div>
-                <dt>Canonical locations</dt>
+                <dt>Discovery source</dt>
+                <dd>{companySearch.providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"}</dd>
+              </div>
+              <div>
+                <dt>Target locations</dt>
                 <dd>{companySearch.canonicalLocations.join(", ")}</dd>
               </div>
               <div>
                 <dt>Cap / credits</dt>
                 <dd>
                   {companySearch.maximumResults} max ·{" "}
-                  {companySearch.providerReceipt.credit_bearing_request
-                    ? companySearch.providerReceipt.free
-                      ? "0 credits (free)"
-                      : "1 credit max"
-                    : "0 credits spent"}
+                  {companySearch.providerKey === "openstreetmap" || companySearch.providerReceipt.free
+                    ? "0 credits (free)"
+                    : companySearch.providerReceipt.credit_bearing_request
+                      ? "1 credit max"
+                      : "0 credits spent"}
                 </dd>
               </div>
               <div>
@@ -214,8 +221,8 @@ export function ContextRail({
           ) : (
             <p className="ano-rail-empty">
               {synthesis?.decision?.status === "locked"
-                ? "Target locked. Prepare a free Prospeo preview before approving a 1-page search."
-                : "Lock a Phase C market and industry route before preparing Prospeo company discovery."}
+                ? "Target locked. Prepare a free OpenStreetMap local preview or Prospeo B2B preview before executing."
+                : "Lock a Phase C market and industry route before preparing Phase D company discovery."}
             </p>
           )}
         </section>
@@ -234,12 +241,12 @@ export function ContextRail({
               }`}
             >
               {peopleDiscovery?.verificationRun
-                ? `Dropcontact ${runStatusLabel(peopleDiscovery.verificationRun.status)}`
+                ? `${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} ${runStatusLabel(peopleDiscovery.verificationRun.status)}`
                 : peopleDiscovery?.personSearch
                   ? runStatusLabel(peopleDiscovery.personSearch.status)
-                  : dropcontact?.available
-                    ? "Dropcontact ready"
-                    : "Dropcontact unconfigured"}
+                  : prospeo?.available || dropcontact?.available
+                    ? "Verifier ready"
+                    : "Verifier unconfigured"}
             </span>
           </div>
           {peopleDiscovery && (peopleDiscovery.contacts.length > 0 || peopleDiscovery.playbooks.length > 0 || peopleDiscovery.personSearch) ? (
@@ -266,6 +273,48 @@ export function ContextRail({
           ) : (
             <p className="ano-rail-empty">
               Shortlist a company in Phase D to propose buyer roles, selectively verify contacts via Dropcontact, and compile factual playbooks.
+            </p>
+          )}
+        </section>
+
+        <section className="ano-rail-card">
+          <div className="ano-rail-card-head">
+            <h3>Email templates</h3>
+            <span
+              className={`ano-pill ${
+                templatePack && templatePack.steps.every((s) => s.lint.passed)
+                  ? "status-ready"
+                  : templatePack
+                    ? "status-neutral"
+                    : "status-muted"
+              }`}
+            >
+              {templatePack
+                ? `v${templatePack.version} · ${templatePack.steps.filter((s) => s.lint.passed).length}/${templatePack.steps.length} clean`
+                : "Not generated"}
+            </span>
+          </div>
+          {templatePack ? (
+            <dl className="ano-rail-dl">
+              <div>
+                <dt>Voice / CTA</dt>
+                <dd>
+                  {templatePack.tone.replaceAll("_", " ")} ·{" "}
+                  {templatePack.ctaStyle.replaceAll("_", " ")}
+                </dd>
+              </div>
+              <div>
+                <dt>Steps</dt>
+                <dd>{templatePack.steps.length} steps ($0)</dd>
+              </div>
+              <div>
+                <dt>Phase C claims</dt>
+                <dd>{templatePack.claimIds.length}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="ano-rail-empty">
+              Generate human-voice cold email sequences with standard merge variables at $0 external spend.
             </p>
           )}
         </section>

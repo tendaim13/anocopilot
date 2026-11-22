@@ -18,10 +18,23 @@ export async function POST(request: Request, context: { params: Promise<{ conver
   if (!message) return NextResponse.json({ error: "Add a message for Ano first." }, { status: 400 });
   try {
     const { conversationId } = await context.params;
-    return NextResponse.json({ conversation: await continueResearchConversation(await requireWorkspaceSession(), conversationId, message, idempotencyKey(request)) });
+    return NextResponse.json(
+      await continueResearchConversation(
+        await requireWorkspaceSession(),
+        conversationId,
+        message,
+        idempotencyKey(request),
+      ),
+    );
   } catch (error) {
     if (error instanceof WorkspaceSessionError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof ResearchConversationServiceError || error instanceof ResearchConversationPersistenceError) return NextResponse.json({ error: error.message, code: "RESEARCH_CONVERSATION_UNAVAILABLE" }, { status: 422 });
+    console.error(
+      "Ano conversation message route failed",
+      error instanceof Error
+        ? { name: error.name, message: error.message.slice(0, 600) }
+        : { type: typeof error },
+    );
     return NextResponse.json({ error: "Ano could not safely continue this conversation. No external action was attempted." }, { status: 500 });
   }
 }

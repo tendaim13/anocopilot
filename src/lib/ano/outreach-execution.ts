@@ -204,6 +204,9 @@ export function evaluateContactEligibility(
 
   const hasVerifiedEmail = contact.verificationStatus === "verified" && Boolean(email);
   if (!hasVerifiedEmail) {
+    const publicHint = contact.publicEmail
+      ? ` Public website email (${contact.publicEmail}, ${contact.publicEmailKind === "direct_public" ? "direct" : "shared office inbox"}) is available for review/CSV export.`
+      : "";
     return contactEligibilityCheckSchema.parse({
       status: channel === "linkedin" || channel === "call_script" ? "review_only_channel" : "blocked_unverified_email",
       canProposeEmailSend: false,
@@ -211,7 +214,7 @@ export function evaluateContactEligibility(
       canProposeCallTask: true,
       canProposeMercurySync: true,
       reasons: [
-        `${contact.fullName} does not have a Dropcontact-verified email yet; email send and calendar scheduling are blocked until selective verification succeeds.`,
+        `${contact.fullName} does not have a provider-verified email yet; autonomous email send and calendar scheduling stay blocked until Prospeo or Dropcontact verification succeeds.${publicHint}`,
       ],
     });
   }
@@ -229,6 +232,8 @@ export function evaluateContactEligibility(
     });
   }
 
+  const verifyProviderLabel =
+    contact.verifiedDetails?.provider === "prospeo" ? "Prospeo" : "Dropcontact";
   return contactEligibilityCheckSchema.parse({
     status: "eligible",
     canProposeEmailSend: true,
@@ -236,7 +241,7 @@ export function evaluateContactEligibility(
     canProposeCallTask: true,
     canProposeMercurySync: true,
     reasons: [
-      `Dropcontact-verified email (${email}) passed suppression checks and is eligible for per-action approval.`,
+      `${verifyProviderLabel}-verified email (${email}) passed suppression checks and is eligible for per-action approval.`,
     ],
   });
 }

@@ -40,6 +40,17 @@ type SearchResultRow = Record<string, unknown>;
 
 const RESEARCH_LEASE_TIMEOUT_MS = 90_000;
 
+export const EVIDENCE_RESEARCH_ACTION_KINDS = ["research_run", "search", "fetch"] as const;
+
+export function isEvidenceResearchActionKind(
+  value: unknown,
+): value is (typeof EVIDENCE_RESEARCH_ACTION_KINDS)[number] {
+  return (
+    typeof value === "string" &&
+    (EVIDENCE_RESEARCH_ACTION_KINDS as readonly string[]).includes(value)
+  );
+}
+
 function normalisedResearchQuery(value: string) {
   return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
 }
@@ -998,7 +1009,13 @@ export async function readEvidenceResearchView(session: WorkspaceSession, conver
   if (!runId) return null;
   const run = await recoverExpiredResearchLease(session, await getRun(session, runId));
   const [actionsResult, sourcesResult] = await Promise.all([
-    session.client.from("provider_action_requests").select("id, action_kind, status, request_json, maximum_operations, reported_credits, created_at").eq("workspace_id", session.workspace.id).eq("ano_research_run_id", runId).order("created_at", { ascending: true }),
+    session.client
+      .from("provider_action_requests")
+      .select("id, action_kind, status, request_json, maximum_operations, reported_credits, created_at")
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId)
+      .in("action_kind", [...EVIDENCE_RESEARCH_ACTION_KINDS])
+      .order("created_at", { ascending: true }),
     session.client.from("research_sources").select("id, title, canonical_url, source_class, supporting_excerpt, published_at, retrieved_at, status").eq("workspace_id", session.workspace.id).eq("ano_research_run_id", runId).order("retrieved_at", { ascending: false }),
   ]);
   if (actionsResult.error || sourcesResult.error) throw new EvidenceResearchPersistenceError("Ano could not read the saved public-evidence record.");
@@ -1021,15 +1038,24 @@ export async function readEvidenceResearchView(session: WorkspaceSession, conver
       createdAt: isoTimestamp(run.created_at),
       updatedAt: isoTimestamp(run.updated_at),
     },
-    actions: (actionsResult.data ?? []).map((action) => ({
-      id: String(action.id),
-      kind: action.action_kind,
-      status: action.status,
-      description: actionDescription(String(run.provider_key), action.action_kind, (action.request_json ?? {}) as Record<string, unknown>),
-      maximumOperations: Number(action.maximum_operations),
-      reportedCredits: action.reported_credits === null ? null : Number(action.reported_credits),
-      createdAt: isoTimestamp(action.created_at),
-    })),
+    actions: (actionsResult.data ?? [])
+      .filter((action) => isEvidenceResearchActionKind(action.action_kind))
+      .map((action) => {
+        const kind = action.action_kind as (typeof EVIDENCE_RESEARCH_ACTION_KINDS)[number];
+        return {
+          id: String(action.id),
+          kind,
+          status: action.status,
+          description: actionDescription(
+            String(run.provider_key),
+            kind,
+            (action.request_json ?? {}) as Record<string, unknown>,
+          ),
+          maximumOperations: Number(action.maximum_operations),
+          reportedCredits: action.reported_credits === null ? null : Number(action.reported_credits),
+          createdAt: isoTimestamp(action.created_at),
+        };
+      }),
     queries,
     sources: (sourcesResult.data ?? []).map((source) => ({
       id: String(source.id),

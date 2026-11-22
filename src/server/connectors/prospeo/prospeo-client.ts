@@ -71,6 +71,34 @@ export type ProspeoPersonSearch = {
   rateLimit: ProspeoRateLimit;
 };
 
+export type ProspeoEnrichPersonInput = {
+  contactId: string;
+  fullName: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  companyName?: string | null;
+  website?: string | null;
+  linkedInUrl?: string | null;
+  prospeoPersonId?: string | null;
+};
+
+export type ProspeoEnrichPersonResult = {
+  contactId: string;
+  verified: boolean;
+  email: string | null;
+  emailStatus: string | null;
+  emailQualification: string | null;
+  phone: string | null;
+  verifiedDomain: string | null;
+  freeEnrichment: boolean;
+};
+
+export type ProspeoBulkEnrichResponse = {
+  creditsCharged: number;
+  results: ProspeoEnrichPersonResult[];
+  rateLimit: ProspeoRateLimit;
+};
+
 export class ProspeoClientError extends Error {
   constructor(
     readonly code: "PROSPEO_KEY_UNCONFIGURED" | "INVALID_API_KEY" | "RATE_LIMITED" | "INSUFFICIENT_CREDITS" | "INVALID_FILTERS" | "PLAN_REQUIRED" | "NO_RESULTS" | "SERVICE_UNAVAILABLE" | "INVALID_RESPONSE" | "NETWORK_ERROR",
@@ -102,6 +130,16 @@ const accountPayloadSchema = z.object({
 const locationPayloadSchema = z.object({
   error: z.literal(false),
   location_suggestions: z.array(z.object({ name: z.string(), type: z.string() })).nullable(),
+});
+
+const industryPayloadSchema = z.object({
+  error: z.literal(false),
+  industry_suggestions: z.array(z.string()).nullable(),
+});
+
+const jobTitlePayloadSchema = z.object({
+  error: z.literal(false),
+  job_title_suggestions: z.array(z.string()).nullable(),
 });
 
 const companyPayloadSchema = z.object({
@@ -242,6 +280,22 @@ export async function suggestProspeoLocations(location: string, fetcher?: Prospe
   return parsed.data.location_suggestions ?? [];
 }
 
+/** Free industry canonicalization request against Prospeo's controlled industry taxonomy. */
+export async function suggestProspeoIndustries(industry: string, fetcher?: ProspeoFetcher): Promise<string[]> {
+  const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ industry_search: industry }) }, fetcher);
+  const parsed = industryPayloadSchema.safeParse(response.payload);
+  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned industry suggestions Ano could not verify.");
+  return parsed.data.industry_suggestions ?? [];
+}
+
+/** Free job-title canonicalization request ($0 credits) via Prospeo Search Suggestions API. */
+export async function suggestProspeoJobTitles(query: string, fetcher?: ProspeoFetcher): Promise<string[]> {
+  const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ job_title_search: query }) }, fetcher);
+  const parsed = jobTitlePayloadSchema.safeParse(response.payload);
+  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned job-title suggestions Ano could not verify.");
+  return parsed.data.job_title_suggestions ?? [];
+}
+
 /** This is intentionally bounded to page 1 (25 companies max). */
 export async function searchProspeoCompanies(filters: Record<string, unknown>, fetcher?: ProspeoFetcher): Promise<ProspeoCompanySearch> {
   const response = await prospeoRequest("/search-company", { method: "POST", body: JSON.stringify({ page: 1, filters }) }, fetcher);
@@ -329,5 +383,170 @@ export async function searchProspeoPeople(
       .slice(0, 25),
     totalCount: parsed.data.pagination?.total_count,
     rateLimit: response.rateLimit,
+  };
+}
+
+function cleanWebsiteHost(raw?: string | null): string | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const u = /^https?:\/\//i.test(raw.trim()) ? new URL(raw.trim()) : new URL(`https://${raw.trim()}`);
+    return u.hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return raw.trim().toLowerCase();
+  }
+}
+
+/**
+ * Selective 1-batch (max 10 contacts) Prospeo `/bulk-enrich-person` call.
+ * Requests verified emails only (`only_verified_email: true`, `enrich_mobile: false`),
+ * costing 1 credit per found email and 0 credits on misses or 90-day repeats.
+ */
+export async function enrichProspeoPeople(
+  pairs: ProspeoEnrichPersonInput[],
+  fetcher?: ProspeoFetcher,
+): Promise<ProspeoBulkEnrichResponse> {
+  if (pairs.length === 0 || pairs.length > 10) {
+    throw new ProspeoClientError(
+      "INVALID_FILTERS",
+      "Select between 1 and 10 contacts per selective Prospeo enrichment batch.",
+    );
+  }
+
+  const data = pairs.map((pair) => {
+    const companyWebsite = cleanWebsiteHost(pair.website);
+    return {
+      identifier: pair.contactId,
+      ...(pair.prospeoPersonId ? { person_id: pair.prospeoPersonId } : {}),
+      ...(pair.firstName ? { first_name: pair.firstName } : {}),
+      ...(pair.lastName ? { last_name: pair.lastName } : {}),
+      ...(!pair.firstName && !pair.lastName ? { full_name: pair.fullName } : {}),
+      ...(companyWebsite ? { company_website: companyWebsite } : {}),
+      ...(pair.companyName ? { company_name: pair.companyName } : {}),
+      ...(pair.linkedInUrl ? { linkedin_url: pair.linkedInUrl } : {}),
+    };
+  });
+
+  let rawPayload: unknown;
+  let headersRateLimit: ProspeoRateLimit = {};
+  try {
+    const response = await prospeoRequest(
+      "/bulk-enrich-person",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          only_verified_email: true,
+          enrich_mobile: false,
+          data,
+        }),
+      },
+      fetcher,
+    );
+    rawPayload = response.payload;
+    headersRateLimit = response.rateLimit;
+  } catch (error) {
+    if (error instanceof ProspeoClientError && error.code === "NO_RESULTS") {
+      return {
+        creditsCharged: 0,
+        rateLimit: headersRateLimit,
+        results: pairs.map((pair) => ({
+          contactId: pair.contactId,
+          verified: false,
+          email: null,
+          emailStatus: "NO_RESULTS",
+          emailQualification: null,
+          phone: null,
+          verifiedDomain: null,
+          freeEnrichment: true,
+        })),
+      };
+    }
+    throw error;
+  }
+
+  const payloadObj =
+    rawPayload && typeof rawPayload === "object" ? (rawPayload as Record<string, unknown>) : {};
+  const matchedList = Array.isArray(payloadObj.matched)
+    ? payloadObj.matched
+    : Array.isArray(payloadObj.results)
+      ? payloadObj.results
+      : [];
+
+  const matchedById = new Map<string, ProspeoEnrichPersonResult>();
+  let creditsCharged = 0;
+
+  for (const item of matchedList) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const identifier =
+      optionalString(entry.identifier) ??
+      optionalString((entry.data as Record<string, unknown> | undefined)?.identifier);
+    if (!identifier) continue;
+
+    const person =
+      entry.person && typeof entry.person === "object"
+        ? (entry.person as Record<string, unknown>)
+        : entry;
+    const company =
+      entry.company && typeof entry.company === "object"
+        ? (entry.company as Record<string, unknown>)
+        : {};
+    const emailObj =
+      person.email && typeof person.email === "object"
+        ? (person.email as Record<string, unknown>)
+        : {};
+    const mobileObj =
+      person.mobile && typeof person.mobile === "object"
+        ? (person.mobile as Record<string, unknown>)
+        : {};
+
+    const email =
+      optionalString(emailObj.email) ??
+      (typeof person.email === "string" ? optionalString(person.email) : undefined) ??
+      null;
+    const emailStatus = optionalString(emailObj.status) ?? null;
+    const verificationMethod = optionalString(emailObj.verification_method) ?? null;
+    const freeEnrichment = entry.free_enrichment === true;
+    const verified =
+      Boolean(email) && (!emailStatus || /^(verified|valid)$/i.test(emailStatus));
+    const domain =
+      optionalString(company.domain) ??
+      (email && email.includes("@") ? email.split("@")[1] : undefined) ??
+      null;
+    const phone = optionalString(mobileObj.mobile) ?? null;
+
+    if (verified && email && !freeEnrichment) {
+      creditsCharged += 1;
+    }
+
+    matchedById.set(identifier, {
+      contactId: identifier,
+      verified,
+      email: email ? email.toLowerCase() : null,
+      emailStatus,
+      emailQualification: verificationMethod
+        ? `${emailStatus ?? "VERIFIED"} (${verificationMethod})`
+        : emailStatus,
+      phone,
+      verifiedDomain: domain,
+      freeEnrichment,
+    });
+  }
+
+  return {
+    creditsCharged,
+    rateLimit: headersRateLimit,
+    results: pairs.map(
+      (pair) =>
+        matchedById.get(pair.contactId) ?? {
+          contactId: pair.contactId,
+          verified: false,
+          email: null,
+          emailStatus: "NOT_MATCHED",
+          emailQualification: null,
+          phone: null,
+          verifiedDomain: null,
+          freeEnrichment: true,
+        },
+    ),
   };
 }

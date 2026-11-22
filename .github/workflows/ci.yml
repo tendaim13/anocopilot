@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, Tests & Production Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Check secret & env hygiene
+        run: |
+          if git ls-files --error-unmatch .env.local .env.production 2>/dev/null; then
+            echo "::error::Environment file (.env.local or .env.production) must never be tracked in git."
+            exit 1
+          fi
+          if grep -rnE 'NEXT_PUBLIC_(SUPABASE_DB_URL|GEMINI_API_KEY|PROSPEO_KEY|DROPCONTACT_API_KEY|SEARXNG_GATEWAY_TOKEN|AWS_SECRET_ACCESS_KEY)' src/ .env.example 2>/dev/null; then
+            echo "::error::Server-only credential prefixed with NEXT_PUBLIC_."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify all SQL migrations are registered
+        run: npm run check:migrations
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run offline test suites
+        env:
+          ANO_AGENT_MODE: disabled
+        run: npm test
+
+      - name: Verify Next.js production build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
+          ANO_AGENT_MODE: disabled
+          ANO_ALLOW_DEMO_MODE: "false"
+        run: npm run build

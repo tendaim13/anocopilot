@@ -1,10 +1,13 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 export interface ConversationMessageProps {
   role: "user" | "assistant";
   text: string;
   createdAt?: string;
   optimistic?: boolean;
+  actionSlot?: ReactNode;
 }
 
 /**
@@ -16,6 +19,7 @@ export function ConversationMessage({
   text,
   createdAt,
   optimistic = false,
+  actionSlot,
 }: ConversationMessageProps) {
   return (
     <article className={`m3-message-row role-${role}${optimistic ? " is-optimistic" : ""}`}>
@@ -34,6 +38,7 @@ export function ConversationMessage({
           ) : null}
         </header>
         <p>{text}</p>
+        {actionSlot && <div className="m3-message-action-bar">{actionSlot}</div>}
       </div>
     </article>
   );

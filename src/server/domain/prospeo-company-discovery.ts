@@ -9,8 +9,33 @@ export class CompanyDiscoveryBoundaryError extends Error {
   }
 }
 
+const COUNTRY_ALIASES: Record<string, string> = {
+  uk: "United Kingdom",
+  "u.k.": "United Kingdom",
+  us: "United States",
+  "u.s.": "United States",
+  usa: "United States",
+  "u.s.a.": "United States",
+  uae: "United Arab Emirates",
+  au: "Australia",
+  aus: "Australia",
+  nz: "New Zealand",
+  sg: "Singapore",
+  my: "Malaysia",
+  ca: "Canada",
+  de: "Germany",
+  fr: "France",
+};
+
+/** Expands common 2-3 letter country codes into full country names for Prospeo search suggestions. */
+export function normalizeLocationQuery(raw: string): string {
+  const cleaned = raw.trim().replace(/\s+/g, " ");
+  if (!cleaned) return cleaned;
+  return COUNTRY_ALIASES[cleaned.toLowerCase()] ?? cleaned;
+}
+
 export function selectCanonicalLocation(requested: string, suggestions: Array<{ name: string; type: string }>) {
-  const normalisedRequested = requested.trim().toLocaleLowerCase();
+  const normalisedRequested = normalizeLocationQuery(requested).trim().toLocaleLowerCase();
   const exact = suggestions.find((item) => item.name.trim().toLocaleLowerCase() === normalisedRequested);
   if (exact) return exact.name;
   const containsRequested = suggestions.find((item) => item.name.toLocaleLowerCase().includes(normalisedRequested));

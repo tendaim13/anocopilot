@@ -221,7 +221,7 @@ export function classifyConversationWorkItem(
         category: "provider_scope_approval_required",
         bucket: "needs_review",
         label: "Approve company search",
-        detail: "1-page Prospeo company search preview (max 25 companies, max 1 credit) awaits approval.",
+        detail: "Bounded company search preview (max 25 companies) awaits your explicit approval.",
         updatedAt,
       });
     }
@@ -233,7 +233,7 @@ export function classifyConversationWorkItem(
         category: "active_running",
         bucket: "active_research",
         label: "Company search running",
-        detail: "Ano is running the approved 1-page Prospeo company search.",
+        detail: "Ano is running the approved bounded company search.",
         updatedAt,
       });
     }
@@ -247,7 +247,7 @@ export function classifyConversationWorkItem(
         label: "Company search review required",
         detail:
           companySearch.failureMessage ??
-          "Prospeo company search stopped without retry and requires review.",
+          "Company search stopped without retry and requires review.",
         updatedAt,
       });
     }

@@ -4,7 +4,9 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import type { LeadExportScope } from "@/lib/ano/lead-export";
 import type { WorkspaceContactDirectoryItem } from "@/lib/ano/people-playbooks";
+import { downloadExportEndpoint } from "@/components/artifacts/lead-export-card";
 import { MaterialButton } from "@/components/material/material-button";
 import { useMaterialWeb } from "@/components/material/register";
 import { useAppShell } from "@/components/shell/app-shell";
@@ -37,6 +39,8 @@ function PeopleContent() {
   const [contacts, setContacts] = useState<WorkspaceContactDirectoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportScope, setExportScope] = useState<LeadExportScope>("with_email");
+  const [exporting, setExporting] = useState(false);
 
   const loadPeople = useCallback(async () => {
     setLoading(true);
@@ -96,16 +100,54 @@ function PeopleContent() {
     <section className="ano-section-page">
       <header className="ano-section-header">
         <div>
-          <p className="ano-rail-kicker">PIPELINE · PHASE E</p>
-          <h1>People & contact verification</h1>
+          <p className="ano-rail-kicker">PIPELINE · PHASE E / 9C</p>
+          <h1>People &amp; contact export</h1>
           <p>
-            Named buyers discovered for shortlisted companies alongside explicit Dropcontact
-            verification status. Select contacts inside a research thread to verify emails.
+            Named buyers discovered for shortlisted companies alongside Prospeo, Dropcontact, and
+            $0 public website email status. Verify contacts inside a thread or export a CSV.
           </p>
         </div>
-        <MaterialButton variant="filled" onClick={() => router.push("/companies")}>
-          View shortlisted companies
-        </MaterialButton>
+        <div className="m3-action-row">
+          {(
+            [
+              ["with_email", "With email"],
+              ["verified_only", "Verified only"],
+              ["all", "All leads"],
+            ] as Array<[LeadExportScope, string]>
+          ).map(([value, label]) => (
+            <MaterialButton
+              key={value}
+              variant={exportScope === value ? "tonal" : "outlined"}
+              disabled={exporting}
+              onClick={() => setExportScope(value)}
+            >
+              {label}
+            </MaterialButton>
+          ))}
+          <MaterialButton
+            variant="filled"
+            disabled={exporting || contacts.length === 0}
+            onClick={() => {
+              setExporting(true);
+              setError(null);
+              void downloadExportEndpoint(
+                `/api/v1/people/export?scope=${exportScope}`,
+                `ano-workspace-leads-${exportScope}.csv`,
+              )
+                .catch((err) => {
+                  setError(
+                    err instanceof Error ? err.message : "Ano could not export the leads CSV.",
+                  );
+                })
+                .finally(() => setExporting(false));
+            }}
+          >
+            {exporting ? "Exporting CSV…" : "Export Leads CSV"}
+          </MaterialButton>
+          <MaterialButton variant="outlined" onClick={() => router.push("/companies")}>
+            View shortlisted companies
+          </MaterialButton>
+        </div>
       </header>
 
       <div className="ano-tabs-bar">
@@ -175,7 +217,10 @@ function PeopleContent() {
                 </header>
                 {contact.verifiedDetails?.email ? (
                   <p className="m3-verified-contact-line">
-                    Dropcontact verified email: <strong>{contact.verifiedDetails.email}</strong>
+                    {contact.verifiedDetails.provider === "prospeo"
+                      ? "Prospeo verified email:"
+                      : "Dropcontact verified email:"}{" "}
+                    <strong>{contact.verifiedDetails.email}</strong>
                     {contact.verifiedDetails.emailQualification
                       ? ` (${contact.verifiedDetails.emailQualification})`
                       : ""}
@@ -183,10 +228,49 @@ function PeopleContent() {
                       ? ` · Phone: ${contact.verifiedDetails.phone}`
                       : ""}
                   </p>
+                ) : contact.publicEmail ? (
+                  <p className="m3-verified-contact-line">
+                    Website email (
+                    {contact.publicEmailKind === "direct_public"
+                      ? "direct match"
+                      : "office inbox"}{" "}
+                    · $0): <strong>{contact.publicEmail}</strong>
+                    {contact.publicPhone ? ` · Phone: ${contact.publicPhone}` : ""}
+                    {contact.sourceUrl ? (
+                      <>
+                        {" "}
+                        <a
+                          href={contact.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="m3-text-link"
+                        >
+                          Source page ↗
+                        </a>
+                      </>
+                    ) : null}
+                  </p>
                 ) : (
                   <p className="m3-helper-note">
                     {contact.roleRationale ??
-                      "Named candidate from Prospeo. Open the research thread to request selective Dropcontact verification."}
+                      (contact.discoveryProvider === "website_team" ||
+                      contact.sourceKey.startsWith("website-team:")
+                        ? "Named candidate from company website. Open the research thread to request selective Prospeo or Dropcontact verification."
+                        : "Named candidate from Prospeo. Open the research thread to request selective Prospeo or Dropcontact verification.")}
+                    {contact.publicPhone ? ` · Phone: ${contact.publicPhone}` : ""}
+                    {contact.sourceUrl ? (
+                      <>
+                        {" "}
+                        <a
+                          href={contact.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="m3-text-link"
+                        >
+                          Source page ↗
+                        </a>
+                      </>
+                    ) : null}
                   </p>
                 )}
               </article>

@@ -10,18 +10,28 @@ import {
   buildTargetCompanySearchPreview,
   companySearchViewSchema,
   deriveIndustryKeywords,
+  deriveOsmTagFilters,
   scoreAndBuildAccountDossier,
   summarizeAccountCohort,
   workspaceAccountDirectoryItemSchema,
   type AccountCandidateDossier,
   type AccountCohortSummary,
   type AccountLifecycleState,
+  type CompanyDiscoveryProvider,
   type CompanySearchView,
+  type NormalizedDiscoveredCompanyInput,
+  type OsmResolvedArea,
+  type OsmTagFilter,
   type ProspeoProviderState,
   type WorkspaceAccountDirectoryItem,
 } from "@/lib/ano/company-discovery";
 import type { IndustryProfile, MarketProfile } from "@/lib/ano/market-synthesis";
 import type { ResearchBrief } from "@/lib/ano/research-conversation";
+import {
+  enrichMissingOsmWebsitesWithSearxng,
+  OsmClientError,
+  searchOsmBusinesses,
+} from "@/server/connectors/openstreetmap/osm-client";
 import {
   ProspeoClientError,
   searchProspeoCompanies,
@@ -125,7 +135,7 @@ function mapAccountRow(row: Row, fallbackClaimIds: string[] = []): AccountCandid
       rationale:
         typeof rawFit.rationale === "string" && rawFit.rationale
           ? rawFit.rationale
-          : `Scored ${totalScore}/100 from Prospeo company attributes.`,
+          : `Scored ${totalScore}/100 from ${rawSnapshot.provider === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} company attributes.`,
       industryHypothesisNote:
         typeof rawFit.industryHypothesisNote === "string" && rawFit.industryHypothesisNote
           ? rawFit.industryHypothesisNote
@@ -218,8 +228,10 @@ function buildSearchViewFromRows(
   const canonicalLocations = asStringArray(searchRow.canonical_locations_json);
   const scopeJson = asRecord(searchRow.scope_json);
   const requestedLocations = asStringArray(scopeJson.locations, canonicalLocations);
+  const canonicalIndustries = asStringArray(scopeJson.canonicalIndustries);
   const claimIds = asStringArray(searchRow.claim_ids_json);
   const excludedCategories = asStringArray(searchRow.excluded_categories_json);
+  const resolvedKeywords = asStringArray(scopeJson.industryKeywords, industryKeywords);
   const criteria = asStringArray(searchRow.criteria_json, [
     `Locked market route: ${targetMarketName} (${canonicalLocations.join(", ")})`,
     `Target segment context: ${targetIndustryName}`,
@@ -231,6 +243,9 @@ function buildSearchViewFromRows(
   const normalizedStatus =
     rawStatus === "failed" ? "failed_safe" : rawStatus;
 
+  const providerKey: CompanyDiscoveryProvider =
+    searchRow.provider_key === "openstreetmap" ? "openstreetmap" : "prospeo";
+
   const rawCohort = asRecord(searchRow.cohort_summary_json);
   let cohort: AccountCohortSummary | null = null;
   if (normalizedStatus === "completed") {
@@ -241,6 +256,7 @@ function buildSearchViewFromRows(
         targetMarketName,
         targetIndustryName,
         parsedCohort.data.providerTotalAvailable,
+        providerKey,
       );
     } else {
       const receipt = asRecord(searchRow.provider_receipt_json);
@@ -251,6 +267,7 @@ function buildSearchViewFromRows(
         targetMarketName,
         targetIndustryName,
         totalCount,
+        providerKey,
       );
     }
   }
@@ -262,7 +279,7 @@ function buildSearchViewFromRows(
     providerActionRequestId: searchRow.provider_action_request_id
       ? String(searchRow.provider_action_request_id)
       : null,
-    providerKey: "prospeo",
+    providerKey,
     status: normalizedStatus,
     targetMarketName,
     targetIndustryName,
@@ -270,15 +287,18 @@ function buildSearchViewFromRows(
       requestedLocations.length > 0 ? requestedLocations : ["Unspecified location"],
     canonicalLocations:
       canonicalLocations.length > 0 ? canonicalLocations : ["Unspecified location"],
-    industryKeywords: asStringArray(scopeJson.industryKeywords, industryKeywords),
+    canonicalIndustries,
+    industryKeywords: resolvedKeywords,
     excludedCategories,
     linkedClaimIds: claimIds,
     criteria,
     providerFilters: asRecord(searchRow.filters_json),
     maximumResults: 25,
-    estimatedMaximumCredits: 1,
+    estimatedMaximumCredits: providerKey === "openstreetmap" ? 0 : 1,
     estimateDetail:
-      "One first-page Prospeo request returns up to 25 companies and costs at most 1 credit only when at least one company matches; exact duplicate pages may be free for 30 days.",
+      providerKey === "openstreetmap"
+        ? "Free OpenStreetMap local discovery returns up to 25 physical businesses for 0 credits. Optional missing-website lookup uses your private SearXNG instance (max 10 lookups, 0 credits). No Prospeo credits are spent."
+        : "One first-page Prospeo request returns up to 25 companies and costs at most 1 credit only when at least one company matches; exact duplicate pages may be free for 30 days.",
     resultCount:
       typeof searchRow.result_count === "number" ? searchRow.result_count : null,
     providerReceipt: asRecord(searchRow.provider_receipt_json),
@@ -290,6 +310,76 @@ function buildSearchViewFromRows(
     createdAt: iso(searchRow.created_at),
     updatedAt: iso(searchRow.updated_at),
   });
+}
+
+export function selectAccountsForCompanySearchView(
+  status: string,
+  activeActionId: string | null,
+  allAccounts: Row[],
+): Row[] {
+  const hasLatestRunRows =
+    Boolean(activeActionId) &&
+    allAccounts.some((row) => String(row.provider_action_request_id ?? "") === activeActionId);
+
+  if (status === "completed" && hasLatestRunRows) {
+    const matching = allAccounts.filter(
+      (row) =>
+        String(row.provider_action_request_id ?? "") === activeActionId ||
+        String(row.lifecycle_state ?? "") === "shortlisted",
+    );
+    if (matching.length <= 50) {
+      return matching;
+    }
+    const activeRows = matching
+      .filter((row) => String(row.provider_action_request_id ?? "") === activeActionId)
+      .slice(0, 25);
+    const activeSet = new Set(activeRows);
+    const extraShortlisted = matching
+      .filter((row) => !activeSet.has(row) && String(row.lifecycle_state ?? "") === "shortlisted")
+      .slice(0, 50 - activeRows.length);
+    const selected = new Set([...activeRows, ...extraShortlisted]);
+    return matching.filter((row) => selected.has(row));
+  }
+
+  const shortlisted = allAccounts
+    .filter((row) => String(row.lifecycle_state ?? "") === "shortlisted")
+    .slice(0, 50);
+  if (shortlisted.length > 0) {
+    return shortlisted;
+  }
+
+  if (allAccounts.length === 0) {
+    return [];
+  }
+
+  const batchMaxTime = new Map<string, number>();
+  for (const row of allAccounts) {
+    const batchKey = String(row.provider_action_request_id ?? "");
+    const rawTs = row.retrieved_at ?? row.created_at;
+    const ts = rawTs ? new Date(String(rawTs)).getTime() : 0;
+    const safeTs = Number.isFinite(ts) ? ts : 0;
+    const prev = batchMaxTime.get(batchKey) ?? Number.NEGATIVE_INFINITY;
+    if (safeTs > prev) {
+      batchMaxTime.set(batchKey, safeTs);
+    }
+  }
+
+  let newestBatchKey: string | null = null;
+  let newestBatchTs = Number.NEGATIVE_INFINITY;
+  for (const [batchKey, ts] of batchMaxTime.entries()) {
+    if (newestBatchKey === null || ts > newestBatchTs) {
+      newestBatchKey = batchKey;
+      newestBatchTs = ts;
+    }
+  }
+
+  if (newestBatchKey === null) {
+    return allAccounts.slice(0, 25);
+  }
+
+  return allAccounts
+    .filter((row) => String(row.provider_action_request_id ?? "") === newestBatchKey)
+    .slice(0, 25);
 }
 
 export async function readCompanySearchForConversation(
@@ -348,9 +438,19 @@ export async function readCompanySearchForConversation(
     );
   }
 
+  const activeActionId = searchRow.provider_action_request_id
+    ? String(searchRow.provider_action_request_id)
+    : null;
+  const allAccounts = (accountRows ?? []) as Row[];
+  const filteredAccounts = selectAccountsForCompanySearchView(
+    String(searchRow.status ?? ""),
+    activeActionId,
+    allAccounts,
+  );
+
   return buildSearchViewFromRows(
     searchRow as Row,
-    (accountRows ?? []) as Row[],
+    filteredAccounts,
     targetMarketName,
     targetIndustryName,
     industryKeywords,
@@ -361,13 +461,30 @@ export async function saveCompanySearchPreview(
   session: WorkspaceSession,
   input: {
     context: LockedTargetContext;
+    providerKey?: CompanyDiscoveryProvider;
     requestedLocations: string[];
     canonicalLocations: string[];
+    canonicalIndustries?: string[];
+    searchKeywords?: string[];
     excludedCategories: string[];
+    osmAreas?: OsmResolvedArea[];
+    osmTags?: OsmTagFilter[];
+    resolveWebsites?: boolean;
   },
 ): Promise<CompanySearchView> {
   requireLiveSession(session);
-  const { context, requestedLocations, canonicalLocations, excludedCategories } = input;
+  const {
+    context,
+    providerKey = "prospeo",
+    requestedLocations,
+    canonicalLocations,
+    canonicalIndustries = [],
+    searchKeywords = [],
+    excludedCategories,
+    osmAreas = [],
+    osmTags = [],
+    resolveWebsites = true,
+  } = input;
 
   const { data: existing, error: existingError } = await session.client
     .from("provider_company_searches")
@@ -382,7 +499,7 @@ export async function saveCompanySearchPreview(
     );
   }
 
-  if (existing && String(existing.status) !== "awaiting_approval") {
+  if (existing && String(existing.status) === "running") {
     const view = await readCompanySearchForConversation(session, context.conversationId);
     if (view) return view;
   }
@@ -395,13 +512,21 @@ export async function saveCompanySearchPreview(
     targetDecisionId: context.targetDecisionId,
     market: context.market,
     industry: context.industry,
+    providerKey,
     requestedLocations,
     canonicalLocations,
+    canonicalIndustries,
+    searchKeywords,
     excludedCategories,
+    osmAreas,
+    osmTags,
+    resolveWebsites,
     nowIso: now,
   });
 
   const actionRequestId = crypto.randomUUID();
+  const previewRequestKey = `${providerKey}-preview:${context.targetDecisionId}`;
+  const estimatedCredits = providerKey === "openstreetmap" ? 0 : 1;
   const { error: actionError } = await session.client
     .from("provider_action_requests")
     .upsert(
@@ -409,21 +534,34 @@ export async function saveCompanySearchPreview(
         id: actionRequestId,
         workspace_id: session.workspace.id,
         ano_research_run_id: context.anoResearchRunId,
-        provider_key: "prospeo",
+        provider_key: providerKey,
         action_kind: "company_search_preview",
-        request_key: `prospeo-preview:${context.targetDecisionId}`,
+        request_key: previewRequestKey,
         request_json: {
+          providerKey,
           requestedLocations,
           canonicalLocations,
+          canonicalIndustries: preview.canonicalIndustries,
+          industryKeywords: preview.industryKeywords,
           excludedCategories,
+          osmAreas,
+          osmTags,
+          resolveWebsites,
         },
         status: "succeeded",
         maximum_operations: 1,
         reported_credits: 0,
-        provider_receipt_json: {
-          suggestion_requests: canonicalLocations.length,
-          credit_bearing_request: false,
-        },
+        provider_receipt_json:
+          providerKey === "openstreetmap"
+            ? {
+                source: "openstreetmap",
+                resolved_areas: osmAreas.length || canonicalLocations.length,
+                credit_bearing_request: false,
+              }
+            : {
+                suggestion_requests: canonicalLocations.length,
+                credit_bearing_request: false,
+              },
         created_by: session.actorId,
         approved_by: session.actorId,
         approved_at: now,
@@ -435,7 +573,7 @@ export async function saveCompanySearchPreview(
 
   if (actionError) {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Ano could not record the zero-credit Prospeo preview request.",
+      `Ano could not record the zero-credit ${providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} preview request.`,
     );
   }
 
@@ -443,16 +581,16 @@ export async function saveCompanySearchPreview(
     .from("provider_action_requests")
     .select("id")
     .eq("ano_research_run_id", context.anoResearchRunId)
-    .eq("request_key", `prospeo-preview:${context.targetDecisionId}`)
+    .eq("request_key", previewRequestKey)
     .maybeSingle();
 
   const requestHash = createHash("sha256")
     .update(
       JSON.stringify({
-        provider: "prospeo",
+        provider: providerKey,
         page: 1,
         targetDecisionId: context.targetDecisionId,
-        canonicalLocations,
+        filters: preview.providerFilters,
       }),
     )
     .digest("hex");
@@ -463,13 +601,18 @@ export async function saveCompanySearchPreview(
     conversation_id: context.conversationId,
     target_decision_id: context.targetDecisionId,
     provider_action_request_id: savedAction?.id ? String(savedAction.id) : null,
-    provider_key: "prospeo",
+    provider_key: providerKey,
     request_hash: requestHash,
     scope_json: {
+      providerKey,
       locations: preview.requestedLocations,
       targetMarketName: preview.targetMarketName,
       targetIndustryName: preview.targetIndustryName,
+      canonicalIndustries: preview.canonicalIndustries,
       industryKeywords: preview.industryKeywords,
+      osmAreas,
+      osmTags,
+      resolveWebsites,
     },
     filters_json: preview.providerFilters,
     criteria_json: preview.criteria,
@@ -477,8 +620,16 @@ export async function saveCompanySearchPreview(
     claim_ids_json: preview.linkedClaimIds,
     excluded_categories_json: preview.excludedCategories,
     maximum_results: 25,
-    estimated_max_credits: 1,
+    estimated_max_credits: estimatedCredits,
     status: "awaiting_approval",
+    approved_by: null,
+    approved_at: null,
+    started_at: null,
+    completed_at: null,
+    result_count: null,
+    cohort_summary_json: {},
+    failure_code: null,
+    failure_message: null,
     provider_receipt_json: preview.providerReceipt,
     updated_at: now,
   };
@@ -489,22 +640,23 @@ export async function saveCompanySearchPreview(
 
   if (upsertError) {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Ano could not save the Prospeo company-search preview.",
+      `Ano could not save the ${providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} company-search preview.`,
     );
   }
 
   await session.client.from("audit_logs").insert({
     workspace_id: session.workspace.id,
     actor_id: session.actorId,
-    event_type: "provider.prospeo.preview_prepared",
+    event_type: `provider.${providerKey}.preview_prepared`,
     outcome: "awaiting_approval",
     details_json: {
+      provider: providerKey,
       conversation_id: context.conversationId,
       target_decision_id: context.targetDecisionId,
       locations: canonicalLocations,
       suggestion_requests: canonicalLocations.length,
       credit_bearing_request: false,
-      estimated_max_credits: 1,
+      estimated_max_credits: estimatedCredits,
     },
   });
 
@@ -514,7 +666,10 @@ export async function saveCompanySearchPreview(
       graph_run_id: context.graphRunId,
       event_key: `phase-d-preview:${context.targetDecisionId}`,
       label: "Company search preview prepared",
-      detail: `Ano verified canonical Prospeo locations (${canonicalLocations.join(", ")}) with free suggestions. Waiting for your explicit 1-page (max 25 companies / max 1 credit) approval.`,
+      detail:
+        providerKey === "openstreetmap"
+          ? `Ano resolved OpenStreetMap areas (${canonicalLocations.join(", ")}) for free local discovery ($0 credits, max 25 businesses). Waiting for your explicit approval.`
+          : `Ano verified canonical Prospeo locations (${canonicalLocations.join(", ")}) with free suggestions. Waiting for your explicit 1-page (max 25 companies / max 1 credit) approval.`,
     },
     { onConflict: "graph_run_id,event_key" },
   );
@@ -543,8 +698,19 @@ export async function executeApprovedProspeoSearch(
 
   if (beforeError || !beforeRow) {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Ano could not find that Prospeo company-search preview.",
+      "Ano could not find that company-search preview.",
       "SEARCH_NOT_FOUND",
+    );
+  }
+
+  const providerKey: CompanyDiscoveryProvider =
+    beforeRow.provider_key === "openstreetmap" ? "openstreetmap" : "prospeo";
+  const providerLabel = providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo";
+
+  if (providerKey === "prospeo" && !prospeoConfiguration().available) {
+    throw new TargetAccountDiscoveryPersistenceError(
+      "Add PROSPEO_KEY on the server before running Prospeo company discovery.",
+      "PROSPEO_NOT_CONFIGURED",
     );
   }
 
@@ -582,16 +748,18 @@ export async function executeApprovedProspeoSearch(
     );
   }
 
-  const actionId = crypto.randomUUID();
   const filters = asRecord(beforeRow.filters_json);
+  const scopeJson = asRecord(beforeRow.scope_json);
+  const requestSuffix = String(beforeRow.request_hash ?? startedAt).slice(0, 12);
+  const requestKey = `${providerKey}-search:${searchId}:${requestSuffix}`;
   await session.client.from("provider_action_requests").upsert(
     {
-      id: actionId,
+      id: crypto.randomUUID(),
       workspace_id: session.workspace.id,
       ano_research_run_id: context.anoResearchRunId,
-      provider_key: "prospeo",
+      provider_key: providerKey,
       action_kind: "company_search",
-      request_key: `prospeo-search:${searchId}`,
+      request_key: requestKey,
       request_json: { page: 1, filters },
       status: "running",
       maximum_operations: 1,
@@ -603,22 +771,88 @@ export async function executeApprovedProspeoSearch(
     { onConflict: "ano_research_run_id,request_key" },
   );
 
+  const { data: savedSearchAction } = await session.client
+    .from("provider_action_requests")
+    .select("id")
+    .eq("ano_research_run_id", context.anoResearchRunId)
+    .eq("request_key", requestKey)
+    .maybeSingle();
+  const actionId = savedSearchAction?.id ? String(savedSearchAction.id) : crypto.randomUUID();
+
   const canonicalLocations = asStringArray(beforeRow.canonical_locations_json);
+  const canonicalIndustries = asStringArray(scopeJson.canonicalIndustries);
+  const targetKeywords = asStringArray(scopeJson.industryKeywords);
+  const excludedTerms = asStringArray(beforeRow.excluded_categories_json);
   const linkedClaimIds = asStringArray(beforeRow.claim_ids_json);
 
   try {
-    const providerResult = await searchProspeoCompanies(filters, fetcher);
+    let companiesToScore: NormalizedDiscoveredCompanyInput[] = [];
+    let totalCount: number | undefined;
+    let isFree = providerKey === "openstreetmap";
+    let rateLimit: Record<string, unknown> | undefined;
+    let searxngResolvedCount = 0;
+
+    if (providerKey === "openstreetmap") {
+      const rawAreas = Array.isArray(filters.areas)
+        ? filters.areas
+        : Array.isArray(scopeJson.osmAreas)
+          ? scopeJson.osmAreas
+          : [];
+      const areas = rawAreas as OsmResolvedArea[];
+      if (areas.length === 0) {
+        throw new OsmClientError(
+          "LOCATION_NOT_FOUND",
+          "OpenStreetMap search preview has no resolved geographic areas.",
+        );
+      }
+
+      const rawTags = Array.isArray(filters.osm_tags)
+        ? filters.osm_tags
+        : Array.isArray(scopeJson.osmTags)
+          ? scopeJson.osmTags
+          : deriveOsmTagFilters(context.industry.name, targetKeywords);
+      const tags = rawTags as OsmTagFilter[];
+
+      const osmResult = await searchOsmBusinesses(
+        { areas, tags, limit: 25, excludedTerms },
+        fetcher,
+      );
+
+      const shouldResolveWebsites =
+        filters.resolve_missing_websites_via_searxng !== false &&
+        scopeJson.resolveWebsites !== false;
+      if (shouldResolveWebsites) {
+        const enriched = await enrichMissingOsmWebsitesWithSearxng(osmResult.companies, {
+          maxLookups: 10,
+        });
+        companiesToScore = enriched.businesses;
+        searxngResolvedCount = enriched.resolvedCount;
+      } else {
+        companiesToScore = osmResult.companies;
+      }
+      totalCount = osmResult.totalMatchedRaw;
+    } else {
+      const providerResult = await searchProspeoCompanies(filters, fetcher);
+      companiesToScore = providerResult.companies;
+      totalCount = providerResult.totalCount;
+      isFree = providerResult.free;
+      rateLimit = providerResult.rateLimit;
+    }
+
     const completedAt = new Date().toISOString();
 
-    const dossiers = providerResult.companies.map((company) =>
+    const dossiers = companiesToScore.map((company) =>
       scoreAndBuildAccountDossier(company, {
         dossierId: crypto.randomUUID(),
         conversationId: context.conversationId,
         targetDecisionId: context.targetDecisionId,
         companySearchId: searchId,
+        providerKey,
         targetMarketName: context.market.name,
         targetIndustryName: context.industry.name,
         canonicalLocations,
+        canonicalIndustries,
+        targetKeywords,
         linkedClaimIds,
         capturedAt: completedAt,
         lifecycleState: "discovered",
@@ -627,7 +861,7 @@ export async function executeApprovedProspeoSearch(
 
     if (dossiers.length > 0) {
       const rowsToUpsert = dossiers.map((dossier, index) => {
-        const company = providerResult.companies[index];
+        const company = companiesToScore[index];
         return {
           id: dossier.id,
           workspace_id: session.workspace.id,
@@ -644,11 +878,16 @@ export async function executeApprovedProspeoSearch(
           lifecycle_state: dossier.lifecycleState,
           source_label: "provider",
           raw_snapshot: {
-            provider: "prospeo",
+            provider: providerKey,
             providerCompanyId: company?.id ?? dossier.sourceKey,
             website: dossier.website,
             domain: dossier.domain,
             linkedInUrl: dossier.linkedInUrl,
+            osmUrl: company?.osmUrl ?? null,
+            phone: company?.phone ?? null,
+            address: company?.address ?? null,
+            osmTags: company?.osmTags ?? null,
+            websiteSource: company?.websiteSource ?? null,
             employeeCount: dossier.employeeCount,
             description: dossier.description,
             retrievedAt: completedAt,
@@ -679,22 +918,34 @@ export async function executeApprovedProspeoSearch(
       dossiers,
       context.market.name,
       context.industry.name,
-      providerResult.totalCount ?? dossiers.length,
+      totalCount ?? dossiers.length,
+      providerKey,
     );
 
-    const receipt = {
-      free: providerResult.free,
-      result_count: dossiers.length,
-      total_count: providerResult.totalCount ?? dossiers.length,
-      rate_limit: providerResult.rateLimit,
-      credit_bearing_request: true,
-    };
+    const creditBearingRequest = providerKey === "prospeo";
+    const receipt =
+      providerKey === "openstreetmap"
+        ? {
+            free: true,
+            provider: "openstreetmap",
+            result_count: dossiers.length,
+            total_count: totalCount ?? dossiers.length,
+            searxng_websites_resolved: searxngResolvedCount,
+            credit_bearing_request: false,
+          }
+        : {
+            free: isFree,
+            result_count: dossiers.length,
+            total_count: totalCount ?? dossiers.length,
+            rate_limit: rateLimit,
+            credit_bearing_request: true,
+          };
 
     await session.client
       .from("provider_action_requests")
       .update({
         status: "succeeded",
-        reported_credits: providerResult.free || dossiers.length === 0 ? 0 : 1,
+        reported_credits: !creditBearingRequest || isFree || dossiers.length === 0 ? 0 : 1,
         provider_receipt_json: receipt,
         completed_at: completedAt,
       })
@@ -717,14 +968,16 @@ export async function executeApprovedProspeoSearch(
     await session.client.from("audit_logs").insert({
       workspace_id: session.workspace.id,
       actor_id: session.actorId,
-      event_type: "provider.prospeo.company_search_completed",
+      event_type: `provider.${providerKey}.company_search_completed`,
       outcome: "completed",
       details_json: {
+        provider: providerKey,
         conversation_id: context.conversationId,
         target_decision_id: context.targetDecisionId,
         result_count: dossiers.length,
-        free: providerResult.free,
-        credit_bearing_request: true,
+        free: isFree,
+        searxng_websites_resolved: searxngResolvedCount,
+        credit_bearing_request: creditBearingRequest,
       },
     });
 
@@ -734,7 +987,10 @@ export async function executeApprovedProspeoSearch(
         graph_run_id: context.graphRunId,
         event_key: `phase-d-search:${searchId}`,
         label: "Company cohort discovered",
-        detail: `Prospeo returned ${dossiers.length} candidate companies on one approved page for ${context.market.name} · ${context.industry.name}. Named buyer search and contact verification remain locked.`,
+        detail:
+          providerKey === "openstreetmap"
+            ? `OpenStreetMap returned ${dossiers.length} local candidate${dossiers.length === 1 ? "" : "s"} ($0 credits${searxngResolvedCount ? `; ${searxngResolvedCount} official website${searxngResolvedCount === 1 ? "" : "s"} resolved via SearXNG` : ""}) for ${context.market.name} · ${context.industry.name}. Named buyer search and contact verification remain locked.`
+            : `Prospeo returned ${dossiers.length} candidate companies on one approved page for ${context.market.name} · ${context.industry.name}. Named buyer search and contact verification remain locked.`,
       },
       { onConflict: "graph_run_id,event_key" },
     );
@@ -742,17 +998,20 @@ export async function executeApprovedProspeoSearch(
     return (await readCompanySearchForConversation(session, context.conversationId))!;
   } catch (error) {
     const completedAt = new Date().toISOString();
-    const noResults = error instanceof ProspeoClientError && error.code === "NO_RESULTS";
+    const isKnownProviderError =
+      error instanceof ProspeoClientError || error instanceof OsmClientError;
+    const noResults = isKnownProviderError && error.code === "NO_RESULTS";
     const status = noResults ? "completed" : "requires_manual_review";
+    const creditBearingRequest = providerKey === "prospeo";
     const message = noResults
-      ? "Prospeo returned no companies for this approved query."
-      : error instanceof ProspeoClientError
+      ? `${providerLabel} returned no companies for this approved query.`
+      : isKnownProviderError
         ? error.message
-        : "Ano could not complete the approved Prospeo search safely and did not retry automatically.";
+        : `Ano could not complete the approved ${providerLabel} search safely and did not retry automatically.`;
     const failureCode =
       noResults
         ? null
-        : error instanceof ProspeoClientError
+        : isKnownProviderError
           ? error.code
           : "DISCOVERY_FAILED";
 
@@ -761,6 +1020,7 @@ export async function executeApprovedProspeoSearch(
       context.market.name,
       context.industry.name,
       0,
+      providerKey,
     );
 
     await session.client
@@ -770,7 +1030,8 @@ export async function executeApprovedProspeoSearch(
         reported_credits: 0,
         failure_message: noResults ? null : message,
         provider_receipt_json: {
-          credit_bearing_request: true,
+          provider: providerKey,
+          credit_bearing_request: creditBearingRequest,
           outcome: noResults ? "no_results" : "manual_review_required",
         },
         completed_at: completedAt,
@@ -788,7 +1049,8 @@ export async function executeApprovedProspeoSearch(
         failure_code: failureCode,
         failure_message: noResults ? null : message,
         provider_receipt_json: {
-          credit_bearing_request: true,
+          provider: providerKey,
+          credit_bearing_request: creditBearingRequest,
           outcome: noResults ? "no_results" : "manual_review_required",
         },
       })
@@ -799,13 +1061,14 @@ export async function executeApprovedProspeoSearch(
     await session.client.from("audit_logs").insert({
       workspace_id: session.workspace.id,
       actor_id: session.actorId,
-      event_type: "provider.prospeo.company_search_finished",
+      event_type: `provider.${providerKey}.company_search_finished`,
       outcome: noResults ? "no_results" : "requires_manual_review",
       details_json: {
+        provider: providerKey,
         conversation_id: context.conversationId,
         target_decision_id: context.targetDecisionId,
         error_code: failureCode,
-        credit_bearing_request: true,
+        credit_bearing_request: creditBearingRequest,
       },
     });
 

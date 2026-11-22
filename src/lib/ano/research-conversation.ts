@@ -4,6 +4,7 @@ import type { CompanySearchView } from "./company-discovery";
 import type { EvidenceResearchView } from "./evidence-research";
 import type { MarketSynthesis } from "./market-synthesis";
 import type { OutreachExecutionView } from "./outreach-execution";
+import type { OutreachTemplatePackView } from "./outreach-templates";
 import type { PeopleDiscoveryView } from "./people-playbooks";
 
 export const graphRunStatusSchema = z.enum([
@@ -18,15 +19,56 @@ export const graphRunStatusSchema = z.enum([
 
 export type GraphRunStatus = z.infer<typeof graphRunStatusSchema>;
 
+export const conversationMessageMetadataSchema = z.object({
+  companySearchUpdated: z.boolean().optional(),
+  companySearchProvider: z.enum(["prospeo", "openstreetmap"]).optional(),
+  companySearchId: z.string().uuid().optional(),
+  companySearchResultCount: z.number().int().min(0).optional(),
+  awaitingCreditApproval: z.boolean().optional(),
+  peopleSearchUpdated: z.boolean().optional(),
+  peopleSearchProvider: z.enum(["website_team", "prospeo"]).optional(),
+  peopleSearchId: z.string().uuid().optional(),
+  peopleResultCount: z.number().int().min(0).optional(),
+  awaitingPersonCreditApproval: z.boolean().optional(),
+  templatePackUpdated: z.boolean().optional(),
+  templatePackVersion: z.number().int().positive().optional(),
+  lintPassedCount: z.number().int().min(0).optional(),
+  actionSummary: z.string().max(400).optional(),
+});
+export type ConversationMessageMetadata = z.infer<typeof conversationMessageMetadataSchema>;
+
 export const conversationMessageSchema = z.object({
   id: z.string().uuid(),
   role: z.enum(["user", "assistant"]),
   kind: z.enum(["message", "clarifying_question", "research_plan", "decision"]),
   text: z.string().trim().min(1).max(8_000),
   createdAt: z.string().datetime(),
+  metadata: conversationMessageMetadataSchema.optional(),
 });
 
 export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
+
+export type ChronologicalThreadEntry<K extends string = string> = {
+  id: string;
+  kind: K;
+  timestamp: string;
+  orderHint: number;
+};
+
+export function sortChronologicalThreadEntries<
+  T extends { id: string; timestamp: string; orderHint: number },
+>(entries: T[]): T[] {
+  return [...entries].sort((left, right) => {
+    const leftMs = new Date(left.timestamp).getTime();
+    const rightMs = new Date(right.timestamp).getTime();
+    const safeLeft = Number.isFinite(leftMs) ? leftMs : 0;
+    const safeRight = Number.isFinite(rightMs) ? rightMs : 0;
+    if (safeLeft !== safeRight) {
+      return safeLeft - safeRight;
+    }
+    return left.orderHint - right.orderHint;
+  });
+}
 
 const conciseText = z.string().trim().min(1).max(1_000);
 
@@ -171,6 +213,7 @@ export const artifactTypeSchema = z.enum([
   "people_discovery",
   "contact_verification",
   "account_playbook",
+  "outreach_template_pack",
   "outreach_drafts",
   "execution_proposals",
 ]);
@@ -213,6 +256,7 @@ export function buildConversationMessageParts(
   companySearch: CompanySearchView | null = null,
   peopleDiscovery: PeopleDiscoveryView | null = null,
   outreachExecution: OutreachExecutionView | null = null,
+  templatePack: OutreachTemplatePackView | null = null,
 ): MessagePart[] {
   const parts: MessagePart[] = [];
 
@@ -304,6 +348,14 @@ export function buildConversationMessageParts(
       type: "artifact",
       artifactType: "account_playbook",
       artifactId: playbook.id,
+    });
+  }
+
+  if (templatePack) {
+    parts.push({
+      type: "artifact",
+      artifactType: "outreach_template_pack",
+      artifactId: templatePack.id,
     });
   }
 

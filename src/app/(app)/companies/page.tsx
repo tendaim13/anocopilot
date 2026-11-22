@@ -147,7 +147,7 @@ function CompaniesContent() {
           <p className="ano-rail-kicker">PIPELINE · PHASE D</p>
           <h1>Companies directory</h1>
           <p>
-            Signal-backed Prospeo company candidates anchored to your locked Phase C target routes.
+            Signal-backed company candidates anchored to your locked Phase C target routes.
             Every dossier preserves retrieval provenance separately from industry claims.
           </p>
         </div>

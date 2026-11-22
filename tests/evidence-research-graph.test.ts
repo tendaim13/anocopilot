@@ -6,6 +6,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import type { ResearchBrief, ResearchPlan } from "@/lib/ano/research-conversation";
 import type { EvidenceResearchExecutor, EvidenceResearchPlanner } from "@/server/langgraph/evidence-research-graph";
 import { createEvidenceResearchGraph } from "@/server/langgraph/evidence-research-graph";
+import { isEvidenceResearchActionKind } from "@/server/persistence/evidence-research-store";
 
 const brief: ResearchBrief = {
   offer: "AI workflows that turn quotes into jobs",
@@ -102,4 +103,25 @@ test("Phase B never exceeds its configured query ceiling", async () => {
     currentNode: "plan_queries",
   }, { configurable: { thread_id: "phase-b-ceiling" } });
   assert.deepEqual(searched, queries.map((query) => query.id));
+});
+
+test("Phase B action kind filter excludes Phase D/E/F provider actions", () => {
+  for (const kind of ["research_run", "search", "fetch"]) {
+    assert.equal(isEvidenceResearchActionKind(kind), true);
+  }
+  for (const kind of [
+    "company_search_preview",
+    "company_search",
+    "person_search_preview",
+    "person_search",
+    "contact_verification_preview",
+    "contact_verification",
+    "mercury_proposal",
+    "outreach_proposal",
+    "",
+    null,
+    undefined,
+  ]) {
+    assert.equal(isEvidenceResearchActionKind(kind), false);
+  }
 });

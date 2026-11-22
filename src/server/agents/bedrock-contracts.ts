@@ -1,4 +1,5 @@
 import type { ConverseCommandOutput, Message, SystemContentBlock, ToolConfiguration } from "@aws-sdk/client-bedrock-runtime";
+import type { BaseMessage } from "@langchain/core/messages";
 
 import type { ResearchInput } from "@/lib/ano/types";
 import { salesResearchRole, salesResearchSystemInstructions } from "@/server/agents/roles/sales-research";
@@ -9,6 +10,33 @@ export type BedrockPlannerConfig = {
   modelId: string;
   guardrailIdentifier: string;
   guardrailVersion: string;
+};
+
+export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
+
+export type GeminiPlannerConfig = {
+  provider: "gemini";
+  apiKey: string;
+  modelId: string;
+  baseUrl: string;
+  thinkingBudget?: number;
+  thinkingLevel?: GeminiThinkingLevel;
+};
+
+export type OllamaPlannerConfig = {
+  provider: "ollama";
+  baseUrl: string;
+  modelId: string;
+  apiKey?: string;
+};
+
+export type LlmPlannerConfig =
+  | ({ provider?: "bedrock" } & BedrockPlannerConfig)
+  | OllamaPlannerConfig
+  | GeminiPlannerConfig;
+
+export type InvokableChatModel = {
+  invoke(messages: BaseMessage[]): Promise<{ content: unknown }>;
 };
 
 export type BedrockConverseRequest = {

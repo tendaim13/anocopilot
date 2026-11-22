@@ -2,7 +2,7 @@ import "server-only";
 
 import type { WorkspaceSession } from "@/contracts/ano";
 import type { LockTargetDecisionInput } from "@/lib/ano/market-synthesis";
-import { BedrockConfigurationError, getAnoAgentMode, getBedrockPlannerConfig } from "@/server/agents/bedrock";
+import { BedrockConfigurationError, getActivePlannerConfig } from "@/server/agents/bedrock";
 import { createMarketSynthesisModel, MarketSynthesisModelError } from "@/server/agents/market-synthesis-model";
 import { getResearchConversation } from "@/server/domain/research-conversation-service";
 import { getResearchCheckpointer } from "@/server/langgraph/checkpointer";
@@ -26,12 +26,13 @@ export class MarketSynthesisServiceError extends Error {
   }
 }
 
-function requireBedrock() {
-  if (getAnoAgentMode() !== "bedrock") throw new MarketSynthesisServiceError("Ano needs Bedrock mode enabled before it can analyze the saved evidence.", "BEDROCK_DISABLED");
+function requirePlannerConfig() {
   try {
-    return getBedrockPlannerConfig();
+    return getActivePlannerConfig();
   } catch (error) {
-    if (error instanceof BedrockConfigurationError) throw new MarketSynthesisServiceError(error.message, "BEDROCK_NOT_CONFIGURED");
+    if (error instanceof BedrockConfigurationError) {
+      throw new MarketSynthesisServiceError(error.message, "PLANNER_NOT_CONFIGURED");
+    }
     throw error;
   }
 }
@@ -58,7 +59,7 @@ export async function analyseMarketSynthesisForConversation(session: WorkspaceSe
   if (!claim.claimed) return readMarketSynthesis(session, conversationId);
 
   try {
-    const [checkpointer, configuration] = await Promise.all([getResearchCheckpointer(), Promise.resolve(requireBedrock())]);
+    const [checkpointer, configuration] = await Promise.all([getResearchCheckpointer(), Promise.resolve(requirePlannerConfig())]);
     const graph = createMarketSynthesisGraph(createMarketSynthesisModel(configuration), {
       assess: assessSourceLedger,
       saveNoUsableEvidence: (synthesisId, nextAssessment, graphRunId) => saveNoUsableEvidence(session, synthesisId, nextAssessment, graphRunId),
@@ -74,6 +75,9 @@ export async function analyseMarketSynthesisForConversation(session: WorkspaceSe
       currentNode: "assess_evidence_coverage",
     }, { configurable: { thread_id: `ano:synthesis:${claim.synthesisId}` } });
   } catch (error) {
+    if (error instanceof MarketSynthesisModelError && error.reason) {
+      console.error("[ano:phase-c]", error.message, error.reason);
+    }
     await stopMarketSynthesis(session, claim.synthesisId, input.graphRunId, error).catch(() => undefined);
     if (error instanceof MarketSynthesisModelError || error instanceof MarketSynthesisPersistenceError || error instanceof MarketSynthesisServiceError) {
       return readMarketSynthesis(session, conversationId);

@@ -1,0 +1,83 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  migrate-and-deploy:
+    name: Migrate Ano DB & Deploy to Vercel
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify migrations, types, and tests before release
+        env:
+          ANO_AGENT_MODE: disabled
+        run: |
+          npm run check:migrations
+          npm run typecheck
+          npm test
+
+      - name: Apply & verify Ano Supabase migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_DB_SSL_CA: ${{ secrets.SUPABASE_DB_SSL_CA }}
+          ANO_DATABASE_LABEL: ano
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::notice::SUPABASE_DB_URL secret is not set in the production GitHub environment; skipping DB migrations."
+            exit 0
+          fi
+          npm run db:apply:ci
+          npm run db:status:ci
+
+      - name: Build & deploy prebuilt bundle to Vercel Production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets are not set yet; skipping Vercel deployment."
+            exit 0
+          fi
+
+          npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+          npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
+          DEPLOY_URL=$(npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1 | tr -d '[:space:]')
+          echo "Deployed URL: $DEPLOY_URL"
+
+          HEALTH_JSON=$(curl -fsS "${DEPLOY_URL}/api/health")
+          echo "Health check response: $HEALTH_JSON"
+          echo "$HEALTH_JSON" | grep -q '"ok":true'
+
+          AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${DEPLOY_URL}/api/v1/conversations")
+          echo "Unauthenticated /api/v1/conversations status: $AUTH_STATUS"
+          if [ "$AUTH_STATUS" != "401" ] && [ "$AUTH_STATUS" != "403" ]; then
+            echo "::error::Expected 401 or 403 from unauthenticated /api/v1/conversations, got $AUTH_STATUS."
+            exit 1
+          fi

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import type { ProspeoProviderState } from "@/lib/ano/company-discovery";
 import type {
   ContactVerificationRunView,
   DropcontactProviderState,
@@ -11,6 +12,7 @@ import { MaterialButton } from "@/components/material/material-button";
 
 export interface ContactVerificationCardProps {
   verificationRun: ContactVerificationRunView;
+  prospeo?: ProspeoProviderState | null;
   dropcontact: DropcontactProviderState | null;
   isWorking: boolean;
   onApproveVerification: (verificationRunId: string) => void;
@@ -18,29 +20,36 @@ export interface ContactVerificationCardProps {
 
 export function ContactVerificationCard({
   verificationRun,
+  prospeo = null,
   dropcontact,
   isWorking,
   onApproveVerification,
 }: ContactVerificationCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const dropcontactAvailable = dropcontact?.available ?? false;
+  const isProspeo = verificationRun.providerKey === "prospeo";
+  const providerLabel = isProspeo ? "Prospeo" : "Dropcontact";
+  const providerAvailable = isProspeo
+    ? (prospeo?.available ?? false)
+    : (dropcontact?.available ?? false);
 
   return (
     <article
       className="m3-artifact-card"
-      aria-label="Selective Dropcontact verification"
+      aria-label={`Selective ${providerLabel} verification`}
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">STAGE B · SELECTIVE DROPCONTACT VERIFICATION</p>
+          <p className="m3-artifact-kicker">
+            STAGE B · SELECTIVE {providerLabel.toUpperCase()} VERIFICATION
+          </p>
           <h2>
             {verificationRun.status === "awaiting_approval"
-              ? `Verify ${verificationRun.previewPairs.length} selected contact pair${verificationRun.previewPairs.length === 1 ? "" : "s"}`
+              ? `Verify ${verificationRun.previewPairs.length} selected contact pair${verificationRun.previewPairs.length === 1 ? "" : "s"} (${providerLabel})`
               : verificationRun.status === "running"
-                ? "Running selective Dropcontact verification…"
+                ? `Running selective ${providerLabel} verification…`
                 : verificationRun.status === "completed"
-                  ? `Verified ${verificationRun.verifiedCount ?? 0} of ${verificationRun.previewPairs.length} selected contacts`
-                  : "Dropcontact verification paused for review"}
+                  ? `${providerLabel} verified ${verificationRun.verifiedCount ?? 0} of ${verificationRun.previewPairs.length} selected contacts`
+                  : `${providerLabel} verification paused for review`}
           </h2>
         </div>
         <span className={`m3-status-badge status-${verificationRun.status}`}>
@@ -53,7 +62,11 @@ export function ContactVerificationCard({
       <div className="m3-metric-strip">
         <div>
           <span>Provider</span>
-          <strong>Dropcontact (selective batch)</strong>
+          <strong>
+            {isProspeo
+              ? "Prospeo bulk enrich (1 credit/found)"
+              : "Dropcontact (selective batch)"}
+          </strong>
         </div>
         <div>
           <span>Pairs submitted</span>
@@ -94,17 +107,17 @@ export function ContactVerificationCard({
       {verificationRun.status === "awaiting_approval" && (
         <footer className="m3-artifact-footer">
           <div className="m3-decision-copy">
-            <strong>No Dropcontact request has been sent yet.</strong>
+            <strong>No {providerLabel} request has been sent yet.</strong>
             <p>
-              {dropcontactAvailable
+              {providerAvailable
                 ? "Only the listed pairs above will be submitted. Unselected people are untouched."
-                : "Add DROPCONTACT_API_KEY on the server before approving verification."}
+                : `Add ${isProspeo ? "PROSPEO_KEY" : "DROPCONTACT_API_KEY"} on the server before approving verification.`}
             </p>
           </div>
           <div className="m3-action-row">
             <MaterialButton
               variant="filled"
-              disabled={isWorking || !dropcontactAvailable}
+              disabled={isWorking || !providerAvailable}
               onClick={() => setConfirmOpen(true)}
             >
               Approve selective verification
@@ -115,8 +128,12 @@ export function ContactVerificationCard({
 
       <ApprovalCard
         open={confirmOpen}
-        title="Approve selective Dropcontact verification?"
-        body={`Submits ${verificationRun.previewPairs.length} selected name-and-company pair${verificationRun.previewPairs.length === 1 ? "" : "s"} (${verificationRun.estimatedCredits} estimated credit${verificationRun.estimatedCredits === 1 ? "" : "s"}) to Dropcontact.`}
+        title={`Approve selective ${providerLabel} verification?`}
+        body={
+          isProspeo
+            ? `Submits ${verificationRun.previewPairs.length} selected contact${verificationRun.previewPairs.length === 1 ? "" : "s"} to Prospeo /bulk-enrich-person (up to ${verificationRun.estimatedCredits} credit${verificationRun.estimatedCredits === 1 ? "" : "s"} — 1 credit per matched verified email, 0 on misses or 90-day repeats).`
+            : `Submits ${verificationRun.previewPairs.length} selected name-and-company pair${verificationRun.previewPairs.length === 1 ? "" : "s"} (${verificationRun.estimatedCredits} estimated credit${verificationRun.estimatedCredits === 1 ? "" : "s"}) to Dropcontact.`
+        }
         confirmLabel="Submit selected pairs"
         cancelLabel="Cancel"
         isWorking={isWorking}
