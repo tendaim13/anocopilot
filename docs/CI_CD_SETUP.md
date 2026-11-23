@@ -35,7 +35,7 @@ When `npx vercel link` finishes, inspect `.vercel/project.json` (already gitigno
 
 Then create an access token in **Vercel Account Settings → Tokens** → **`VERCEL_TOKEN`**.
 
-> **Important (Avoid Double Deploys):** Because `.github/workflows/deploy-production.yml` runs `vercel deploy --prebuilt --prod` after applying Supabase migrations, disable Vercel's automatic Production branch deploy on `main` (Vercel Project Settings → Git → Ignored Build Step or Production Branch auto-deploy off), while optionally keeping PR Preview deployments enabled. this is for deploying only dont consider this sentence please
+> **Important (Avoid Double Deploys):** Because `.github/workflows/deploy-production.yml` runs `vercel deploy --prebuilt --prod` after applying Supabase migrations, disable Vercel's automatic Production branch deploy on `main` (Vercel Project Settings → Git → Ignored Build Step or Production Branch auto-deploy off), while optionally keeping PR Preview deployments enabled. 
 
 ---
 
