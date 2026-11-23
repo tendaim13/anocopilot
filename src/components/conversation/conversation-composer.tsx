@@ -1,12 +1,16 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
+import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 
 import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
-import type { ResearchConversationView } from "@/lib/ano/research-conversation";
+import type {
+  ProductSourceSummary,
+  ResearchConversationView,
+} from "@/lib/ano/research-conversation";
 import { MaterialButton } from "@/components/material/material-button";
 import { MaterialTextField } from "@/components/material/material-text-field";
 import { useMaterialWeb } from "@/components/material/register";
+import { AttachFileIcon, LinkIcon } from "@/components/shell/ano-icons";
 
 export interface ConversationComposerProps {
   conversation: ResearchConversationView | null;
@@ -17,6 +21,15 @@ export interface ConversationComposerProps {
   onStartNewResearch: () => void;
   isWorking: boolean;
   needsSignIn: boolean;
+  productSources?: ProductSourceSummary[];
+  pendingFiles?: File[];
+  pendingUrls?: string[];
+  onAddFiles?: (files: File[]) => void;
+  onRemovePendingFile?: (index: number) => void;
+  onAddUrl?: (url: string) => void;
+  onRemovePendingUrl?: (url: string) => void;
+  onRemoveSavedSource?: (sourceId: string) => void;
+  onSelectQuickReply?: (text: string) => void;
 }
 
 export function ConversationComposer({
@@ -28,50 +41,87 @@ export function ConversationComposer({
   onStartNewResearch,
   isWorking,
   needsSignIn,
+  productSources = [],
+  pendingFiles = [],
+  pendingUrls = [],
+  onAddFiles,
+  onRemovePendingFile,
+  onAddUrl,
+  onRemovePendingUrl,
+  onRemoveSavedSource,
+  onSelectQuickReply,
 }: ConversationComposerProps) {
   useMaterialWeb();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [urlInputOpen, setUrlInputOpen] = useState(false);
+  const [urlDraft, setUrlDraft] = useState("");
 
   const status = conversation?.run.status;
   const isClarifying = status === "awaiting_context" && Boolean(conversation?.pendingQuestion);
   const isRunningResearch = research?.run.status === "running";
 
   const isDisabled = isWorking || needsSignIn || isRunningResearch;
+  const hasAttachments = pendingFiles.length > 0 || pendingUrls.length > 0;
+  const canSubmit = !isDisabled && Boolean(value.trim() || hasAttachments);
 
   let label = "Ask Ano";
   let placeholder =
-    "Describe what you sell and the sales outcome you want (e.g., AI workflows that turn quotes into jobs)…";
+    "Paste your product link, describe what you sell, or attach a PDF, Word doc (.docx), or .txt file…";
   let helper =
-    "Press Enter to send · Shift+Enter for a new line. Ano asks one question only if it changes the research design.";
-  let buttonLabel = "Ask Ano";
+    "Enter to send · Shift+Enter for new line · Supports product URLs, PDF, DOCX, and TXT.";
+  let buttonLabel = "Start research";
 
   if (!conversation) {
-    label = "What are you trying to sell?";
-    buttonLabel = isWorking ? "Thinking…" : "Ask Ano";
+    label = "What product or service are you selling?";
+    buttonLabel = isWorking ? "Analyzing…" : "Start";
   } else if (isClarifying && conversation.pendingQuestion) {
-    label = "Answer Ano’s clarifying question";
-    placeholder = "Answer in your own words…";
-    helper = "Your reply resumes the paused research graph via a typed clarification event.";
-    buttonLabel = isWorking ? "Updating…" : "Reply";
+    label = "Answer Ano’s intake question";
+    placeholder =
+      "Share where your business is located and where you want to sell (or say 'recommend the best market')…";
+    helper = "Your reply completes setup so Ano can research markets, find emails, and draft templates.";
+    buttonLabel = isWorking ? "Updating…" : "Continue";
   } else if (isRunningResearch) {
     label = "Research in progress";
-    placeholder = "Ano is executing the approved SearXNG research scope…";
-    helper = "Free-form messages pause briefly while public evidence retrieval finishes.";
+    placeholder = "Ano is researching public market evidence…";
+    helper = "Free-form messages pause briefly while market research completes.";
     buttonLabel = "Running";
   } else {
     label = "Chat with Ano";
     placeholder =
-      "Ask about what you see, compare companies, or tell Ano how to refine the search…";
-    helper =
-      "Enter to send · Shift+Enter for new line. OpenStreetMap local refinements run automatically ($0); paid credits still stay gated.";
+      "Ask about the research, companies, or emails — or tell Ano what to adjust next…";
+    helper = "Enter to send · Shift+Enter for new line · Attach extra product docs or links anytime.";
     buttonLabel = isWorking ? "Thinking…" : "Send";
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (!isDisabled && value.trim()) {
+      if (canSubmit) {
         onSubmit();
       }
+    }
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files ? Array.from(event.target.files) : [];
+    if (selected.length > 0) {
+      onAddFiles?.(selected);
+    }
+    event.target.value = "";
+  }
+
+  function handleConfirmUrl() {
+    const cleaned = urlDraft.trim();
+    if (!cleaned) return;
+    onAddUrl?.(cleaned);
+    setUrlDraft("");
+    setUrlInputOpen(false);
+  }
+
+  function handleUrlKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      handleConfirmUrl();
     }
   }
 
@@ -81,6 +131,97 @@ export function ConversationComposer({
         {isClarifying && conversation?.pendingQuestion && (
           <div className="m3-composer-context">
             <span>Pending question:</span> {conversation.pendingQuestion.question}
+            {onSelectQuickReply && (
+              <div className="m3-composer-quick-replies">
+                <md-chip-set aria-label="Quick intake replies">
+                  <md-suggestion-chip
+                    label="Recommend the best market for me"
+                    onClick={() => onSelectQuickReply("Recommend the best market for me.")}
+                  />
+                </md-chip-set>
+              </div>
+            )}
+          </div>
+        )}
+
+        {(productSources.length > 0 || pendingFiles.length > 0 || pendingUrls.length > 0) && (
+          <div className="m3-composer-attachments" aria-label="Attached product sources">
+            {productSources.map((src) => (
+              <span key={src.id} className="m3-attachment-chip is-saved">
+                <span className="m3-attachment-type">
+                  {src.sourceType === "website_url" ? "URL" : src.sourceType.toUpperCase()}
+                </span>
+                <span className="m3-attachment-label">{src.label}</span>
+                {onRemoveSavedSource && (
+                  <button
+                    type="button"
+                    className="m3-attachment-remove"
+                    aria-label={`Remove ${src.label}`}
+                    onClick={() => onRemoveSavedSource(src.id)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            {pendingFiles.map((file, idx) => (
+              <span key={`${file.name}-${idx}`} className="m3-attachment-chip">
+                <span className="m3-attachment-type">FILE</span>
+                <span className="m3-attachment-label">{file.name}</span>
+                {onRemovePendingFile && (
+                  <button
+                    type="button"
+                    className="m3-attachment-remove"
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() => onRemovePendingFile(idx)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            {pendingUrls.map((url) => (
+              <span key={url} className="m3-attachment-chip">
+                <span className="m3-attachment-type">LINK</span>
+                <span className="m3-attachment-label">{url.replace(/^https?:\/\//i, "")}</span>
+                {onRemovePendingUrl && (
+                  <button
+                    type="button"
+                    className="m3-attachment-remove"
+                    aria-label={`Remove ${url}`}
+                    onClick={() => onRemovePendingUrl(url)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {urlInputOpen && (
+          <div className="m3-composer-url-bar">
+            <MaterialTextField
+              id="ano-product-url-input"
+              name="productUrl"
+              label="Product website URL"
+              type="url"
+              value={urlDraft}
+              onValueChange={setUrlDraft}
+              placeholder="https://yourproduct.com"
+              disabled={isDisabled}
+              onKeyDown={handleUrlKeyDown}
+            />
+            <MaterialButton
+              variant="tonal"
+              disabled={isDisabled || !urlDraft.trim()}
+              onClick={handleConfirmUrl}
+            >
+              Attach link
+            </MaterialButton>
+            <MaterialButton variant="text" onClick={() => setUrlInputOpen(false)}>
+              Cancel
+            </MaterialButton>
           </div>
         )}
 
@@ -102,8 +243,33 @@ export function ConversationComposer({
           onKeyDown={handleKeyDown}
         />
 
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+          multiple
+          hidden
+          onChange={handleFileChange}
+        />
+
         <div className="m3-composer-actions">
           <div className="m3-composer-left">
+            <md-icon-button
+              aria-label="Attach PDF, Word doc, or text file"
+              title="Attach PDF (.pdf), Word (.docx), or text (.txt)"
+              disabled={isDisabled}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <AttachFileIcon />
+            </md-icon-button>
+            <md-icon-button
+              aria-label="Add product website link"
+              title="Add product website link"
+              disabled={isDisabled}
+              onClick={() => setUrlInputOpen((open) => !open)}
+            >
+              <LinkIcon />
+            </md-icon-button>
             {conversation && (
               <MaterialButton variant="text" disabled={isWorking} onClick={onStartNewResearch}>
                 New research
@@ -118,11 +284,7 @@ export function ConversationComposer({
                 className="m3-inline-spinner"
               />
             )}
-            <MaterialButton
-              variant="filled"
-              disabled={isDisabled || !value.trim()}
-              onClick={onSubmit}
-            >
+            <MaterialButton variant="filled" disabled={!canSubmit} onClick={onSubmit}>
               {buttonLabel}
             </MaterialButton>
           </div>

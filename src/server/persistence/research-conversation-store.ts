@@ -26,6 +26,7 @@ import {
   type WorkQueueSummary,
 } from "@/lib/ano/work-queue";
 import { RESEARCH_GRAPH_NAME, RESEARCH_GRAPH_VERSION, type ResearchGraphStateValue } from "@/server/langgraph/research-graph";
+import { readConversationProductSources } from "@/server/persistence/product-source-store";
 
 type LiveSession = Extract<WorkspaceSession, { kind: "supabase" }>;
 
@@ -94,9 +95,25 @@ function asMessage(row: Record<string, unknown>): ConversationMessage {
 function asBrief(row: Record<string, unknown> | null): ResearchBrief | null {
   if (!row) return null;
   const content = record(row.content_json);
+  const targetMarkets = strings(row.target_markets_json);
+  const businessLocation =
+    typeof row.business_location === "string" && row.business_location.trim()
+      ? row.business_location.trim()
+      : typeof content.businessLocation === "string" && content.businessLocation.trim()
+        ? content.businessLocation.trim()
+        : null;
+  const intakeComplete =
+    typeof row.intake_complete === "boolean"
+      ? row.intake_complete
+      : typeof content.intakeComplete === "boolean"
+        ? content.intakeComplete
+        : undefined;
   return {
     offer: String(content.offer ?? ""),
     goal: String(content.goal ?? ""),
+    ...(businessLocation ? { businessLocation } : {}),
+    ...(targetMarkets.length > 0 ? { targetMarkets } : {}),
+    ...(intakeComplete !== undefined ? { intakeComplete } : {}),
     marketHints: strings(content.marketHints),
     locationHints: strings(content.locationHints),
     buyerHints: strings(content.buyerHints),
@@ -312,9 +329,10 @@ export async function readResearchConversation(session: WorkspaceSession, conver
   requireLiveSession(session);
   const conversation = await readConversationRow(session, conversationId);
   const run = await readGraphRun(session, conversationId);
-  const [messagesResult, briefResult, questionResult, planResult, eventsResult] = await Promise.all([
+  const [messagesResult, productSourcesResult, briefResult, questionResult, planResult, eventsResult] = await Promise.all([
     session.client.from("ano_messages").select("id, role, message_type, content_json, created_at").eq("workspace_id", session.workspace.id).eq("conversation_id", conversationId).order("created_at", { ascending: true }),
-    session.client.from("research_briefs").select("content_json").eq("workspace_id", session.workspace.id).eq("conversation_id", conversationId).maybeSingle(),
+    readConversationProductSources(session, conversationId).catch(() => ({ summaries: [], fullSources: [] })),
+    session.client.from("research_briefs").select("content_json, business_location, target_markets_json, intake_complete").eq("workspace_id", session.workspace.id).eq("conversation_id", conversationId).maybeSingle(),
     session.client.from("research_questions").select("id, question, purpose").eq("workspace_id", session.workspace.id).eq("conversation_id", conversationId).eq("status", "open").order("created_at", { ascending: false }).limit(1).maybeSingle(),
     session.client.from("research_plans").select("id, version, approval_status, content_json, created_at").eq("workspace_id", session.workspace.id).eq("conversation_id", conversationId).order("version", { ascending: false }).limit(1).maybeSingle(),
     session.client.from("run_events").select("id, label, detail, created_at").eq("workspace_id", session.workspace.id).eq("graph_run_id", run.id).order("created_at", { ascending: false }).limit(12),
@@ -338,6 +356,9 @@ export async function readResearchConversation(session: WorkspaceSession, conver
       failureMessage: run.failure_message,
     },
     messages: (messagesResult.data ?? []).map((row) => asMessage(row as Record<string, unknown>)),
+    ...(productSourcesResult.summaries.length > 0
+      ? { productSources: productSourcesResult.summaries }
+      : {}),
     brief: asBrief(briefResult.data as Record<string, unknown> | null),
     pendingQuestion: asQuestion(questionResult.data as Record<string, unknown> | null),
     plan: asPlan(planResult.data as Record<string, unknown> | null),
@@ -734,6 +755,17 @@ function assistantMessage(state: ResearchGraphStateValue, graphRunId: string) {
     };
   }
   if (state.plan?.approvalStatus === "approved") {
+    if (state.brief?.intakeComplete) {
+      const loc = state.brief.businessLocation ?? "your business location";
+      const markets = state.brief.targetMarkets?.length
+        ? state.brief.targetMarkets.join(", ")
+        : "recommended best target markets";
+      return {
+        dedupeKey: `plan-approved:${graphRunId}:${state.plan.version}`,
+        type: "decision",
+        text: `Understood — your business is in ${loc}, selling to ${markets}. Your product brief is ready.`,
+      };
+    }
     return { dedupeKey: `plan-approved:${graphRunId}:${state.plan.version}`, type: "decision", text: "Research plan approved. Research itself remains locked until Phase B." };
   }
   if (state.plan?.approvalStatus === "declined") {
@@ -778,6 +810,9 @@ export async function syncResearchGraphSnapshot(session: WorkspaceSession, conve
       conversation_id: conversationId,
       graph_run_id: run.id,
       content_json: state.brief,
+      business_location: state.brief.businessLocation ?? null,
+      target_markets_json: state.brief.targetMarkets ?? [],
+      intake_complete: state.brief.intakeComplete ?? false,
       status: state.status === "awaiting_context" ? "awaiting_context" : "ready",
     }, { onConflict: "conversation_id" });
     if (error) throw new ResearchConversationPersistenceError(failure());

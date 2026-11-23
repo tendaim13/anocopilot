@@ -22,7 +22,7 @@ Browser client (Material Web 2.4.1 + React 19 Client Components)
 | Public contracts | `src/contracts/`, `src/lib/ano/` | Workspace, agent, graph-run, message-part, evidence-research, market-synthesis, company-discovery, people-playbooks, outreach-execution, and work-queue Zod schemas. |
 | Auth/session | `src/lib/supabase/`, `src/proxy.ts`, `src/server/auth/` | Cookie refresh, server-validated Supabase identity, workspace membership, and domain allow-list checks. |
 | HTTP | `src/app/api/v1/` | Parse, validate, enforce idempotency headers, and return safe errors; never implement business policy in the client. |
-| Domain | `src/server/domain/` | Research conversation lifecycle, bounded SearXNG research orchestration, citation-bound synthesis, OpenStreetMap local discovery & Prospeo target-to-account & people discovery, selective Dropcontact verification, factual playbooks, outreach/Mercury execution, and work queue aggregation. |
+| Domain | `src/server/domain/` | Research conversation lifecycle, multi-format product ingestion (`src/server/ingestion/`), bounded SearXNG research orchestration, citation-bound synthesis, OpenStreetMap local discovery & Prospeo target-to-account & people discovery, selective Dropcontact verification, factual playbooks, outreach/Mercury execution, and work queue aggregation. |
 | Graph & Agent | `src/server/langgraph/`, `src/server/agents/` | Checkpointed Phase A/B/C/D/E/F LangGraph flows and server-only Bedrock/Ollama planners/synthesizers with strict JSON schema validation. |
 | Research Retrieval | `src/server/research/` | Private SearXNG client, SSRF-hardened `EvidenceSourceRetriever`, source scoring, and coverage assessment. |
 | Persistence | `src/server/persistence/` | Idempotent runs, conversation pagination/rename/archive, and append-only `audit_logs` via user-session RLS. |
@@ -35,7 +35,7 @@ Browser client (Material Web 2.4.1 + React 19 Client Components)
 | --- | --- | --- |
 | Identity | `workspaces`, `workspace_domains`, `workspace_members` | Workspace tenancy, roles, and optional email-domain policy. |
 | Conversations & Graphs | `ano_conversations`, `ano_graph_runs`, `ano_graph_checkpoints`, `ano_messages`, `ano_graph_decisions`, `run_events` (plus `ano_langgraph.*`) | Durable chat history, LangGraph thread state, interrupts, checkpoints, and timeline events. |
-| Phase A Planning | `research_briefs`, `research_questions`, `research_plans` | Structured offers, clarifying questions, and versioned approval-gated research plans. |
+| Phase A Planning & Product Intake | `research_briefs`, `research_questions`, `research_plans`, `conversation_product_sources` | Structured offers, 2-question intake metadata (`business_location`, `target_markets_json`, `intake_complete`), multi-format product source extracts (`website_url`, `pdf`, `docx`, `txt` via `POST /api/v1/conversations/[conversationId]/product-sources`), and versioned research plans. |
 | Phase B Evidence | `ano_research_runs`, `provider_action_requests`, `research_waves`, `research_queries`, `research_search_results`, `research_sources`, `research_source_assessments` | Bounded SearXNG searches, SSRF-safe source excerpts, hashes, receipts, and quality scores. |
 | Phase C Synthesis | `ano_research_syntheses`, `research_claims`, `market_profiles`, `industry_profiles`, `target_decisions` | Citation-audited observations, comparable evidence, inferences, market/industry profiles, and locked target route. |
 | Phase D Account Discovery | `provider_company_searches`, `account_candidates` (plus `provider_action_requests` audit rows) | Dual-source OpenStreetMap/Prospeo discovery, 1-click free OpenStreetMap runs, interactive cohort artifact table/drawer, two-way grounded chat filter refinements (`conversation-chat-model.ts`), structured `signals_json`, fit scores, and `claim_ids` separated from industry claims. |
@@ -62,7 +62,7 @@ Every table is protected by RLS. A signed-in member can only read their workspac
 
 ## Database operation
 
-Schema migrations live in `supabase/migrations/` (`000001` through `000024`). The application's runtime never uses a service-role key for DDL. To apply or verify migrations against Ano's dedicated database, set `SUPABASE_DB_URL` and `ANO_DATABASE_LABEL=ano` in `.env.local` and run:
+Schema migrations live in `supabase/migrations/` (`000001` through `000025`). The application's runtime never uses a service-role key for DDL. To apply or verify migrations against Ano's dedicated database, set `SUPABASE_DB_URL` and `ANO_DATABASE_LABEL=ano` in `.env.local` and run:
 
 ```bash
 npm run db:apply

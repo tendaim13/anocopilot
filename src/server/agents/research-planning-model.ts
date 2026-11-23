@@ -311,6 +311,15 @@ export function normalizeInterpretationShape(value: unknown) {
     brief: {
       offer: typeof briefObj.offer === "string" ? briefObj.offer.trim().slice(0, 1000) : "",
       goal: typeof briefObj.goal === "string" ? briefObj.goal.trim().slice(0, 1000) : "",
+      ...(typeof briefObj.businessLocation === "string" && briefObj.businessLocation.trim()
+        ? { businessLocation: briefObj.businessLocation.trim().slice(0, 200) }
+        : {}),
+      ...(truncateStrings(briefObj.targetMarkets, 6).length > 0
+        ? { targetMarkets: truncateStrings(briefObj.targetMarkets, 6) }
+        : {}),
+      ...(typeof briefObj.intakeComplete === "boolean"
+        ? { intakeComplete: briefObj.intakeComplete }
+        : {}),
       marketHints: truncateStrings(briefObj.marketHints, 6),
       locationHints: truncateStrings(briefObj.locationHints, 6),
       buyerHints: truncateStrings(briefObj.buyerHints, 6),
@@ -465,6 +474,274 @@ export function createBedrockResearchPlanningModel(
         }
         return fallbackResearchPlan(brief, editInstruction);
       }
+    },
+  };
+}
+
+const BUSINESS_LOCATION_REGEX =
+  /(?:we(?:'re|\s+are)?\s+(?:based|located)\s+in|i(?:'m|\s+am)?\s+(?:based|located)\s+in|our\s+(?:company|business|office|practice|clinic|hq)\s+is\s+(?:in|based\s+in|located\s+in)|based\s+in|located\s+in|headquartered\s+in)\s+([A-Za-z][A-Za-z\s,'-]{1,60}?)(?=[.;\n]|(?:\s+(?:and|but|selling|sell|target(?:ing)?|looking|want(?:ing)?\s+to\s+sell|to\s+sell)\b)|$)/i;
+
+const TARGET_MARKETS_REGEX =
+  /(?:sell(?:ing)?\s+(?:in|to|into)|expand(?:ing)?\s+(?:in|to|into)|target(?:ing)?\s+(?:markets?\s+(?:in|are)?|companies\s+in|businesses\s+in)?|launch(?:ing)?\s+in|go[\s-]*to[\s-]*market\s+in|want(?:ing)?\s+to\s+sell\s+(?:in|to|into)|interested\s+in\s+selling\s+(?:in|to|into))\s+([A-Za-z][A-Za-z\s,&/-]{1,80}?)(?=[.?!;\n]|$)/i;
+
+const WANTS_MARKET_RECOMMENDATION_REGEX =
+  /\b(recommend(?:\s+the)?(?:\s+best)?\s+(?:market|markets|country|countries|region)|you\s+(?:choose|pick|recommend)|where\s+should\s+(?:we|i)\s+(?:sell|target)|which\s+(?:country|countries|market|markets)|open\s+to\s+any|best\s+market(?:\s+for\s+(?:me|us))?|anywhere)\b/i;
+
+function splitMarketList(raw: string): string[] {
+  return raw
+    .split(/,|&|\band\b|\//i)
+    .map((item) => item.replace(/^\s*(?:in|to|into)\s+/i, "").trim())
+    .filter((item) => item.length >= 2 && item.length <= 60)
+    .slice(0, 5);
+}
+
+export function extractIntakeHintsFromText(text: string): {
+  businessLocation: string | null;
+  targetMarkets: string[];
+  wantsRecommendation: boolean;
+} {
+  const clean = text.replace(/\r\n/g, "\n").trim();
+  let businessLocation: string | null = null;
+  const targetMarkets: string[] = [];
+
+  const numbered1 = clean.match(/(?:^|\n)\s*1[.):]\s*([^\n]+)/);
+  const numbered2 = clean.match(/(?:^|\n)\s*2[.):]\s*([^\n]+)/);
+  if (numbered1 && numbered2) {
+    const locCand = numbered1[1].replace(/^(?:located|based)\s+in\s+/i, "").trim();
+    if (locCand.length >= 2 && locCand.length <= 80) {
+      businessLocation = locCand;
+    }
+    const marketLine = numbered2[1].trim();
+    if (WANTS_MARKET_RECOMMENDATION_REGEX.test(marketLine)) {
+      targetMarkets.push("Recommend best market");
+    } else {
+      targetMarkets.push(...splitMarketList(marketLine));
+    }
+  }
+
+  const locMatch = clean.match(BUSINESS_LOCATION_REGEX);
+  if (!businessLocation && locMatch?.[1]?.trim()) {
+    businessLocation = locMatch[1].replace(/[,;\s]+$/, "").trim();
+  }
+
+  const targetMatch = clean.match(TARGET_MARKETS_REGEX);
+  if (targetMatch?.[1]?.trim() && !WANTS_MARKET_RECOMMENDATION_REGEX.test(targetMatch[1])) {
+    for (const m of splitMarketList(targetMatch[1])) {
+      if (!targetMarkets.some((prev) => prev.toLowerCase() === m.toLowerCase())) {
+        targetMarkets.push(m);
+      }
+    }
+  }
+
+  const wantsRecommendation = WANTS_MARKET_RECOMMENDATION_REGEX.test(clean);
+  return { businessLocation, targetMarkets, wantsRecommendation };
+}
+
+function looksLikeBarePlaceAnswer(raw: string): boolean {
+  const trimmed = raw.replace(/[.?]+$/, "").trim();
+  if (!trimmed || trimmed.length < 2 || trimmed.length > 80) return false;
+  if (/\b(?:what|how|why|which|sell|software|platform|app|pdf|doc)\b/i.test(trimmed)) return false;
+  return trimmed.split(/\s+/).length <= 7;
+}
+
+export function evaluateTwoQuestionIntake(input: {
+  offer: string;
+  brief: Omit<ResearchBrief, "sourceMessageIds">;
+  userMessages: string[];
+  productSummary?: string | null;
+}): {
+  intakeComplete: boolean;
+  businessLocation: string | null;
+  targetMarkets: string[];
+  clarification: { question: string; purpose: string } | null;
+} {
+  let businessLocation = input.brief.businessLocation?.trim() || null;
+  const targetMarkets = [...(input.brief.targetMarkets ?? [])];
+  let wantsRecommendation = false;
+
+  for (let i = 0; i < input.userMessages.length; i += 1) {
+    const msg = input.userMessages[i] ?? "";
+    const parsed = extractIntakeHintsFromText(msg);
+
+    const hadLocationBefore = Boolean(businessLocation);
+    const hadMarketsBefore = targetMarkets.length > 0 || wantsRecommendation;
+
+    if (!businessLocation && parsed.businessLocation) {
+      businessLocation = parsed.businessLocation;
+    }
+    for (const market of parsed.targetMarkets) {
+      if (!targetMarkets.some((prev) => prev.toLowerCase() === market.toLowerCase())) {
+        targetMarkets.push(market);
+      }
+    }
+    if (parsed.wantsRecommendation) {
+      wantsRecommendation = true;
+    }
+
+    if (i > 0) {
+      if (!hadLocationBefore && hadMarketsBefore && !businessLocation && looksLikeBarePlaceAnswer(msg)) {
+        businessLocation = msg.replace(/^(?:in|from)\s+/i, "").replace(/[.?!]+$/, "").trim();
+      } else if (
+        hadLocationBefore &&
+        !hadMarketsBefore &&
+        targetMarkets.length === 0 &&
+        !wantsRecommendation &&
+        looksLikeBarePlaceAnswer(msg)
+      ) {
+        targetMarkets.push(...splitMarketList(msg));
+      }
+    }
+  }
+
+  if (wantsRecommendation && targetMarkets.length === 0) {
+    targetMarkets.push("Recommend best market");
+  }
+
+  const hasLocation = Boolean(businessLocation);
+  const hasTargets = targetMarkets.length > 0 || wantsRecommendation;
+
+  if (hasLocation && hasTargets) {
+    return {
+      intakeComplete: true,
+      businessLocation,
+      targetMarkets,
+      clarification: null,
+    };
+  }
+
+  const shortOffer = (input.productSummary || input.offer || "your product")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+
+  let question: string;
+  let purpose: string;
+  if (!hasLocation && !hasTargets) {
+    question = `Got it — I understand your offer (${shortOffer}). Before I run market research and gather decision-maker emails: 1. Where is your business located? 2. Where do you want to sell (or should I recommend the best market)?`;
+    purpose =
+      "These two answers let Ano automatically run market research, pick the right companies, find decision-maker emails, and draft your outreach templates.";
+  } else if (!hasLocation) {
+    question = `Got it on where you want to sell (${targetMarkets.join(", ")}). One quick detail before I start: where is your business located?`;
+    purpose =
+      "Your operating base helps Ano tailor compliance, timezone, and positioning in research and outreach.";
+  } else {
+    question = `Got it — based in ${businessLocation} (${shortOffer}). Where do you want to sell (specific countries/regions, or tell me to recommend the best market)?`;
+    purpose =
+      "Once I know your target market (or that you want me to choose), Ano runs the full pipeline automatically.";
+  }
+
+  return {
+    intakeComplete: false,
+    businessLocation,
+    targetMarkets,
+    clarification: { question, purpose },
+  };
+}
+
+function intakeInterpretationPrompt(
+  messages: ResearchPlanningMessage[],
+  productContextText?: string | null,
+) {
+  return [
+    "You are Ano, an autonomous sales-research copilot. Interpret the product information and user messages below.",
+    "Do not invent company lists, emails, or external research facts.",
+    "Extract: brief.offer (clear 1-2 sentence summary of what the user sells), brief.goal (sales objective), brief.businessLocation (where the user's business is located, or null if unknown), brief.targetMarkets (where the user wants to sell, or ['Recommend best market'] if they ask Ano to choose, else []).",
+    "Return JSON only matching: {outcome:'ready'|'needs_context',brief:{offer:string,goal:string,businessLocation:string|null,targetMarkets:string[],marketHints:string[],locationHints:string[],buyerHints:string[],constraints:string[],unknowns:string[]},clarification?:{question:string,purpose:string}}.",
+    productContextText ? `PRODUCT DOCUMENTS & WEBSITE EXCERPTS:\n${productContextText}` : "",
+    JSON.stringify({ messages }),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Streamlined 2-question Phase A planning adapter for multi-format product ingestion:
+ * understands product link/PDF/DOCX/TXT + chat text and asks only for business location
+ * and where the user wants to sell before automatically unlocking execution.
+ */
+export function createAutopilotIntakePlanningModel(
+  config: LlmPlannerConfig,
+  options: {
+    productContextText?: string | null;
+    productSummary?: string | null;
+    modelOverride?: InvokableBedrockModel;
+  } = {},
+): ResearchPlanningModel {
+  const baseModel = createBedrockResearchPlanningModel(config, options.modelOverride);
+  const llmModel: InvokableBedrockModel =
+    options.modelOverride ?? createPlannerChatModel(config, { maxTokens: 1_200 });
+
+  return {
+    async interpret(messages) {
+      const userTexts = normalizedUserMessages(messages);
+      const fallbackOffer =
+        userTexts[0] ||
+        options.productSummary?.slice(0, 300) ||
+        "Product from uploaded source";
+
+      let rawBrief: Omit<ResearchBrief, "sourceMessageIds"> = {
+        offer: fallbackOffer,
+        goal: "Identify the highest-potential outbound markets, companies, decision-maker emails, and outreach templates.",
+        businessLocation: null,
+        targetMarkets: [],
+        intakeComplete: false,
+        marketHints: [],
+        locationHints: [],
+        buyerHints: [],
+        constraints: [],
+        unknowns: [],
+      };
+
+      try {
+        const parsed = await invokeValidatedJson(
+          llmModel,
+          intakeInterpretationPrompt(messages, options.productContextText),
+          (value) => interpretationSchema.parse(normalizeInterpretationShape(value)),
+          "Ano could not interpret your product brief.",
+        );
+        rawBrief = parsed.brief;
+      } catch (error) {
+        if (error instanceof ResearchPlanningModelError && error.fatal) {
+          throw error;
+        }
+        if (isFatalBedrockError(error)) {
+          throw modelError(error, "Ano could not interpret your product brief.");
+        }
+      }
+
+      const intake = evaluateTwoQuestionIntake({
+        offer: rawBrief.offer || fallbackOffer,
+        brief: rawBrief,
+        userMessages: userTexts,
+        productSummary: options.productSummary,
+      });
+
+      const mergedBrief: Omit<ResearchBrief, "sourceMessageIds"> = {
+        ...rawBrief,
+        offer: (rawBrief.offer || fallbackOffer).slice(0, 1_000),
+        goal: (
+          rawBrief.goal ||
+          "Find target companies, verified decision-maker emails, and ready-to-send outreach templates."
+        ).slice(0, 1_000),
+        businessLocation: intake.businessLocation,
+        targetMarkets: intake.targetMarkets,
+        intakeComplete: intake.intakeComplete,
+        locationHints: Array.from(
+          new Set([
+            ...rawBrief.locationHints,
+            ...intake.targetMarkets.filter((m) => !/recommend/i.test(m)),
+          ]),
+        ).slice(0, 6),
+      };
+
+      return interpretationSchema.parse({
+        outcome: intake.intakeComplete ? "ready" : "needs_context",
+        brief: mergedBrief,
+        ...(intake.clarification ? { clarification: intake.clarification } : {}),
+      });
+    },
+    async createPlan(brief, editInstruction) {
+      return await baseModel.createPlan(brief, editInstruction);
     },
   };
 }

@@ -79,9 +79,30 @@ export function sortChronologicalThreadEntries<
 
 const conciseText = z.string().trim().min(1).max(1_000);
 
+export const productSourceTypeSchema = z.enum(["website_url", "pdf", "docx", "txt"]);
+export type ProductSourceType = z.infer<typeof productSourceTypeSchema>;
+
+export const productSourceSummarySchema = z.object({
+  id: z.string().uuid(),
+  sourceType: productSourceTypeSchema,
+  label: z.string().trim().min(1).max(200),
+  sourceUrl: z.string().trim().max(1_000).nullable(),
+  mimeType: z.string().trim().max(160).nullable(),
+  byteSize: z.number().int().min(0),
+  charCount: z.number().int().min(0),
+  summaryText: z.string().trim().max(1_000).nullable(),
+  extractionStatus: z.enum(["ready", "failed"]),
+  errorMessage: z.string().trim().max(400).nullable(),
+  createdAt: z.string().datetime(),
+});
+export type ProductSourceSummary = z.infer<typeof productSourceSummarySchema>;
+
 export const researchBriefSchema = z.object({
   offer: conciseText.describe("What the user sells."),
   goal: conciseText.describe("The sales outcome the user wants."),
+  businessLocation: z.string().trim().max(200).nullable().optional(),
+  targetMarkets: z.array(conciseText).max(6).optional(),
+  intakeComplete: z.boolean().optional(),
   marketHints: z.array(conciseText).max(6).default([]),
   locationHints: z.array(conciseText).max(6).default([]),
   buyerHints: z.array(conciseText).max(6).default([]),
@@ -200,6 +221,7 @@ export const researchConversationViewSchema = z.object({
     failureMessage: z.string().nullable(),
   }),
   messages: z.array(conversationMessageSchema),
+  productSources: z.array(productSourceSummarySchema).optional(),
   brief: researchBriefSchema.nullable(),
   pendingQuestion: clarificationSchema.nullable(),
   plan: researchPlanSchema.nullable(),

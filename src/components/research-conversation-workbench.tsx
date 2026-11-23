@@ -70,6 +70,8 @@ export function ResearchConversationWorkbench({
   const [templatePack, setTemplatePack] = useState<OutreachTemplatePackView | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [draft, setDraft] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingUrls, setPendingUrls] = useState<string[]>([]);
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
@@ -361,13 +363,51 @@ export function ResearchConversationWorkbench({
     return payload.conversation as ResearchConversationView;
   }
 
-  async function start(messageText: string) {
+  async function start(input: { message: string; files: File[]; urls: string[] }) {
     setIsWorking(true);
     setError(null);
-    setPendingUserMessage(messageText);
+    const attachmentLabels = [
+      ...input.files.map((f) => f.name),
+      ...input.urls,
+    ];
+    const optimisticLabel =
+      input.message ||
+      (attachmentLabels.length > 0
+        ? `Analyze my attached product source(s): ${attachmentLabels.join(", ")}`
+        : "");
+    setPendingUserMessage(optimisticLabel);
     setDraft("");
+    setPendingFiles([]);
+    setPendingUrls([]);
     try {
-      const created = await request("/api/v1/conversations", { message: messageText });
+      let created: ResearchConversationView;
+      if (input.files.length > 0) {
+        const form = new FormData();
+        if (input.message) form.append("message", input.message);
+        for (const file of input.files) {
+          form.append("files", file);
+        }
+        if (input.urls.length > 0) {
+          form.append("urls", JSON.stringify(input.urls));
+        }
+        const response = await fetch("/api/v1/conversations", {
+          method: "POST",
+          headers: {
+            "X-Ano-Idempotency-Key": window.crypto.randomUUID(),
+          },
+          body: form,
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.conversation) {
+          throw new Error(errorText(payload, "Ano could not begin the conversation."));
+        }
+        created = payload.conversation as ResearchConversationView;
+      } else {
+        created = await request("/api/v1/conversations", {
+          message: input.message,
+          ...(input.urls.length > 0 ? { urls: input.urls } : {}),
+        });
+      }
       setPendingUserMessage(null);
       setConversation(created);
       if (embeddedInShell) {
@@ -376,7 +416,9 @@ export function ResearchConversationWorkbench({
       }
     } catch (requestError) {
       setPendingUserMessage(null);
-      setDraft(messageText);
+      setDraft(input.message);
+      setPendingFiles(input.files);
+      setPendingUrls(input.urls);
       setError(
         requestError instanceof Error
           ? requestError.message
@@ -384,6 +426,73 @@ export function ResearchConversationWorkbench({
       );
     } finally {
       setIsWorking(false);
+    }
+  }
+
+  async function uploadPendingSources(
+    targetConversationId: string,
+    files: File[],
+    urls: string[],
+  ) {
+    let latestSources = conversation?.productSources ?? [];
+    for (const file of files) {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(
+        `/api/v1/conversations/${targetConversationId}/product-sources`,
+        { method: "POST", body: form },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(errorText(payload, `Ano could not read "${file.name}".`));
+      }
+      if (Array.isArray(payload.productSources)) {
+        latestSources = payload.productSources;
+      }
+    }
+    for (const url of urls) {
+      const response = await fetch(
+        `/api/v1/conversations/${targetConversationId}/product-sources`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(errorText(payload, `Ano could not read "${url}".`));
+      }
+      if (Array.isArray(payload.productSources)) {
+        latestSources = payload.productSources;
+      }
+    }
+    setConversation((prev) => (prev ? { ...prev, productSources: latestSources } : prev));
+  }
+
+  async function removeSavedSource(sourceId: string) {
+    if (!conversation || isWorking) return;
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${conversation.conversation.id}/product-sources?sourceId=${encodeURIComponent(sourceId)}`,
+        { method: "DELETE" },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(errorText(payload, "Ano could not remove that product source."));
+      }
+      if (Array.isArray(payload.productSources)) {
+        setConversation((prev) =>
+          prev ? { ...prev, productSources: payload.productSources } : prev,
+        );
+      }
+    } catch (removeError) {
+      setError(
+        removeError instanceof Error
+          ? removeError.message
+          : "Ano could not remove that product source.",
+      );
     }
   }
 
@@ -471,12 +580,44 @@ export function ResearchConversationWorkbench({
 
   async function handleComposerSubmit() {
     const trimmed = draft.trim();
-    if (!trimmed || isWorking || needsSignIn) return;
-
-    if (!conversation) {
-      await start(trimmed);
+    const filesSnapshot = [...pendingFiles];
+    const urlsSnapshot = [...pendingUrls];
+    if (
+      (!trimmed && filesSnapshot.length === 0 && urlsSnapshot.length === 0) ||
+      isWorking ||
+      needsSignIn
+    ) {
       return;
     }
+
+    if (!conversation) {
+      await start({ message: trimmed, files: filesSnapshot, urls: urlsSnapshot });
+      return;
+    }
+
+    if (filesSnapshot.length > 0 || urlsSnapshot.length > 0) {
+      setIsWorking(true);
+      setError(null);
+      setPendingFiles([]);
+      setPendingUrls([]);
+      try {
+        await uploadPendingSources(conversation.conversation.id, filesSnapshot, urlsSnapshot);
+      } catch (uploadError) {
+        setPendingFiles(filesSnapshot);
+        setPendingUrls(urlsSnapshot);
+        setError(
+          uploadError instanceof Error
+            ? uploadError.message
+            : "Ano could not attach your product sources.",
+        );
+        setIsWorking(false);
+        return;
+      } finally {
+        if (!trimmed) setIsWorking(false);
+      }
+    }
+
+    if (!trimmed) return;
 
     if (conversation.run.status === "awaiting_context" && conversation.pendingQuestion) {
       await resume(
@@ -491,6 +632,25 @@ export function ResearchConversationWorkbench({
     }
 
     await sendFollowUp(trimmed);
+  }
+
+  function handleQuickReply(text: string) {
+    if (
+      conversation?.run.status === "awaiting_context" &&
+      conversation.pendingQuestion &&
+      !isWorking
+    ) {
+      void resume(
+        {
+          kind: "clarification",
+          answer: text,
+          messageId: window.crypto.randomUUID(),
+        },
+        text,
+      );
+      return;
+    }
+    setDraft(text);
   }
 
   async function researchRequest(url: string, body?: Record<string, unknown>) {
@@ -919,6 +1079,8 @@ export function ResearchConversationWorkbench({
     setTemplatePack(null);
     setPendingUserMessage(null);
     setDraft("");
+    setPendingFiles([]);
+    setPendingUrls([]);
     setMarketChoice("");
     setIndustryChoice("");
     setError(null);
@@ -1066,6 +1228,23 @@ export function ResearchConversationWorkbench({
         onStartNewResearch={beginNewResearch}
         isWorking={isWorking}
         needsSignIn={needsSignIn}
+        productSources={conversation?.productSources ?? []}
+        pendingFiles={pendingFiles}
+        pendingUrls={pendingUrls}
+        onAddFiles={(incoming) =>
+          setPendingFiles((prev) => [...prev, ...incoming].slice(0, 3))
+        }
+        onRemovePendingFile={(index) =>
+          setPendingFiles((prev) => prev.filter((_item, idx) => idx !== index))
+        }
+        onAddUrl={(url) =>
+          setPendingUrls((prev) => (prev.includes(url) ? prev : [...prev, url].slice(0, 3)))
+        }
+        onRemovePendingUrl={(url) =>
+          setPendingUrls((prev) => prev.filter((item) => item !== url))
+        }
+        onRemoveSavedSource={(sourceId) => void removeSavedSource(sourceId)}
+        onSelectQuickReply={handleQuickReply}
       />
     </section>
   );

@@ -103,6 +103,10 @@ const migrations = [
     id: "20261124_000024_internal_api_usage_ledger",
     file: path.join(projectRoot, "supabase/migrations/20261124_000024_internal_api_usage_ledger.sql"),
   },
+  {
+    id: "20261124_000025_product_sources_and_intake",
+    file: path.join(projectRoot, "supabase/migrations/20261124_000025_product_sources_and_intake.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {

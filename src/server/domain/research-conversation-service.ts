@@ -35,7 +35,11 @@ import {
   OllamaConnectionError,
   OllamaModelNotFoundError,
 } from "@/server/agents/ollama-chat-model";
-import { createBedrockResearchPlanningModel, ResearchPlanningModelError } from "@/server/agents/research-planning-model";
+import {
+  createAutopilotIntakePlanningModel,
+  createBedrockResearchPlanningModel,
+  ResearchPlanningModelError,
+} from "@/server/agents/research-planning-model";
 import { dropcontactConfiguration } from "@/server/connectors/dropcontact/dropcontact-client";
 import { getOutreachExecutionForConversation } from "@/server/domain/outreach-execution-service";
 import {
@@ -58,6 +62,13 @@ import {
   updateAccountStateForConversation,
 } from "@/server/domain/target-account-discovery-service";
 import {
+  detectUrlsInText,
+  formatProductSourcesForPrompt,
+  ingestProductFile,
+  ingestProductUrl,
+  ProductIngestionError,
+} from "@/server/ingestion/product-source-ingestor";
+import {
   getResearchCheckpointer,
   hasPostgresCheckpointerConfig,
 } from "@/server/langgraph/checkpointer";
@@ -67,6 +78,11 @@ import {
 } from "@/server/langgraph/research-graph";
 import { readEvidenceResearchView } from "@/server/persistence/evidence-research-store";
 import { readMarketSynthesis } from "@/server/persistence/market-synthesis-store";
+import {
+  deleteConversationProductSource,
+  readConversationProductSources,
+  saveConversationProductSource,
+} from "@/server/persistence/product-source-store";
 import {
   appendAssistantMessage,
   appendUserMessage,
@@ -112,10 +128,22 @@ function requirePlannerConfig() {
   }
 }
 
-async function graphForPhaseA() {
+async function graphForPhaseA(options?: {
+  autopilotIntake?: boolean;
+  productContextText?: string | null;
+  productSummary?: string | null;
+}) {
   const config = requirePlannerConfig();
   const [checkpointer] = await Promise.all([getResearchCheckpointer()]);
-  return createResearchGraph(createBedrockResearchPlanningModel(config), checkpointer);
+  const model = options?.autopilotIntake
+    ? createAutopilotIntakePlanningModel(config, {
+        productContextText: options.productContextText,
+        productSummary: options.productSummary,
+      })
+    : createBedrockResearchPlanningModel(config);
+  return createResearchGraph(model, checkpointer, {
+    autopilotIntake: options?.autopilotIntake,
+  });
 }
 
 function graphConfig(threadId: string) {
@@ -126,9 +154,14 @@ async function advance(
   session: WorkspaceSession,
   view: ResearchConversationView,
   input: Record<string, unknown> | Command,
+  options?: {
+    autopilotIntake?: boolean;
+    productContextText?: string | null;
+    productSummary?: string | null;
+  },
 ) {
   try {
-    const graph = await graphForPhaseA();
+    const graph = await graphForPhaseA(options);
     const config = graphConfig(view.conversation.threadId);
     await graph.invoke(input as never, config);
     return syncResearchGraphSnapshot(session, view.conversation.id, await graph.getState(config));
@@ -144,17 +177,143 @@ async function advance(
   }
 }
 
-export async function startResearchConversation(session: WorkspaceSession, message: string, idempotencyKey: string) {
-  const created = await createResearchConversation(session, message);
-  const appended = await appendUserMessage(session, created.conversationId, message, idempotencyKey);
+export type StartConversationInput =
+  | string
+  | {
+      message?: string;
+      files?: Array<{ fileName: string; mimeType?: string | null; bytes: Uint8Array }>;
+      urls?: string[];
+    };
+
+export async function addProductSourceToConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+  input:
+    | { kind: "url"; url: string }
+    | { kind: "file"; fileName: string; mimeType?: string | null; bytes: Uint8Array },
+) {
+  await readResearchConversation(session, conversationId);
+  try {
+    const ingested =
+      input.kind === "url"
+        ? await ingestProductUrl(input.url)
+        : await ingestProductFile({
+            fileName: input.fileName,
+            mimeType: input.mimeType,
+            bytes: input.bytes,
+          });
+    const productSource = await saveConversationProductSource(session, conversationId, ingested);
+    const { summaries } = await readConversationProductSources(session, conversationId);
+    return { productSource, productSources: summaries };
+  } catch (error) {
+    if (error instanceof ProductIngestionError) {
+      throw error;
+    }
+    throw new ResearchConversationServiceError(
+      error instanceof Error ? error.message : "Could not process that product source.",
+    );
+  }
+}
+
+export async function getProductSourcesForConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+) {
+  await readResearchConversation(session, conversationId);
+  const { summaries } = await readConversationProductSources(session, conversationId);
+  return { productSources: summaries };
+}
+
+export async function removeProductSourceFromConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+  sourceId: string,
+) {
+  await readResearchConversation(session, conversationId);
+  await deleteConversationProductSource(session, conversationId, sourceId);
+  const { summaries } = await readConversationProductSources(session, conversationId);
+  return { productSources: summaries };
+}
+
+export async function startResearchConversation(
+  session: WorkspaceSession,
+  input: StartConversationInput,
+  idempotencyKey: string,
+) {
+  const normalized =
+    typeof input === "string" ? { message: input, files: [], urls: [] } : input;
+  const rawMessage = normalized.message?.trim() ?? "";
+  const files = normalized.files ?? [];
+  const explicitUrls = normalized.urls ?? [];
+  const detectedUrls = rawMessage ? detectUrlsInText(rawMessage) : [];
+  const candidateUrls = Array.from(
+    new Set([...explicitUrls, ...detectedUrls].map((u) => u.trim()).filter(Boolean)),
+  ).slice(0, 3);
+
+  const ingestedSources = [];
+  for (const file of files.slice(0, 3)) {
+    ingestedSources.push(
+      await ingestProductFile({
+        fileName: file.fileName,
+        mimeType: file.mimeType,
+        bytes: file.bytes,
+      }),
+    );
+  }
+  for (const url of candidateUrls) {
+    ingestedSources.push(await ingestProductUrl(url));
+  }
+
+  const attachmentLabels = [
+    ...files.map((f) => f.fileName),
+    ...candidateUrls,
+  ].filter(Boolean);
+
+  const effectiveMessage =
+    rawMessage ||
+    (attachmentLabels.length > 0
+      ? `Analyze my attached product source(s): ${attachmentLabels.join(", ")}`
+      : "");
+
+  if (!effectiveMessage) {
+    throw new ResearchConversationServiceError(
+      "Tell Ano what you sell or attach a product link, PDF, Word doc (.docx), or text file first.",
+    );
+  }
+
+  const created = await createResearchConversation(session, effectiveMessage);
+  for (const ingested of ingestedSources) {
+    await saveConversationProductSource(session, created.conversationId, ingested);
+  }
+
+  const appended = await appendUserMessage(
+    session,
+    created.conversationId,
+    effectiveMessage,
+    idempotencyKey,
+  );
   const view = await readResearchConversation(session, created.conversationId);
   if (!appended.created) return view;
-  return advance(session, view, {
-    workspaceId: session.workspace.id,
-    conversationId: created.conversationId,
-    graphRunId: view.run.id,
-    submittedMessage: { id: appended.id, text: message },
-  });
+
+  const { fullSources } = await readConversationProductSources(session, created.conversationId);
+  const productContextText = formatProductSourcesForPrompt(fullSources);
+  const productSummary = fullSources[0]?.summaryText ?? null;
+
+  return advance(
+    session,
+    view,
+    {
+      workspaceId: session.workspace.id,
+      conversationId: created.conversationId,
+      graphRunId: view.run.id,
+      submittedMessage: { id: appended.id, text: effectiveMessage },
+    },
+    {
+      autopilotIntake: true,
+      productContextText,
+      productSummary,
+    },
+  );
 }
 
 function mergeUniqueTerms(existing: string[], additions: string[], max = 8) {
@@ -1140,9 +1299,20 @@ async function resumePhaseAFromStoredState(
   session: WorkspaceSession,
   view: ResearchConversationView,
   resume: GraphResume,
+  intakeOptions?: {
+    autopilotIntake?: boolean;
+    productContextText?: string | null;
+    productSummary?: string | null;
+  },
 ): Promise<ResearchConversationView> {
   try {
-    const model = createBedrockResearchPlanningModel(requirePlannerConfig());
+    const config = requirePlannerConfig();
+    const model = intakeOptions?.autopilotIntake
+      ? createAutopilotIntakePlanningModel(config, {
+          productContextText: intakeOptions.productContextText,
+          productSummary: intakeOptions.productSummary,
+        })
+      : createBedrockResearchPlanningModel(config);
     const contextMessages = view.messages
       .filter((msg) => msg.role === "user")
       .map((msg) => ({ id: msg.id, role: "user" as const, text: msg.text }));
@@ -1179,16 +1349,23 @@ async function resumePhaseAFromStoredState(
       } else {
         const draft = await model.createPlan(nextBrief);
         nextQuestion = null;
+        const autoApprove = Boolean(intakeOptions?.autopilotIntake && nextBrief.intakeComplete);
         nextPlan = {
           ...draft,
           id: crypto.randomUUID(),
           version: (view.plan?.version ?? 0) + 1,
-          approvalStatus: "awaiting_approval",
+          approvalStatus: autoApprove ? "approved" : "awaiting_approval",
           createdAt: new Date().toISOString(),
         };
-        nextStatus = "awaiting_plan_approval";
-        currentNode = "await_plan_approval";
-        nextNodes = ["await_plan_approval"];
+        if (autoApprove) {
+          nextStatus = "complete_without_research";
+          currentNode = "intake_complete_autopilot_ready";
+          nextNodes = [];
+        } else {
+          nextStatus = "awaiting_plan_approval";
+          currentNode = "await_plan_approval";
+          nextNodes = ["await_plan_approval"];
+        }
       }
     } else if (resume.kind === "edit") {
       const editBrief: ResearchBrief = nextBrief ?? {
@@ -1292,10 +1469,16 @@ export async function resumeResearchConversation(session: WorkspaceSession, conv
   }
   const recorded = await recordGraphDecision(session, conversationId, resume, idempotencyKey);
   if (!recorded) return readResearchConversation(session, conversationId);
+  const { fullSources } = await readConversationProductSources(session, conversationId);
+  const intakeOptions = {
+    autopilotIntake: true,
+    productContextText: formatProductSourcesForPrompt(fullSources),
+    productSummary: fullSources[0]?.summaryText ?? null,
+  };
   if (!hasPostgresCheckpointerConfig()) {
-    return resumePhaseAFromStoredState(session, view, resume);
+    return resumePhaseAFromStoredState(session, view, resume, intakeOptions);
   }
-  return advance(session, view, new Command({ resume }));
+  return advance(session, view, new Command({ resume }), intakeOptions);
 }
 
 export async function getCurrentResearchConversation(session: WorkspaceSession) {

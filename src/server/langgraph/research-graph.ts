@@ -45,7 +45,11 @@ function readyRoute(state: ResearchGraphStateValue) {
  * Builds Ano's Phase A graph. Nodes may call Bedrock only; no search, fetch,
  * provider, contact, CRM, email, schedule, or calling capability is exposed.
  */
-export function createResearchGraph(model: ResearchPlanningModel, checkpointer: BaseCheckpointSaver) {
+export function createResearchGraph(
+  model: ResearchPlanningModel,
+  checkpointer: BaseCheckpointSaver,
+  options: { autopilotIntake?: boolean } = {},
+) {
   const captureMessage = (state: ResearchGraphStateValue) => {
     if (!state.submittedMessage?.text.trim()) throw new Error("Ano needs a message before it can prepare a research brief.");
     return {
@@ -146,6 +150,20 @@ export function createResearchGraph(model: ResearchPlanningModel, checkpointer: 
     });
   };
 
+  const approveAutopilotPlan = (state: ResearchGraphStateValue) => {
+    if (!state.plan) throw new Error("Ano could not finalize autopilot plan before creating a plan.");
+    return {
+      plan: { ...state.plan, approvalStatus: "approved" as const },
+      status: "complete_without_research" as const,
+      currentNode: "intake_complete_autopilot_ready",
+    };
+  };
+
+  const planRoute = (state: ResearchGraphStateValue) =>
+    options.autopilotIntake && state.brief?.intakeComplete
+      ? "approve_autopilot_plan"
+      : "await_plan_approval";
+
   return new StateGraph(ResearchGraphState)
     .addNode("capture_message", captureMessage)
     .addNode("validate_message", validateMessage)
@@ -153,13 +171,18 @@ export function createResearchGraph(model: ResearchPlanningModel, checkpointer: 
     .addNode("ask_clarifying_question", askClarifyingQuestion)
     .addNode("create_research_plan", createResearchPlan, { retryPolicy: { maxAttempts: 2, initialInterval: 0.25 } })
     .addNode("await_plan_approval", awaitPlanApproval)
+    .addNode("approve_autopilot_plan", approveAutopilotPlan)
     .addEdge(START, "capture_message")
     .addEdge("capture_message", "validate_message")
     .addEdge("validate_message", "interpret_brief")
     .addConditionalEdges("interpret_brief", readyRoute, ["ask_clarifying_question", "create_research_plan"])
     .addEdge("ask_clarifying_question", END)
-    .addEdge("create_research_plan", "await_plan_approval")
+    .addConditionalEdges("create_research_plan", planRoute, [
+      "await_plan_approval",
+      "approve_autopilot_plan",
+    ])
     .addEdge("await_plan_approval", END)
+    .addEdge("approve_autopilot_plan", END)
     .compile({ checkpointer });
 }
 

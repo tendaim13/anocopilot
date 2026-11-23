@@ -931,12 +931,12 @@ export function ConversationThread({
 
       {!conversation && !pendingUserMessage && (
         <section className="m3-chat-welcome">
-          <p className="m3-artifact-kicker">SALES RESEARCH COPILOT</p>
-          <h1>Find the right market before you find the companies.</h1>
+          <p className="m3-artifact-kicker">AUTONOMOUS SALES COPILOT</p>
+          <h1>Drop your product link or doc to find leads and outreach copy.</h1>
           <p className="m3-welcome-copy">
-            Start with your product and goal in plain language. Ano asks at most one clarifying
-            question if needed, builds a reviewable research plan, and runs only approval-gated
-            public evidence discovery.
+            Paste a website URL, upload a PDF, Word doc (.docx), or text file, or describe what you
+            sell below. Ano confirms where your business is located and where you want to sell, then
+            runs market research, company matching, email discovery, and template drafting.
           </p>
 
           <div className="m3-starter-chips">

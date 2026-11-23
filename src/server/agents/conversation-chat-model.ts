@@ -146,6 +146,18 @@ export function buildConversationChatPrompt(
     lines.push(`Conversation title: ${conversation.conversation.title}`);
   }
 
+  if (conversation.productSources && conversation.productSources.length > 0) {
+    lines.push(
+      "Attached product sources:\n" +
+        conversation.productSources
+          .map(
+            (src) =>
+              `- ${src.label} (${src.sourceType}): ${clip(src.summaryText ?? "", 220)}`,
+          )
+          .join("\n"),
+    );
+  }
+
   lines.push(`Phase A run status: ${conversation.run.status}`);
   if (conversation.plan) {
     lines.push(
