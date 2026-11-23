@@ -318,6 +318,8 @@ export async function continueResearchConversation(
       getOutreachTemplatePackForConversation(session, conversationId).catch(() => null),
     ]);
 
+  const initialDropcontact = peopleRes?.dropcontact ?? dropcontactConfiguration();
+
   const enrichedView: ResearchConversationView = {
     ...view,
     messages: [
@@ -342,6 +344,10 @@ export async function continueResearchConversation(
         synthesis,
         companySearch: companyDiscovery.companySearch,
         peopleDiscovery: peopleRes?.peopleDiscovery ?? null,
+        emailSources: {
+          prospeoAvailable: companyDiscovery.prospeo.available,
+          dropcontactAvailable: initialDropcontact.available,
+        },
         outreachExecution: outreachRes?.outreachExecution ?? null,
         templatePack: templateRes?.templatePack ?? null,
       },
@@ -363,7 +369,7 @@ export async function continueResearchConversation(
   let updatedCompanySearch = companyDiscovery.companySearch;
   let updatedProspeo = companyDiscovery.prospeo;
   let updatedPeopleDiscovery = peopleRes?.peopleDiscovery ?? null;
-  let updatedDropcontact = peopleRes?.dropcontact ?? dropcontactConfiguration();
+  let updatedDropcontact = initialDropcontact;
   let updatedTemplatePack = templateRes?.templatePack ?? null;
 
   const spendApproved = userExplicitlyApprovedSpend(message);
@@ -424,7 +430,16 @@ export async function continueResearchConversation(
           executionNotes.push(
             verifiedContacts.length > 0
               ? `Verified emails saved (${verifiedContacts.length}):\n${formatContactBullets(verifiedContacts)}`
-              : `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails.`,
+              : (() => {
+                  const withAnyEmail = updatedPeopleDiscovery.contacts.filter((c) =>
+                    Boolean(c.verifiedDetails?.email || c.publicEmail),
+                  );
+                  return withAnyEmail.length > 0
+                    ? `Verification found 0 additional emails from the credit provider, but ${withAnyEmail.length} contact(s) now have public website email addresses:\n${formatContactBullets(withAnyEmail)}`
+                    : vProvider === "prospeo" && updatedDropcontact.available
+                      ? `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "try Dropcontact on unverified contacts" or "scan shortlisted company websites ($0)" to fall back to your other email sources.`
+                      : `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "scan shortlisted company websites ($0)" to fall back to public clinic contact pages.`;
+                })(),
           );
         } else if (
           (effectiveApproveTarget === "person_search" ||
@@ -458,8 +473,11 @@ export async function continueResearchConversation(
                 "Person search could not complete cleanly.",
             );
           } else if (count > 0) {
+            const withAnyEmailCount = updatedPeopleDiscovery.contacts.filter(
+              (c) => Boolean(c.verifiedDetails?.email || c.publicEmail),
+            ).length;
             executionNotes.push(
-              `Saved ${count} named decision-maker${count === 1 ? "" : "s"}:\n${formatContactBullets(updatedPeopleDiscovery.contacts)}\n\nReply "verify emails via Prospeo" if you want me to look up verified work emails for up to 10 of them.`,
+              `Saved ${count} decision-maker${count === 1 ? "" : "s"} (${withAnyEmailCount} with email found):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}\n\nReply "verify emails via Prospeo" to look up direct work emails or "scan shortlisted company websites ($0)" for website contacts.`,
             );
           } else {
             executionNotes.push(
@@ -832,14 +850,30 @@ export async function continueResearchConversation(
                 updatedPeopleDiscovery.personSearch?.failureMessage ??
                   "Website team extraction could not complete automatically.",
               );
-            } else if (count > 0) {
-              executionNotes.push(
-                `Updated your Buying Committee and scanned shortlisted websites ($0 credits), saving ${count} decision-maker${count === 1 ? "" : "s"}:\n${formatContactBullets(updatedPeopleDiscovery.contacts)}`,
-              );
             } else {
-              executionNotes.push(
-                "Website team scan ($0 credits) checked the shortlisted websites but found 0 named contacts. Ask me to stage a Prospeo person search instead if you want B2B contact records.",
+              const withAnyEmail = updatedPeopleDiscovery.contacts.filter((c) =>
+                Boolean(c.verifiedDetails?.email || c.publicEmail),
               );
+              const withPhone = updatedPeopleDiscovery.contacts.filter((c) => Boolean(c.publicPhone));
+              const rawReports = Array.isArray(
+                updatedPeopleDiscovery.personSearch?.providerReceipt?.company_reports,
+              )
+                ? (updatedPeopleDiscovery.personSearch.providerReceipt.company_reports as Array<{
+                    accountName?: string;
+                    note?: string;
+                    pagesFetched?: number;
+                  }>)
+                : [];
+              const unreachableCount = rawReports.filter((r) => r.pagesFetched === 0).length;
+              if (count > 0) {
+                executionNotes.push(
+                  `Scanned shortlisted websites ($0 credits). Total saved contacts: ${count} (${withAnyEmail.length} with email${withPhone.length > 0 ? `, ${withPhone.length} with phone` : ""}):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}${unreachableCount > 0 ? `\n\n(${unreachableCount} site(s) were unreachable or blocked automated HTML checks.)` : ""}`,
+                );
+              } else {
+                executionNotes.push(
+                  "Website scan ($0 credits) checked the shortlisted websites but did not find public emails or named leadership profiles (some clinics only embed JavaScript contact forms).",
+                );
+              }
             }
           } else {
             const previewRes = await proposeBuyerRolesForConversation(session, conversationId, {
@@ -919,7 +953,15 @@ export async function continueResearchConversation(
   }
 
   // 5. Phase 9A selective email verification (Prospeo or Dropcontact, max 10 contacts).
-  if (chatOutput.verificationUpdate?.apply) {
+  const requestedVerificationProvider = chatOutput.verificationUpdate?.providerKey ?? "prospeo";
+  if (
+    chatOutput.verificationUpdate?.apply &&
+    !(
+      creditActionExecutedThisTurn &&
+      meta.verificationUpdated &&
+      meta.verificationProvider === requestedVerificationProvider
+    )
+  ) {
     const allContacts = updatedPeopleDiscovery?.contacts ?? [];
     if (allContacts.length === 0) {
       executionNotes.push(
@@ -938,66 +980,81 @@ export async function continueResearchConversation(
             : "No matching unverified contacts were found to enrich.",
         );
       } else {
-        const requestedProvider = chatOutput.verificationUpdate.providerKey ?? "prospeo";
-        try {
-          const previewRes = await prepareContactVerificationForConversation(
-            session,
-            conversationId,
-            selectedContacts.map((c) => c.id),
-            requestedProvider,
+        const requestedProvider = requestedVerificationProvider;
+        if (requestedProvider === "dropcontact" && !updatedDropcontact.available) {
+          executionErrors.push(
+            "Dropcontact is not configured on the server yet. Add DROPCONTACT_API_KEY as a Vercel Production Secret (and in .env.local for local dev) to enable Dropcontact as your 3rd email source, or reply \"scan shortlisted company websites ($0)\" to pull public clinic emails now.",
           );
-          updatedPeopleDiscovery = previewRes.peopleDiscovery;
-          updatedDropcontact = previewRes.dropcontact;
-          const runId = updatedPeopleDiscovery.verificationRun?.id;
-
-          if (
-            runId &&
-            updatedPeopleDiscovery.verificationRun?.status === "awaiting_approval" &&
-            spendApproved &&
-            !creditActionExecutedThisTurn &&
-            chatOutput.verificationUpdate.executeIfApproved !== false
-          ) {
-            const execRes = await approveContactVerificationForConversation(
+        } else {
+          try {
+            const previewRes = await prepareContactVerificationForConversation(
               session,
               conversationId,
-              runId,
+              selectedContacts.map((c) => c.id),
+              requestedProvider,
             );
-            updatedPeopleDiscovery = execRes.peopleDiscovery;
-            updatedDropcontact = execRes.dropcontact;
-            creditActionExecutedThisTurn = true;
-            const verifiedContacts = updatedPeopleDiscovery.contacts.filter(
-              (c) => c.verificationStatus === "verified",
-            );
-            meta.verificationUpdated = true;
-            meta.verificationProvider = requestedProvider;
-            meta.verificationRunId = updatedPeopleDiscovery.verificationRun?.id;
-            meta.awaitingVerificationApproval = false;
-            meta.verifiedEmailCount = verifiedContacts.length;
-            meta.actionSummary = `${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification completed: ${verifiedContacts.length} verified email${verifiedContacts.length === 1 ? "" : "s"}.`;
-            hasMetadata = true;
-            executionNotes.push(
-              verifiedContacts.length > 0
-                ? `Verified emails retrieved:\n${formatContactBullets(verifiedContacts)}`
-                : "Verification finished with 0 newly verified emails.",
-            );
-          } else {
-            meta.verificationUpdated = true;
-            meta.verificationProvider =
-              updatedPeopleDiscovery.verificationRun?.providerKey ?? requestedProvider;
-            meta.verificationRunId = runId;
-            meta.awaitingVerificationApproval = true;
-            meta.actionSummary = `Prepared ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification for ${selectedContacts.length} contact(s).`;
-            hasMetadata = true;
-            executionNotes.push(
-              `Prepared ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification for ${selectedContacts.length} contact${selectedContacts.length === 1 ? "" : "s"} (not executed yet). Click "Approve ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification" below or reply "yes, approved".`,
+            updatedPeopleDiscovery = previewRes.peopleDiscovery;
+            updatedDropcontact = previewRes.dropcontact;
+            const runId = updatedPeopleDiscovery.verificationRun?.id;
+
+            if (
+              runId &&
+              updatedPeopleDiscovery.verificationRun?.status === "awaiting_approval" &&
+              spendApproved &&
+              !creditActionExecutedThisTurn &&
+              chatOutput.verificationUpdate.executeIfApproved !== false
+            ) {
+              const execRes = await approveContactVerificationForConversation(
+                session,
+                conversationId,
+                runId,
+              );
+              updatedPeopleDiscovery = execRes.peopleDiscovery;
+              updatedDropcontact = execRes.dropcontact;
+              creditActionExecutedThisTurn = true;
+              const verifiedContacts = updatedPeopleDiscovery.contacts.filter(
+                (c) => c.verificationStatus === "verified",
+              );
+              meta.verificationUpdated = true;
+              meta.verificationProvider = requestedProvider;
+              meta.verificationRunId = updatedPeopleDiscovery.verificationRun?.id;
+              meta.awaitingVerificationApproval = false;
+              meta.verifiedEmailCount = verifiedContacts.length;
+              meta.actionSummary = `${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification completed: ${verifiedContacts.length} verified email${verifiedContacts.length === 1 ? "" : "s"}.`;
+              hasMetadata = true;
+              executionNotes.push(
+                verifiedContacts.length > 0
+                  ? `Verified emails retrieved:\n${formatContactBullets(verifiedContacts)}`
+                  : (() => {
+                      const withAnyEmail = updatedPeopleDiscovery.contacts.filter((c) =>
+                        Boolean(c.verifiedDetails?.email || c.publicEmail),
+                      );
+                      return withAnyEmail.length > 0
+                        ? `Verification returned 0 additional provider emails, and ${withAnyEmail.length} contact(s) now carry public website email addresses:\n${formatContactBullets(withAnyEmail)}`
+                        : requestedProvider === "prospeo" && updatedDropcontact.available
+                          ? "Verification finished with 0 newly verified emails. Reply \"try Dropcontact on unverified contacts\" or \"scan shortlisted company websites ($0)\" to pull public clinic emails from their websites."
+                          : "Verification finished with 0 newly verified emails. Reply \"scan shortlisted company websites ($0)\" to pull public clinic emails from their websites.";
+                    })(),
+              );
+            } else {
+              meta.verificationUpdated = true;
+              meta.verificationProvider =
+                updatedPeopleDiscovery.verificationRun?.providerKey ?? requestedProvider;
+              meta.verificationRunId = runId;
+              meta.awaitingVerificationApproval = true;
+              meta.actionSummary = `Prepared ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification for ${selectedContacts.length} contact(s).`;
+              hasMetadata = true;
+              executionNotes.push(
+                `Prepared ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification for ${selectedContacts.length} contact${selectedContacts.length === 1 ? "" : "s"} (not executed yet). Click "Approve ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification" below or reply "yes, approved".`,
+              );
+            }
+          } catch (verifyError) {
+            executionErrors.push(
+              verifyError instanceof Error
+                ? verifyError.message
+                : "Could not prepare selective email verification.",
             );
           }
-        } catch (verifyError) {
-          executionErrors.push(
-            verifyError instanceof Error
-              ? verifyError.message
-              : "Could not prepare selective email verification.",
-          );
         }
       }
     }
@@ -1050,6 +1107,15 @@ export async function continueResearchConversation(
       .filter(Boolean)
       .join("\n\n")
       .slice(0, 7_500);
+  } else if (
+    /\b(i am (?:initiating|updating|running|scanning|preparing|fetching|checking)|i have (?:updated|initiated|prepared|run|scanned))\b/i.test(
+      replyText,
+    )
+  ) {
+    replyText = `${replyText.trim()}\n\nNote: No search or enrichment tool ran on this turn yet. Reply with a direct command such as "scan shortlisted company websites ($0) for emails" or "approve the pending search", or use the action buttons in the cards above.`.slice(
+      0,
+      7_500,
+    );
   }
 
   await appendAssistantMessage(

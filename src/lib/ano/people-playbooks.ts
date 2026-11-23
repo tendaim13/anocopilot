@@ -1041,6 +1041,7 @@ export function buildDropcontactVerificationPreview(input: {
       "company",
       ...(website ? ["website"] : []),
       ...(providerKey === "prospeo" && contact.linkedInUrl ? ["linkedin_url"] : []),
+      ...(providerKey === "dropcontact" && contact.linkedInUrl ? ["linkedin"] : []),
       ...(providerKey === "prospeo" && prospeoPersonId ? ["person_id"] : []),
     ];
     return dropcontactPreviewPairSchema.parse({

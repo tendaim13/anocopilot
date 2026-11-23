@@ -51,6 +51,8 @@ import {
 import {
   createWebsiteTeamLlmExtractor,
   discoverPeopleFromCompanyWebsites,
+  matchWebsiteContactForPerson,
+  type WebsiteTeamCompanyReport,
 } from "@/server/connectors/website-team/website-team-client";
 import { readMarketSynthesis } from "@/server/persistence/market-synthesis-store";
 import {
@@ -608,6 +610,243 @@ export async function saveRoleProposalAndPersonSearchPreview(
   return readPeopleDiscoveryForConversation(session, context.conversationId);
 }
 
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Merges $0 public website email and phone provenance onto existing contacts
+ * for the same conversation without overriding verified verification status.
+ */
+async function backfillExistingContactsFromWebsiteReports(
+  session: SupabaseWorkspaceSession,
+  conversationId: string,
+  reports: WebsiteTeamCompanyReport[],
+): Promise<number> {
+  const reportsByAccountId = new Map<string, WebsiteTeamCompanyReport>();
+  for (const report of reports) {
+    if ((report.publicEmails?.length ?? 0) > 0 || (report.publicPhones?.length ?? 0) > 0) {
+      reportsByAccountId.set(report.accountId, report);
+    }
+  }
+  if (reportsByAccountId.size === 0) return 0;
+
+  const { data: rows, error } = await session.client
+    .from("contact_candidates")
+    .select("id, account_candidate_id, full_name, first_name, last_name, provider_receipt_json")
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId);
+
+  if (error || !rows?.length) return 0;
+
+  let backfilledCount = 0;
+  for (const row of rows) {
+    const accountId = String(row.account_candidate_id ?? "");
+    const report = reportsByAccountId.get(accountId);
+    if (!report) continue;
+
+    const prevReceipt = asRecord(row.provider_receipt_json);
+    const alreadyHasEmail = hasNonEmptyString(prevReceipt.public_email);
+    const alreadyHasPhone = hasNonEmptyString(prevReceipt.public_phone);
+    if (
+      alreadyHasEmail &&
+      (alreadyHasPhone || !(report.publicPhones && report.publicPhones.length > 0))
+    ) {
+      continue;
+    }
+
+    const match = matchWebsiteContactForPerson(
+      {
+        fullName: String(row.full_name ?? ""),
+        firstName: typeof row.first_name === "string" ? row.first_name : null,
+        lastName: typeof row.last_name === "string" ? row.last_name : null,
+      },
+      report,
+    );
+    if (!match) continue;
+
+    const nextReceipt: Record<string, unknown> = { ...prevReceipt };
+    let changed = false;
+
+    if (!alreadyHasEmail && match.publicEmail) {
+      nextReceipt.public_email = match.publicEmail;
+      nextReceipt.public_email_kind = match.publicEmailKind ?? "shared_inbox";
+      changed = true;
+    }
+    if (!alreadyHasPhone && match.publicPhone) {
+      nextReceipt.public_phone = match.publicPhone;
+      changed = true;
+    }
+    if (!hasNonEmptyString(nextReceipt.source_url) && match.sourceUrl) {
+      nextReceipt.source_url = match.sourceUrl;
+      changed = true;
+    }
+    if (!changed) continue;
+
+    const { error: updateErr } = await session.client
+      .from("contact_candidates")
+      .update({ provider_receipt_json: nextReceipt })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", String(row.id));
+
+    if (!updateErr) {
+      backfilledCount += 1;
+    }
+  }
+
+  return backfilledCount;
+}
+
+async function runWebsiteFailsafeForProspeoSearch(input: {
+  session: SupabaseWorkspaceSession;
+  context: ShortlistedTargetContext;
+  personSearchId: string;
+  actionId: string;
+  buyingCommittee: BuyingCommitteeCriteria;
+  roleRecommendations: ReturnType<typeof buyerRoleRecommendationSchema.parse>[];
+  verifiedSourceKeys: Set<string>;
+  existingProspeoRows: Record<string, unknown>[];
+  completedAt: string;
+  fetcher?: typeof fetch;
+}): Promise<{ addedCount: number; backfilledCount: number; reports: WebsiteTeamCompanyReport[] }> {
+  const {
+    session,
+    context,
+    personSearchId,
+    actionId,
+    buyingCommittee,
+    roleRecommendations,
+    verifiedSourceKeys,
+    existingProspeoRows,
+    completedAt,
+    fetcher,
+  } = input;
+
+  if (!context.shortlistedAccounts.some((acc) => Boolean(acc.website || acc.domain))) {
+    return { addedCount: 0, backfilledCount: 0, reports: [] };
+  }
+
+  const siteResult = await discoverPeopleFromCompanyWebsites(
+    context.shortlistedAccounts,
+    buyingCommittee,
+    {
+      ...(fetcher ? { fetch: fetcher } : {}),
+      includePublicDeskFallback: true,
+    },
+  );
+
+  const existingKeys = new Set(
+    existingProspeoRows.map(
+      (r) => `${String(r.account_candidate_id ?? "")}:${String(r.full_name ?? "").trim().toLowerCase()}`,
+    ),
+  );
+
+  const extraRows: Record<string, unknown>[] = [];
+  for (const person of siteResult.people) {
+    const matchedAccount =
+      context.allAccountsById.get(person.accountId) ??
+      context.shortlistedAccounts.find((a) => a.id === person.accountId);
+    if (!matchedAccount) continue;
+    if (existingKeys.has(`${matchedAccount.id}:${person.fullName.trim().toLowerCase()}`)) {
+      continue;
+    }
+
+    const candidate = normalizeDiscoveredPersonCandidate(
+      {
+        id: person.id,
+        fullName: person.fullName,
+        firstName: person.firstName,
+        lastName: person.lastName,
+        title: person.title,
+        seniority: person.seniority,
+        department: person.department,
+        linkedInUrl: person.linkedInUrl,
+        sourceUrl: person.sourceUrl,
+        providerKey: "website_team",
+        publicEmail: person.publicEmail,
+        publicEmailKind: person.publicEmailKind,
+        publicPhone: person.publicPhone,
+        location: person.location,
+        companyName: person.accountName,
+        companyDomain: person.accountDomain,
+      },
+      {
+        candidateId: crypto.randomUUID(),
+        conversationId: context.conversationId,
+        targetDecisionId: context.targetDecisionId,
+        personSearchId,
+        account: matchedAccount,
+        roleRecommendations,
+        providerKey: "website_team",
+        capturedAt: completedAt,
+      },
+    );
+    if (verifiedSourceKeys.has(candidate.sourceKey)) continue;
+
+    extraRows.push({
+      id: candidate.id,
+      workspace_id: session.workspace.id,
+      research_run_id: null,
+      account_candidate_id: candidate.accountCandidateId,
+      conversation_id: context.conversationId,
+      target_decision_id: context.targetDecisionId,
+      person_search_id: personSearchId,
+      discovery_action_request_id: actionId,
+      source_key: candidate.sourceKey,
+      full_name: candidate.fullName,
+      first_name: candidate.firstName,
+      last_name: candidate.lastName,
+      title: candidate.title,
+      seniority: candidate.seniority,
+      department: candidate.department,
+      linkedin_url: candidate.linkedInUrl,
+      location: candidate.location,
+      role_rationale: candidate.roleRationale,
+      confidence: candidate.confidence,
+      claim_ids: candidate.claimIds,
+      availability: "named_only",
+      source_label: "provider",
+      selected_for_verification: false,
+      verification_status: "not_requested",
+      verified_details_json: null,
+      provider_receipt_json: {
+        provider: "website_team",
+        source_url: candidate.sourceUrl,
+        ...(candidate.publicEmail
+          ? {
+              public_email: candidate.publicEmail,
+              public_email_kind: candidate.publicEmailKind ?? "shared_inbox",
+            }
+          : {}),
+        ...(candidate.publicPhone ? { public_phone: candidate.publicPhone } : {}),
+      },
+      retrieved_at: completedAt,
+    });
+  }
+
+  let addedCount = 0;
+  if (extraRows.length > 0) {
+    const { error: upsertErr } = await session.client
+      .from("contact_candidates")
+      .upsert(extraRows, { onConflict: "workspace_id,person_search_id,source_key" });
+    if (!upsertErr) {
+      addedCount = extraRows.length;
+    }
+  }
+
+  const backfilledCount = await backfillExistingContactsFromWebsiteReports(
+    session,
+    context.conversationId,
+    siteResult.companyReports,
+  );
+
+  return {
+    addedCount,
+    backfilledCount,
+    reports: siteResult.companyReports,
+  };
+}
+
 export async function executeApprovedProspeoPersonSearch(
   session: WorkspaceSession,
   input: {
@@ -732,6 +971,7 @@ export async function executeApprovedProspeoPersonSearch(
         {
           ...(fetcher ? { fetch: fetcher } : {}),
           ...(llmFallback ? { llmFallback } : {}),
+          includePublicDeskFallback: true,
         },
       );
 
@@ -888,6 +1128,11 @@ export async function executeApprovedProspeoPersonSearch(
       };
     }
 
+    let backfilledCount = 0;
+    let websiteFailsafeAdded = 0;
+    let websiteFailsafeRan = false;
+    let websiteFailsafeReports: WebsiteTeamCompanyReport[] = [];
+
     if (rowsToUpsert.length > 0) {
       const { error: upsertContactsError } = await session.client
         .from("contact_candidates")
@@ -899,6 +1144,46 @@ export async function executeApprovedProspeoPersonSearch(
         throw new PeoplePlaybookPersistenceError(
           "Ano discovered named people but could not save their records safely.",
         );
+      }
+    }
+
+    if (providerKey === "website_team") {
+      const companyReports = Array.isArray(receipt.company_reports)
+        ? (receipt.company_reports as WebsiteTeamCompanyReport[])
+        : [];
+      backfilledCount = await backfillExistingContactsFromWebsiteReports(
+        session,
+        context.conversationId,
+        companyReports,
+      ).catch(() => 0);
+      receipt.contacts_backfilled = backfilledCount;
+    } else if (rowsToUpsert.length < 5) {
+      try {
+        websiteFailsafeRan = true;
+        const failsafe = await runWebsiteFailsafeForProspeoSearch({
+          session,
+          context,
+          personSearchId,
+          actionId,
+          buyingCommittee,
+          roleRecommendations,
+          verifiedSourceKeys,
+          existingProspeoRows: rowsToUpsert,
+          completedAt,
+          fetcher,
+        });
+        websiteFailsafeAdded = failsafe.addedCount;
+        backfilledCount = failsafe.backfilledCount;
+        websiteFailsafeReports = failsafe.reports;
+        receipt = {
+          ...receipt,
+          website_failsafe_ran: true,
+          website_failsafe_added: websiteFailsafeAdded,
+          website_failsafe_backfilled: backfilledCount,
+          company_reports: websiteFailsafeReports,
+        };
+      } catch {
+        // Non-blocking $0 failsafe: preserve Prospeo results even if website scanning fails.
       }
     }
 
@@ -924,7 +1209,7 @@ export async function executeApprovedProspeoPersonSearch(
         status: "completed",
         provider_action_request_id: actionId,
         completed_at: completedAt,
-        result_count: totalSavedCount ?? rowsToUpsert.length,
+        result_count: totalSavedCount ?? rowsToUpsert.length + websiteFailsafeAdded,
         provider_receipt_json: receipt,
       })
       .eq("workspace_id", session.workspace.id)
@@ -943,6 +1228,9 @@ export async function executeApprovedProspeoPersonSearch(
         conversation_id: context.conversationId,
         provider_key: providerKey,
         result_count: rowsToUpsert.length,
+        website_failsafe_ran: websiteFailsafeRan,
+        website_failsafe_added: websiteFailsafeAdded,
+        contacts_backfilled: backfilledCount,
         free: providerKey === "website_team" ? true : Boolean(receipt.free),
       },
     });
@@ -955,8 +1243,8 @@ export async function executeApprovedProspeoPersonSearch(
         label: "Named buyer candidates saved",
         detail:
           providerKey === "website_team"
-            ? `Company website team extraction ($0 credits) returned ${rowsToUpsert.length} named decision-makers across ${String(receipt.companies_scanned ?? context.shortlistedAccounts.length)} shortlisted sites.`
-            : `Prospeo returned ${rowsToUpsert.length} named people for shortlisted accounts. No contact verification or Dropcontact call has run yet.`,
+            ? `Company website scan ($0 credits) returned ${rowsToUpsert.length} decision-makers across ${String(receipt.companies_scanned ?? context.shortlistedAccounts.length)} shortlisted sites${backfilledCount > 0 ? ` and enriched ${backfilledCount} existing contact(s) with public website details` : ""}.`
+            : `Prospeo returned ${rowsToUpsert.length} named people for shortlisted accounts${websiteFailsafeRan && (websiteFailsafeAdded > 0 || backfilledCount > 0) ? `, and automatic $0 website failsafe added ${websiteFailsafeAdded} contact(s) and updated ${backfilledCount} contact(s) with public website emails` : ""}. Contact verification remains separately tracked.`,
       },
       { onConflict: "graph_run_id,event_key" },
     );
@@ -965,9 +1253,45 @@ export async function executeApprovedProspeoPersonSearch(
   } catch (error) {
     const completedAt = new Date().toISOString();
     const noResults = error instanceof ProspeoClientError && error.code === "NO_RESULTS";
+    let failsafeAdded = 0;
+    let failsafeBackfilled = 0;
+    let failsafeReports: WebsiteTeamCompanyReport[] = [];
+
+    if (noResults && providerKey === "prospeo") {
+      try {
+        const failsafe = await runWebsiteFailsafeForProspeoSearch({
+          session,
+          context,
+          personSearchId,
+          actionId,
+          buyingCommittee,
+          roleRecommendations,
+          verifiedSourceKeys,
+          existingProspeoRows: [],
+          completedAt,
+          fetcher,
+        });
+        failsafeAdded = failsafe.addedCount;
+        failsafeBackfilled = failsafe.backfilledCount;
+        failsafeReports = failsafe.reports;
+      } catch {
+        // Non-blocking $0 failsafe.
+      }
+    }
+
+    const { count: recoveredTotal } = noResults
+      ? await session.client
+          .from("contact_candidates")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", session.workspace.id)
+          .eq("person_search_id", personSearchId)
+      : { count: null };
+
     const status = noResults ? "completed" : "requires_manual_review";
     const message = noResults
-      ? "Prospeo returned no named people for the approved roles and shortlisted companies."
+      ? failsafeAdded > 0 || failsafeBackfilled > 0
+        ? `Prospeo returned 0 matches; automatic $0 website failsafe added ${failsafeAdded} contact(s) and updated ${failsafeBackfilled} contact(s).`
+        : "Prospeo returned no named people for the approved roles and shortlisted companies."
       : error instanceof ProspeoClientError
         ? error.message
         : "Ano could not complete the approved person search safely and did not retry automatically.";
@@ -981,6 +1305,9 @@ export async function executeApprovedProspeoPersonSearch(
         provider_receipt_json: {
           credit_bearing_request: providerKey === "prospeo",
           buying_committee: buyingCommittee,
+          website_failsafe_ran: noResults && providerKey === "prospeo",
+          website_failsafe_added: failsafeAdded,
+          website_failsafe_backfilled: failsafeBackfilled,
           outcome: noResults ? "no_results" : "manual_review_required",
         },
         completed_at: completedAt,
@@ -993,11 +1320,12 @@ export async function executeApprovedProspeoPersonSearch(
         status,
         provider_action_request_id: actionId,
         completed_at: completedAt,
-        result_count: noResults ? 0 : null,
+        result_count: noResults ? (recoveredTotal ?? failsafeAdded) : null,
         failure_message: noResults ? null : message,
         provider_receipt_json: {
           ...prevReceipt,
           buying_committee: buyingCommittee,
+          ...(failsafeReports.length > 0 ? { company_reports: failsafeReports } : {}),
         },
       })
       .eq("workspace_id", session.workspace.id)
@@ -1293,13 +1621,19 @@ export async function executeApprovedDropcontactVerification(
   // Preserve discovery provenance (`provider`, `source_url`, `public_email`, `public_phone`).
   const { data: existingContactsData } = await session.client
     .from("contact_candidates")
-    .select("id, provider_receipt_json")
+    .select("id, account_candidate_id, provider_receipt_json")
     .eq("workspace_id", session.workspace.id)
     .in("id", selectedIds);
   const existingReceiptsById = new Map<string, Record<string, unknown>>(
     (existingContactsData ?? []).map((row) => [
       String(row.id),
       asRecord(row.provider_receipt_json),
+    ]),
+  );
+  const accountIdByContactId = new Map<string, string>(
+    (existingContactsData ?? []).map((row) => [
+      String(row.id),
+      String(row.account_candidate_id ?? ""),
     ]),
   );
 
@@ -1408,6 +1742,42 @@ export async function executeApprovedDropcontactVerification(
       };
     }
 
+    let websiteFailsafeBackfilled = 0;
+    if (verifiedCount < pairs.length) {
+      const missedAccountIds = Array.from(
+        new Set(
+          selectedIds
+            .filter((cid) => !hasNonEmptyString(existingReceiptsById.get(cid)?.public_email))
+            .map((cid) => accountIdByContactId.get(cid))
+            .filter((aid): aid is string => Boolean(aid)),
+        ),
+      );
+      const missedAccounts = missedAccountIds
+        .map((aid) => context.allAccountsById.get(aid))
+        .filter((acc): acc is AccountCandidateDossier => Boolean(acc && (acc.website || acc.domain)))
+        .slice(0, 10);
+
+      if (missedAccounts.length > 0) {
+        try {
+          const siteResult = await discoverPeopleFromCompanyWebsites(
+            missedAccounts,
+            undefined,
+            { ...(fetcher ? { fetch: fetcher } : {}) },
+          );
+          websiteFailsafeBackfilled = await backfillExistingContactsFromWebsiteReports(
+            session,
+            context.conversationId,
+            siteResult.companyReports,
+          );
+          if (websiteFailsafeBackfilled > 0) {
+            receipt.website_failsafe_backfilled = websiteFailsafeBackfilled;
+          }
+        } catch {
+          // Non-blocking $0 website failsafe.
+        }
+      }
+    }
+
     await session.client
       .from("provider_action_requests")
       .update({
@@ -1444,6 +1814,7 @@ export async function executeApprovedDropcontactVerification(
         provider_key: providerKey,
         submitted_count: pairs.length,
         verified_count: verifiedCount,
+        website_failsafe_backfilled: websiteFailsafeBackfilled,
         credits_charged: reportedCredits,
       },
     });
@@ -1454,7 +1825,7 @@ export async function executeApprovedDropcontactVerification(
         graph_run_id: context.graphRunId,
         event_key: `phase-e-dc-verify:${verificationRunId}`,
         label: "Selective contact verification completed",
-        detail: `${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verified ${verifiedCount} of ${pairs.length} selected contact${pairs.length === 1 ? "" : "s"}. Outreach remains gated until explicit per-action approval.`,
+        detail: `${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verified ${verifiedCount} of ${pairs.length} selected contact${pairs.length === 1 ? "" : "s"}${websiteFailsafeBackfilled > 0 ? `; automatic $0 website fallback added public contact details for ${websiteFailsafeBackfilled} unverified contact(s)` : ""}. Outreach remains gated until explicit per-action approval.`,
       },
       { onConflict: "graph_run_id,event_key" },
     );

@@ -17,7 +17,7 @@ const MAX_RESPONSE_BYTES = 1_500_000;
 const MAX_REDIRECTS = 3;
 const MAX_COMPANIES_PER_RUN = 10;
 const MAX_PAGES_PER_COMPANY = 3;
-const MAX_TOTAL_PAGES_PER_RUN = 20;
+const MAX_TOTAL_PAGES_PER_RUN = 30;
 const MAX_PEOPLE_PER_COMPANY = 4;
 const MAX_TOTAL_PEOPLE = 25;
 const MAX_LLM_FALLBACK_COMPANIES = 5;
@@ -59,6 +59,9 @@ export type WebsiteTeamCompanyReport = {
   website: string;
   pagesFetched: number;
   peopleFound: number;
+  publicEmails?: ExtractedPublicEmail[];
+  publicPhones?: string[];
+  contactSourceUrl?: string;
   note?: string;
 };
 
@@ -70,7 +73,7 @@ export type WebsiteTeamDiscoveryResult = {
 };
 
 const TEAM_LINK_REGEX =
-  /\b(about|about[- ]us|company|our[- ]company|our[- ]story|team|our[- ]team|leadership|executives|management|people|staff|founders|board|who[- ]we[- ]are|meet[- ]the|partners|directors|attorneys|lawyers|solicitors|advisors|consultants|agents|brokers|architects|engineers|faculty|doctors|dentists|clinicians|practitioners|specialists|contact)\b/i;
+  /\b(about|about[- ]us|company|our[- ]company|our[- ]story|team|our[- ]team|leadership|executives|management|people|staff|founders|board|who[- ]we[- ]are|meet[- ]the|partners|directors|attorneys|lawyers|solicitors|advisors|consultants|agents|brokers|architects|engineers|faculty|doctors|dentists|clinicians|practitioners|specialists|contact|contact[- ]?us|reach[- ]?us|branches|locations|clinics)\b/i;
 
 const ROLE_PATTERN =
   /\b(chief\s+[a-z]+(?:\s+officer)?|ceo|coo|cto|cfo|cmo|cio|chro|cro|cpo|cso|evp|svp|co-founder|founder|owner|proprietor|president|vice\s+president|vp(?:\s+of)?(?:\s+[a-z\s&]+)?|general\s+counsel|managing\s+director|managing\s+partner|senior\s+partner|partner|principal(?:\s+(?:dentist|architect|engineer|consultant|partner))?|controller|treasurer|head\s+of\s+[a-z\s&]+|plant\s+manager|site\s+manager|store\s+manager|branch\s+manager|regional\s+manager|country\s+manager|account\s+director|creative\s+director|art\s+director|technical\s+director|engineering\s+manager|product\s+manager|project\s+director|supply\s+chain\s+manager|clinical\s+director|medical\s+director|clinic\s+director|practice\s+manager|clinic\s+manager|operations\s+manager|general\s+manager|office\s+manager|superintendent|director(?:\s+of\s+[a-z\s&]+)?|attorney|solicitor|advocate|broker|executive\s+chef|dean|headmaster|lead\s+dentist|senior\s+dentist|orthodontist|endodontist|periodontist|prosthodontist|implantologist|dentist|surgeon|physician|manager)\b/i;
@@ -231,7 +234,7 @@ async function fetchSafeHtml(
 export function extractTeamPageLinks(html: string, baseUrl: string): string[] {
   const $ = load(html);
   const base = new URL(baseUrl);
-  const scored = new Map<string, number>();
+  const scored = new Map<string, { priority: number; isContact: boolean }>();
 
   $("a[href]").each((_idx, el) => {
     const href = $(el).attr("href")?.trim();
@@ -254,6 +257,9 @@ export function extractTeamPageLinks(html: string, baseUrl: string): string[] {
     const combined = `${resolved.pathname} ${label}`;
     if (!TEAM_LINK_REGEX.test(combined)) return;
 
+    const isContact = /\b(contact|contact[- ]?us|reach[- ]?us|branches|locations|clinics)\b/i.test(
+      combined,
+    );
     let priority = 1;
     if (
       /\b(team|our-team|leadership|executives|management|founders|board|partners|directors|attorneys|lawyers|doctors|dentists|meet)\b/i.test(
@@ -270,13 +276,25 @@ export function extractTeamPageLinks(html: string, baseUrl: string): string[] {
     }
     const clean = resolved.toString();
     if (clean === base.toString()) return;
-    scored.set(clean, Math.max(scored.get(clean) ?? 0, priority));
+    const prev = scored.get(clean);
+    scored.set(clean, {
+      priority: Math.max(prev?.priority ?? 0, priority),
+      isContact: prev ? prev.isContact && isContact : isContact,
+    });
   });
 
-  return [...scored.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, MAX_PAGES_PER_COMPANY - 1)
-    .map(([url]) => url);
+  const sorted = [...scored.entries()].sort((a, b) => b[1].priority - a[1].priority);
+  const maxSecondary = MAX_PAGES_PER_COMPANY - 1;
+  const picked: string[] = [];
+  const topTeam = sorted.find(([, meta]) => !meta.isContact);
+  const topContact = sorted.find(([url, meta]) => meta.isContact && url !== topTeam?.[0]);
+  if (topTeam) picked.push(topTeam[0]);
+  if (topContact && picked.length < maxSecondary) picked.push(topContact[0]);
+  for (const [url] of sorted) {
+    if (picked.length >= maxSecondary) break;
+    if (!picked.includes(url)) picked.push(url);
+  }
+  return picked;
 }
 
 function splitName(fullName: string) {
@@ -586,20 +604,14 @@ export function extractPublicContactsFromHtml(
   };
 }
 
-function matchPersonEmail(
-  person: WebsiteTeamPerson,
+function selectBestEmailForPerson(
+  person: { firstName?: string | null; lastName?: string | null },
   siteEmails: ExtractedPublicEmail[],
 ): { email: string; kind: "direct_public" | "shared_inbox" } | null {
-  if (person.publicEmail) {
-    return {
-      email: person.publicEmail,
-      kind: person.publicEmailKind ?? "direct_public",
-    };
-  }
   if (siteEmails.length === 0) return null;
 
   const nameTokens = [person.firstName, person.lastName]
-    .filter((t): t is string => Boolean(t))
+    .filter((t): t is string => Boolean(t?.trim()))
     .flatMap((t) => t.toLowerCase().split(/\s+/))
     .filter((t) => t.length >= 3);
 
@@ -611,7 +623,8 @@ function matchPersonEmail(
     }
   }
 
-  const shared = siteEmails.find((item) => item.kind === "shared_inbox" && item.matchesDomain) ??
+  const shared =
+    siteEmails.find((item) => item.kind === "shared_inbox" && item.matchesDomain) ??
     siteEmails.find((item) => item.kind === "shared_inbox");
   if (shared) {
     return { email: shared.email, kind: "shared_inbox" };
@@ -621,6 +634,54 @@ function matchPersonEmail(
   return domainDirect
     ? { email: domainDirect.email, kind: domainDirect.kind }
     : { email: siteEmails[0].email, kind: siteEmails[0].kind };
+}
+
+function matchPersonEmail(
+  person: WebsiteTeamPerson,
+  siteEmails: ExtractedPublicEmail[],
+): { email: string; kind: "direct_public" | "shared_inbox" } | null {
+  if (person.publicEmail) {
+    return {
+      email: person.publicEmail,
+      kind: person.publicEmailKind ?? "direct_public",
+    };
+  }
+  return selectBestEmailForPerson(person, siteEmails);
+}
+
+export function matchWebsiteContactForPerson(
+  person: { fullName: string; firstName?: string | null; lastName?: string | null },
+  report: Pick<
+    WebsiteTeamCompanyReport,
+    "publicEmails" | "publicPhones" | "contactSourceUrl" | "website"
+  >,
+): {
+  publicEmail?: string;
+  publicEmailKind?: "direct_public" | "shared_inbox";
+  publicPhone?: string;
+  sourceUrl: string;
+} | null {
+  const emails = report.publicEmails ?? [];
+  const phones = report.publicPhones ?? [];
+  const sourceUrl = report.contactSourceUrl ?? report.website;
+  if (emails.length === 0 && phones.length === 0) return null;
+
+  const derived = splitName(person.fullName);
+  const matched = selectBestEmailForPerson(
+    {
+      firstName: person.firstName ?? derived.firstName,
+      lastName: person.lastName ?? derived.lastName,
+    },
+    emails,
+  );
+  const publicPhone = phones[0];
+  if (!matched && !publicPhone) return null;
+
+  return {
+    ...(matched ? { publicEmail: matched.email, publicEmailKind: matched.kind } : {}),
+    ...(publicPhone ? { publicPhone } : {}),
+    sourceUrl,
+  };
 }
 
 export function extractPeopleFromHtml(
@@ -860,6 +921,7 @@ export async function discoverPeopleFromCompanyWebsites(
     fetch?: FetchLike;
     lookup?: Lookup;
     llmFallback?: WebsiteTeamLlmFallback;
+    includePublicDeskFallback?: boolean;
   } = {},
 ): Promise<WebsiteTeamDiscoveryResult> {
   const fetcher: FetchLike = dependencies.fetch ?? fetch;
@@ -890,14 +952,24 @@ export async function discoverPeopleFromCompanyWebsites(
     const fetchedPages: Array<{ url: string; text: string }> = [];
     const companyEmails = new Map<string, ExtractedPublicEmail>();
     const companyPhones = new Set<string>();
+    let contactSourceUrl: string | null = null;
+    let bestContactHasDomainMatch = false;
 
-    const collectPublicContacts = (html: string) => {
+    const collectPublicContacts = (html: string, pageUrl: string) => {
       const found = extractPublicContactsFromHtml(html, account.domain);
       for (const item of found.emails) {
         if (!companyEmails.has(item.email)) companyEmails.set(item.email, item);
       }
       for (const phone of found.phones) {
         companyPhones.add(phone);
+      }
+      const pageHasDomainEmail = found.emails.some((e) => e.matchesDomain);
+      if (
+        (found.emails.length > 0 || found.phones.length > 0) &&
+        (!contactSourceUrl || (pageHasDomainEmail && !bestContactHasDomainMatch))
+      ) {
+        contactSourceUrl = pageUrl;
+        if (pageHasDomainEmail) bestContactHasDomainMatch = true;
       }
     };
 
@@ -917,7 +989,7 @@ export async function discoverPeopleFromCompanyWebsites(
 
       pagesFetchedForCompany += 1;
       totalPagesScanned += 1;
-      collectPublicContacts(homepage.html);
+      collectPublicContacts(homepage.html, homepage.finalUrl);
       fetchedPages.push({ url: homepage.finalUrl, text: extractVisiblePageText(homepage.html) });
 
       for (const person of extractPeopleFromHtml(homepage.html, homepage.finalUrl, account, criteria)) {
@@ -932,7 +1004,7 @@ export async function discoverPeopleFromCompanyWebsites(
         teamLinks.length === 0 && companyPeople.size === 0
           ? [`${origin}/about`, `${origin}/team`, `${origin}/contact`]
           : teamLinks.length < MAX_PAGES_PER_COMPANY - 1 && companyEmails.size === 0
-            ? [`${origin}/contact`]
+            ? [`${origin}/contact`, `${origin}/contact-us`]
             : [];
 
       const secondaryUrls = Array.from(new Set([...teamLinks, ...fallbackPaths])).slice(
@@ -949,7 +1021,7 @@ export async function discoverPeopleFromCompanyWebsites(
           if (!page) continue;
           pagesFetchedForCompany += 1;
           totalPagesScanned += 1;
-          collectPublicContacts(page.html);
+          collectPublicContacts(page.html, page.finalUrl);
           fetchedPages.push({ url: page.finalUrl, text: extractVisiblePageText(page.html) });
           for (const person of extractPeopleFromHtml(page.html, page.finalUrl, account, criteria)) {
             const key = person.fullName.toLowerCase();
@@ -1020,8 +1092,9 @@ export async function discoverPeopleFromCompanyWebsites(
       }
 
       const siteEmailsList = [...companyEmails.values()];
-      const primaryPhone = [...companyPhones][0];
-      const rankedCompanyPeople = [...companyPeople.values()]
+      const phonesList = [...companyPhones];
+      const primaryPhone = phonesList[0];
+      let rankedCompanyPeople = [...companyPeople.values()]
         .sort((a, b) => b.score - a.score)
         .slice(0, MAX_PEOPLE_PER_COMPANY)
         .map((person) => {
@@ -1037,6 +1110,38 @@ export async function discoverPeopleFromCompanyWebsites(
           };
         });
 
+      if (
+        dependencies.includePublicDeskFallback &&
+        rankedCompanyPeople.length === 0 &&
+        siteEmailsList.length > 0
+      ) {
+        const bestEmail = selectBestEmailForPerson({}, siteEmailsList) ?? {
+          email: siteEmailsList[0].email,
+          kind: siteEmailsList[0].kind,
+        };
+        const deskIdHash = createHash("sha1")
+          .update(`${account.id}:public-desk`)
+          .digest("hex")
+          .slice(0, 16);
+        rankedCompanyPeople = [
+          {
+            id: deskIdHash,
+            accountId: account.id,
+            accountName: account.name,
+            accountDomain: account.domain ?? undefined,
+            fullName: `${account.name} Team`,
+            title: "Public Clinic Contact (Website)",
+            department: criteria?.departments[0] ?? "Operations",
+            publicEmail: bestEmail.email,
+            publicEmailKind: bestEmail.kind,
+            ...(primaryPhone ? { publicPhone: primaryPhone } : {}),
+            sourceUrl: contactSourceUrl ?? homepage.finalUrl,
+            location: account.location ?? undefined,
+            score: 35,
+          },
+        ];
+      }
+
       for (const person of rankedCompanyPeople) {
         if (allPeople.length >= MAX_TOTAL_PEOPLE) break;
         allPeople.push(person);
@@ -1048,6 +1153,9 @@ export async function discoverPeopleFromCompanyWebsites(
         website: homepage.finalUrl,
         pagesFetched: pagesFetchedForCompany,
         peopleFound: rankedCompanyPeople.length,
+        ...(siteEmailsList.length > 0 ? { publicEmails: siteEmailsList } : {}),
+        ...(phonesList.length > 0 ? { publicPhones: phonesList } : {}),
+        ...(contactSourceUrl ? { contactSourceUrl } : {}),
         note: rankedCompanyPeople.length === 0 ? "No named leadership/team profiles matched public pages." : undefined,
       });
     } catch (error) {

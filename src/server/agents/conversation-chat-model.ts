@@ -106,6 +106,10 @@ export type ConversationChatContext = {
   synthesis?: MarketSynthesis | null;
   companySearch?: CompanySearchView | null;
   peopleDiscovery?: PeopleDiscoveryView | null;
+  emailSources?: {
+    prospeoAvailable: boolean;
+    dropcontactAvailable: boolean;
+  } | null;
   outreachExecution?: OutreachExecutionView | null;
   templatePack?: OutreachTemplatePackView | null;
 };
@@ -125,6 +129,7 @@ export function buildConversationChatPrompt(
     synthesis,
     companySearch,
     peopleDiscovery,
+    emailSources,
     outreachExecution,
     templatePack,
   } = context;
@@ -218,10 +223,22 @@ export function buildConversationChatPrompt(
     if (peopleDiscovery.contacts.length > 0) {
       const contactLines = peopleDiscovery.contacts.slice(0, 25).map((contact, idx) => {
         const row = formatContactForCohortTable(contact);
-        return `${idx + 1}. ${row.fullName} | ${row.title} | ${row.department} / ${row.seniority} | ${row.accountName} | source=${row.sourceLabel} | status=${row.verificationStatus}${row.verifiedEmail ? ` (${row.verifiedEmail})` : ""}`;
+        const emailSuffix = row.verifiedEmail
+          ? ` (${row.verifiedEmail} verified)`
+          : contact.publicEmail
+            ? ` (website: ${contact.publicEmail}${contact.publicEmailKind ? ` · ${contact.publicEmailKind}` : ""})`
+            : "";
+        const phoneSuffix = contact.publicPhone ? ` | tel=${contact.publicPhone}` : "";
+        return `${idx + 1}. ${row.fullName} | ${row.title} | ${row.department} / ${row.seniority} | ${row.accountName} | source=${row.sourceLabel} | status=${row.verificationStatus}${emailSuffix}${phoneSuffix}`;
       });
       lines.push("Discovered people table:\n" + contactLines.join("\n"));
     }
+  }
+
+  if (emailSources) {
+    lines.push(
+      `Email sources configured: Company websites ($0, always ready) | Prospeo (${emailSources.prospeoAvailable ? "ready" : "key missing"}) | Dropcontact (${emailSources.dropcontactAvailable ? "ready" : "key missing"}).`,
+    );
   }
 
   if (outreachExecution) {
@@ -352,9 +369,11 @@ Action Rules:
    - Set "shortlistUpdate": { "apply": true, ... } when the user asks to shortlist, select, focus on, hold, or dismiss discovered companies by name ("accountNames"), country/city ("locationFilter"), count ("topN"), or "all": true.
 4. peopleUpdate (buying committee & decision-maker discovery):
    - Set "peopleUpdate": { "apply": true, ... } when the user asks to get/find contacts or decision-makers, shortlist & find buyers at discovered companies, add/remove target job titles, change departments (${PROSPEO_DEPARTMENT_OPTIONS.join(", ")}), change seniorities (${PROSPEO_SENIORITY_OPTIONS.join(", ")}), or switch people provider ("website_team" for $0 website crawl vs "prospeo" for B2B database).
+   - IMPORTANT FALLBACK RULE: When the user asks to get/extract/check emails or contacts FROM COMPANY WEBSITES or says Prospeo didn't work / returned 0 emails, set "peopleUpdate": { "apply": true, "providerKey": "website_team" } ($0 website scan + automatic backfill of public emails/phones onto existing contacts) — do NOT re-stage Prospeo verification.
    - If the user asks to get contacts in a country where companies aren't filtered/shortlisted yet (e.g. "give me 10 contacts in Malaysia"), emit BOTH "filterUpdate" (for that location) AND "shortlistUpdate" (locationFilter/topN) AND "peopleUpdate" so the backend coordinates the workflow smoothly without dead ends.
 5. verificationUpdate (Phase 9A email lookup/enrichment, max 10 contacts):
    - Set "verificationUpdate": { "apply": true, ... } when the user asks to verify, enrich, or look up email addresses for discovered contacts (default providerKey "prospeo" unless Dropcontact is requested; set executeIfApproved: true only if spend is approved).
+   - If Prospeo returned 0 emails and Dropcontact is ready, suggest trying Dropcontact ("try Dropcontact on unverified contacts") or scanning company websites ($0).
 6. templateUpdate (blaster-ready cold email sequence, $0 external spend):
    - Set "templateUpdate": { "apply": true, ... } ONLY when the user explicitly asks to write, generate, rewrite, shorten, adjust tone/CTA/offer of, or refine outreach email templates.`;
 
@@ -600,12 +619,12 @@ export function parseConversationChatResponse(rawText: string): ConversationChat
 }
 
 const EXPLICIT_MUTATION_OR_SEARCH_VERB =
-  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|without|skip|omit|drop|remove|add|include|focus|switch|find|search|run|scan|refresh|re-run|rerun|replace|set\s+(?!to\b)|target|prefer|prioritize|approve|approved|confirm|confirmed|proceed|go\s+ahead|do\s+it|execute|continue|shortlist|hold|dismiss|select|fetch|pull|enrich|verify|start|launch|yes|give\s+(?:me|us)|get\s+(?:me|us)|list\s+(?:of|at\s+least)|use\s+(?:prospeo|openstreetmap|osm|website[_\s]team|dropcontact)|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate|shorter)\b/i;
+  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|without|skip|omit|drop|remove|add|include|focus|switch|find|search|run|scan|refresh|re-run|rerun|replace|set\s+(?!to\b)|target|prefer|prioritize|approve|approved|confirm|confirmed|proceed|go\s+ahead|do\s+it|execute|continue|shortlist|hold|dismiss|select|fetch|pull|enrich|verify|start|launch|yes|give\s+(?:me|us|the|their)|get\s+(?:me|us|the|their|some|more|emails?|contacts?|leads?|people|phones?)|try\s+(?:to\s+)?(?:get|find|scan|check|extract|pull|enrich|verify|scrape|crawl)|check\s+(?:their\s+)?websites?|from\s+(?:their\s+)?websites?|scrape|crawl|extract|look\s*up|lookup|fallback|failsafe|list\s+(?:of|at\s+least)|(?:use|try)\s+(?:prospeo|openstreetmap|osm|website[_\s]team|dropcontact)|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate|shorter)\b/i;
 
 const INTERROGATIVE_START_REGEX =
   /^(?:(?:ok(?:ay)?|so|well|hey|ano|please)[,\s]+)*(?:why|what|which|who|when|where|how)\b/i;
 const STRONG_IMPERATIVE_REGEX =
-  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|remove|drop|add|switch|run|scan|refresh|rerun|re-run|replace|shortlist|dismiss|hold|approve|approved|execute|verify|enrich|proceed|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate)\b/i;
+  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|remove|drop|add|switch|run|scan|refresh|rerun|re-run|replace|shortlist|dismiss|hold|approve|approved|execute|verify|enrich|proceed|scrape|crawl|extract|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate)\b/i;
 
 const EXPLICIT_SPEND_APPROVAL_REGEX =
   /\b(approve|approved|i\s+approve|yes[\s,!.-]+(proceed|go\s+ahead|approve|approved|run|search|do\s+it|please|continue|verify|enrich)|go\s+ahead|confirmed?|execute(\s+the)?\s+(search|prospeo|verification|run)|run\s+(the\s+)?(prospeo|search|verification)|proceed\s+to\s+(search|run|verify|enrich)|proceed\s+please|yes\s+please)\b/i;
@@ -630,6 +649,111 @@ export function userExplicitlyApprovedSpend(userMessage: string): boolean {
     return false;
   }
   return EXPLICIT_SPEND_APPROVAL_REGEX.test(trimmed);
+}
+
+const WEBSITE_SOURCE_REQUEST_REGEX =
+  /\b(websites?|their\s+sites?|company\s+sites?|web\s+pages?|scrape|crawl)\b/i;
+const CONTACT_OR_EMAIL_INTENT_REGEX =
+  /\b(emails?|e-mails?|contacts?|people|phones?|leads?|decision[\s-]?makers?|team)\b/i;
+const PROSPEO_DID_NOT_WORK_REGEX =
+  /\b(didn'?t\s+work|did\s+not\s+work|failed|no\s+results|zero\s+emails?|0\s+emails?|instead|as\s+well|from\s+(?:their\s+)?websites?)\b/i;
+const DROPCONTACT_REQUEST_REGEX = /\bdropcontact\b/i;
+
+/**
+ * Deterministic routing failsafes:
+ * 1. Explicit website-source contact requests route to $0 `website_team` discovery.
+ * 2. Explicit Dropcontact requests with discovered contacts route `verificationUpdate`
+ *    to `providerKey: "dropcontact"` (unless an awaiting Dropcontact run is already being approved).
+ */
+export function applyDeterministicChatFailsafes(
+  userMessage: string,
+  output: ConversationChatOutput,
+  context: ConversationChatContext,
+): ConversationChatOutput {
+  if (!userRequestedAction(userMessage)) {
+    return output;
+  }
+
+  const wantsWebsiteContacts =
+    WEBSITE_SOURCE_REQUEST_REGEX.test(userMessage) &&
+    CONTACT_OR_EMAIL_INTENT_REGEX.test(userMessage);
+  const hasCompanyCohort =
+    (context.companySearch?.accounts.length ?? 0) > 0 ||
+    (context.peopleDiscovery?.shortlistedCount ?? 0) > 0;
+
+  if (wantsWebsiteContacts && hasCompanyCohort) {
+    const clearErroneousProspeoVerify =
+      PROSPEO_DID_NOT_WORK_REGEX.test(userMessage) &&
+      output.verificationUpdate?.providerKey !== "dropcontact";
+
+    return {
+      ...output,
+      peopleUpdate: {
+        ...(output.peopleUpdate ?? {}),
+        apply: true,
+        providerKey: "website_team",
+        reason:
+          output.peopleUpdate?.reason ??
+          "Scan shortlisted company websites ($0) for decision-makers, public emails, and phone numbers.",
+      },
+      verificationUpdate: clearErroneousProspeoVerify ? null : output.verificationUpdate,
+    };
+  }
+
+  const hasContacts = (context.peopleDiscovery?.contacts.length ?? 0) > 0;
+  if (
+    DROPCONTACT_REQUEST_REGEX.test(userMessage) &&
+    hasContacts &&
+    !WEBSITE_SOURCE_REQUEST_REGEX.test(userMessage)
+  ) {
+    const existingRun = context.peopleDiscovery?.verificationRun;
+    if (
+      existingRun?.status === "awaiting_approval" &&
+      existingRun.providerKey === "dropcontact" &&
+      (output.approveAction?.apply || userExplicitlyApprovedSpend(userMessage))
+    ) {
+      return {
+        ...output,
+        approveAction: output.approveAction?.apply
+          ? output.approveAction
+          : {
+              apply: true,
+              target: "contact_verification",
+              reason: "Approve staged Dropcontact email verification.",
+            },
+      };
+    }
+
+    const existingApproveTarget = output.approveAction?.target;
+    const clearStaleProspeoApproval =
+      Boolean(output.approveAction?.apply) &&
+      existingRun?.providerKey !== "dropcontact" &&
+      (existingApproveTarget === "contact_verification" ||
+        existingApproveTarget === "any_pending");
+
+    const hasExplicitSelection = Boolean(
+      output.verificationUpdate?.contactNames?.length || output.verificationUpdate?.topN,
+    );
+
+    return {
+      ...output,
+      approveAction: clearStaleProspeoApproval ? null : output.approveAction,
+      verificationUpdate: {
+        ...(output.verificationUpdate ?? {}),
+        apply: true,
+        providerKey: "dropcontact",
+        allUnverified:
+          output.verificationUpdate?.allUnverified ?? (!hasExplicitSelection ? true : undefined),
+        executeIfApproved:
+          output.verificationUpdate?.executeIfApproved ?? userExplicitlyApprovedSpend(userMessage),
+        reason:
+          output.verificationUpdate?.reason ??
+          "Verify unverified contact emails with Dropcontact (3rd email source).",
+      },
+    };
+  }
+
+  return output;
 }
 
 export async function replyInResearchConversation(
@@ -676,5 +800,5 @@ export async function replyInResearchConversation(
       templateUpdate: null,
     };
   }
-  return parsed;
+  return applyDeterministicChatFailsafes(userMessage, parsed, context);
 }

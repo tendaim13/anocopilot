@@ -17,12 +17,17 @@ import {
 import type { IndustryProfile } from "@/lib/ano/market-synthesis";
 import type { ResearchConversationView } from "@/lib/ano/research-conversation";
 import {
+  applyDeterministicChatFailsafes,
   buildConversationChatPrompt,
   parseConversationChatResponse,
   replyInResearchConversation,
   userExplicitlyApprovedSpend,
   userRequestedAction,
 } from "@/server/agents/conversation-chat-model";
+import {
+  discoverPeopleFromCompanyWebsites,
+  matchWebsiteContactForPerson,
+} from "@/server/connectors/website-team/website-team-client";
 import {
   selectAccountsForChatShortlist,
   selectContactsForChatVerification,
@@ -423,4 +428,147 @@ test("selectAccountsForChatShortlist and selectContactsForChatVerification filte
     toVerify.map((c) => c.fullName),
     ["Dr. Amina Noor"],
   );
+});
+
+test("website fallback routes 'get emails from their websites' cleanly and extracts clinic desk contacts + backfills Prospeo leads", async () => {
+  const userMsg =
+    "can you try to get the emails from their websites as well?The onces from prospeo didnt work";
+  assert.equal(userRequestedAction(userMsg), true);
+  assert.equal(userExplicitlyApprovedSpend(userMsg), false);
+
+  const account = scoreAndBuildAccountDossier(
+    {
+      provider: "prospeo",
+      id: "co-my-smilebay",
+      name: "SmileBay Dental",
+      website: "https://smilebaydental.com",
+      domain: "smilebaydental.com",
+      industry: "Hospitals and Health Care",
+      location: { city: "Bayan Lepas", country: "Malaysia" },
+    },
+    {
+      dossierId: "00000000-0000-4000-8000-000000003001",
+      conversationId: convId,
+      targetDecisionId: decisionId,
+      companySearchId: searchId,
+      providerKey: "prospeo",
+      targetMarketName: "Malaysia",
+      targetIndustryName: "Hospitals and Health Care",
+      canonicalLocations: ["Malaysia"],
+      linkedClaimIds: [claimId],
+      capturedAt: now,
+      lifecycleState: "shortlisted",
+    },
+  );
+
+  const companySearch: CompanySearchView = {
+    id: searchId,
+    conversationId: convId,
+    targetDecisionId: decisionId,
+    providerActionRequestId: null,
+    providerKey: "prospeo",
+    status: "completed",
+    targetMarketName: "Malaysia",
+    targetIndustryName: "Hospitals and Health Care",
+    requestedLocations: ["Malaysia"],
+    canonicalLocations: ["Malaysia"],
+    canonicalIndustries: ["Hospitals and Health Care"],
+    industryKeywords: ["dental"],
+    excludedCategories: [],
+    linkedClaimIds: [claimId],
+    criteria: ["Malaysia"],
+    providerFilters: {},
+    maximumResults: 25,
+    estimatedMaximumCredits: 1,
+    estimateDetail: "1 page",
+    resultCount: 1,
+    providerReceipt: {},
+    failureMessage: null,
+    cohort: null,
+    accounts: [account],
+    approvedAt: now,
+    completedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const conversation: ResearchConversationView = {
+    conversation: {
+      id: convId,
+      title: "Malaysia dental clinics",
+      status: "complete_without_research",
+      threadId: `ano:ws:${convId}`,
+      createdAt: now,
+      updatedAt: now,
+    },
+    run: {
+      id: "00000000-0000-4000-8000-000000003099",
+      status: "complete_without_research",
+      graphVersion: "phase-a-v1",
+      currentNode: "complete",
+      checkpointRef: null,
+      failureMessage: null,
+    },
+    messages: [],
+    brief: null,
+    pendingQuestion: null,
+    plan: null,
+    events: [],
+  };
+
+  // Even if LLM forgets peopleUpdate or wrongly emits Prospeo verificationUpdate, deterministic failsafe fixes it.
+  const routed = applyDeterministicChatFailsafes(
+    userMsg,
+    {
+      reply: "Scanning shortlisted clinic websites ($0) for emails and contacts.",
+      approveAction: null,
+      filterUpdate: null,
+      shortlistUpdate: null,
+      peopleUpdate: null,
+      verificationUpdate: { apply: true, providerKey: "prospeo", allUnverified: true },
+      templateUpdate: null,
+    },
+    { conversation, companySearch },
+  );
+  assert.equal(routed.peopleUpdate?.apply, true);
+  assert.equal(routed.peopleUpdate?.providerKey, "website_team");
+  assert.equal(routed.verificationUpdate, null);
+
+  // Crawl clinic with /contact email only (no named team bios) -> default omits desk row, failsafe includes it.
+  const homeHtml = `<html><body><h1>SmileBay Dental</h1><a href="/contact">Contact Us</a></body></html>`;
+  const contactHtml = `<html><body><p>Email <a href="mailto:care@smilebaydental.com">care@smilebaydental.com</a> or direct <a href="mailto:pengsan@smilebaydental.com">pengsan@smilebaydental.com</a></p><a href="tel:+6046431111">+60 4-643 1111</a></body></html>`;
+
+  const defaultResult = await discoverPeopleFromCompanyWebsites([account], undefined, {
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: (async (input) =>
+      String(input).includes("/contact")
+        ? new Response(contactHtml, { status: 200, headers: { "content-type": "text/html" } })
+        : new Response(homeHtml, { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch,
+  });
+  assert.equal(defaultResult.people.length, 0);
+  assert.equal(defaultResult.companyReports[0]?.publicEmails?.length, 2);
+  assert.deepEqual(defaultResult.companyReports[0]?.publicPhones, ["+6046431111"]);
+
+  // Backfilling an existing Prospeo contact picks personal direct email matching their name first.
+  const backfilledDirect = matchWebsiteContactForPerson(
+    { fullName: "Pengsan Yong", firstName: "Pengsan", lastName: "Yong" },
+    defaultResult.companyReports[0]!,
+  );
+  assert.equal(backfilledDirect?.publicEmail, "pengsan@smilebaydental.com");
+  assert.equal(backfilledDirect?.publicEmailKind, "direct_public");
+  assert.equal(backfilledDirect?.publicPhone, "+6046431111");
+
+  const deskResult = await discoverPeopleFromCompanyWebsites([account], undefined, {
+    includePublicDeskFallback: true,
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: (async (input) =>
+      String(input).includes("/contact")
+        ? new Response(contactHtml, { status: 200, headers: { "content-type": "text/html" } })
+        : new Response(homeHtml, { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch,
+  });
+  assert.equal(deskResult.people.length, 1);
+  assert.equal(deskResult.people[0]?.fullName, "SmileBay Dental Team");
+  assert.equal(deskResult.people[0]?.title, "Public Clinic Contact (Website)");
+  assert.equal(deskResult.people[0]?.publicEmail, "care@smilebaydental.com");
+  assert.equal(deskResult.people[0]?.publicEmailKind, "shared_inbox");
 });

@@ -13,6 +13,16 @@ import {
   formatContactForCohortTable,
   normalizeDiscoveredPersonCandidate,
 } from "@/lib/ano/people-playbooks";
+import type { PeopleDiscoveryView } from "@/lib/ano/people-playbooks";
+import type { ResearchConversationView } from "@/lib/ano/research-conversation";
+import {
+  applyDeterministicChatFailsafes,
+  buildConversationChatPrompt,
+} from "@/server/agents/conversation-chat-model";
+import {
+  DropcontactClientError,
+  verifyContactsWithDropcontact,
+} from "@/server/connectors/dropcontact/dropcontact-client";
 import {
   enrichProspeoPeople,
   ProspeoClientError,
@@ -392,4 +402,300 @@ test("multi-provider verification preview, cohort formatting, and outreach eligi
   assert.equal(verifiedEligibility.status, "eligible");
   assert.equal(verifiedEligibility.canProposeEmailSend, true);
   assert.ok(verifiedEligibility.reasons.some((r) => r.includes("Prospeo-verified email")));
+});
+
+test("Dropcontact async polling sends linkedin, prefers nominative@pro, falls back to mobile_phone, and rejects fail qualifications", async () => {
+  const prevDropcontact = process.env.DROPCONTACT_API_KEY;
+  process.env.DROPCONTACT_API_KEY = "test-dropcontact-key";
+
+  try {
+    const account = makeClinicAccount(
+      "00000000-0000-4000-8000-000000000961",
+      "Harbour Dental Studio",
+      "https://harbourdental.example",
+    );
+    const contact = normalizeDiscoveredPersonCandidate(
+      {
+        id: "p-1",
+        providerKey: "prospeo",
+        fullName: "Dr. Mei Ling Tan",
+        firstName: "Mei Ling",
+        lastName: "Tan",
+        title: "Principal Dentist",
+        linkedInUrl: "https://www.linkedin.com/in/mei-ling-tan",
+      },
+      {
+        candidateId: "00000000-0000-4000-8000-000000000962",
+        conversationId: convId,
+        targetDecisionId: decisionId,
+        personSearchId,
+        account,
+        roleRecommendations: [],
+        providerKey: "prospeo",
+        capturedAt: now,
+      },
+    );
+
+    const dcPreview = buildContactVerificationPreview({
+      verificationRunId: "00000000-0000-4000-8000-000000000963",
+      conversationId: convId,
+      personSearchId,
+      selectedContacts: [contact],
+      providerKey: "dropcontact",
+      nowIso: now,
+    });
+    assert.ok(dcPreview.previewPairs[0]?.fieldsSent.includes("linkedin"));
+    assert.equal(dcPreview.previewPairs[0]?.fieldsSent.includes("linkedin_url"), false);
+
+    let postCount = 0;
+    let getCount = 0;
+
+    const batchRes = await verifyContactsWithDropcontact(
+      [
+        {
+          contactId: "dc-1",
+          fullName: "Dr. Mei Ling Tan",
+          firstName: "Mei Ling",
+          lastName: "Tan",
+          companyName: "Harbour Dental Studio",
+          website: "https://harbourdental.example",
+          linkedInUrl: "https://www.linkedin.com/in/mei-ling-tan",
+          fieldsSent: ["first_name", "last_name", "full_name", "company", "website", "linkedin"],
+        },
+        {
+          contactId: "dc-2",
+          fullName: "Pengsan Yong",
+          firstName: "Pengsan",
+          lastName: "Yong",
+          companyName: "SmileBay Dental",
+          website: "https://smilebaydental.com",
+          fieldsSent: ["first_name", "last_name", "full_name", "company", "website"],
+        },
+        {
+          contactId: "dc-3",
+          fullName: "Unreachable Buyer",
+          firstName: "Unreachable",
+          lastName: "Buyer",
+          companyName: "Clinic Three",
+          website: null,
+          fieldsSent: ["first_name", "last_name", "full_name", "company"],
+        },
+      ],
+      (async (url, init) => {
+        const target = String(url);
+        if ((init?.method ?? "GET") === "POST") {
+          postCount += 1;
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          assert.equal(body.data[0].linkedin, "https://www.linkedin.com/in/mei-ling-tan");
+          return new Response(
+            JSON.stringify({
+              error: false,
+              success: true,
+              request_id: "dc-async-1",
+              credits_left: 47,
+            }),
+            { status: 200 },
+          );
+        }
+
+        assert.equal(target, "https://api.dropcontact.io/batch/dc-async-1");
+        getCount += 1;
+        if (getCount === 1) {
+          return new Response(
+            JSON.stringify({
+              error: true,
+              reason: "Your request is not ready yet",
+            }),
+            { status: 200 },
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            error: false,
+            success: true,
+            request_id: "dc-async-1",
+            data: [
+              {
+                email: [
+                  { email: "info@harbourdental.example", qualification: "generic@pro" },
+                  { email: "invalid@harbourdental.example", qualification: "fail" },
+                  { email: "mei.tan@harbourdental.example", qualification: "nominative@pro" },
+                ],
+                mobile_phone: "+60 12 345 6789",
+                website: "https://harbourdental.example",
+                custom_fields: { ano_contact_id: "dc-1" },
+              },
+              {
+                email: "pengsan@smilebaydental.com",
+                qualification: "catch_all@pro",
+                phone: "+60 4 643 1111",
+                website: "smilebaydental.com",
+                custom_fields: { ano_contact_id: "dc-2" },
+              },
+              {
+                email: "bounced@clinicthree.example",
+                qualification: "fail",
+                custom_fields: { ano_contact_id: "dc-3" },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }) as typeof fetch,
+      { pollIntervalMs: 0, maxPollAttempts: 3 },
+    );
+
+    assert.equal(postCount, 1);
+    assert.equal(getCount, 2);
+    assert.equal(batchRes.requestId, "dc-async-1");
+    assert.equal(batchRes.creditsLeft, 47);
+    assert.equal(batchRes.results[0]?.verified, true);
+    assert.equal(batchRes.results[0]?.email, "mei.tan@harbourdental.example");
+    assert.equal(batchRes.results[0]?.emailQualification, "nominative@pro");
+    assert.equal(batchRes.results[0]?.phone, "+60 12 345 6789");
+    assert.equal(batchRes.results[0]?.verifiedDomain, "harbourdental.example");
+    assert.equal(batchRes.results[1]?.verified, true);
+    assert.equal(batchRes.results[1]?.email, "pengsan@smilebaydental.com");
+    assert.equal(batchRes.results[1]?.emailQualification, "catch_all@pro");
+    assert.equal(batchRes.results[1]?.phone, "+60 4 643 1111");
+    assert.equal(batchRes.results[2]?.verified, false);
+    assert.equal(batchRes.results[2]?.email, null);
+
+    let slowPostCount = 0;
+    let slowGetCount = 0;
+    await assert.rejects(
+      () =>
+        verifyContactsWithDropcontact(
+          [
+            {
+              contactId: "dc-slow",
+              fullName: "Slow Contact",
+              firstName: null,
+              lastName: null,
+              companyName: "Slow Dental",
+              website: null,
+              fieldsSent: ["full_name", "company"],
+            },
+          ],
+          (async (_url, init) => {
+            if ((init?.method ?? "GET") === "POST") {
+              slowPostCount += 1;
+              return new Response(
+                JSON.stringify({
+                  error: false,
+                  success: true,
+                  request_id: "dc-slow-1",
+                  credits_left: 46,
+                }),
+                { status: 200 },
+              );
+            }
+            slowGetCount += 1;
+            return new Response(
+              JSON.stringify({ error: true, reason: "Your request is not ready yet" }),
+              { status: 200 },
+            );
+          }) as typeof fetch,
+          { pollIntervalMs: 0, maxPollAttempts: 2 },
+        ),
+      (err: unknown) => err instanceof DropcontactClientError && err.code === "TIMEOUT_NO_RETRY",
+    );
+    assert.equal(slowPostCount, 1);
+    assert.equal(slowGetCount, 2);
+  } finally {
+    if (prevDropcontact === undefined) delete process.env.DROPCONTACT_API_KEY;
+    else process.env.DROPCONTACT_API_KEY = prevDropcontact;
+  }
+});
+
+test("3-way email routing directs Dropcontact requests deterministically and exposes emailSources in prompt", () => {
+  const account = makeClinicAccount(
+    "00000000-0000-4000-8000-000000000971",
+    "SmileBay Dental",
+    "https://smilebaydental.com",
+  );
+  const contact = normalizeDiscoveredPersonCandidate(
+    {
+      id: "p-9",
+      providerKey: "prospeo",
+      fullName: "Pengsan Yong",
+      firstName: "Pengsan",
+      lastName: "Yong",
+      title: "Managing Director",
+    },
+    {
+      candidateId: "00000000-0000-4000-8000-000000000972",
+      conversationId: convId,
+      targetDecisionId: decisionId,
+      personSearchId,
+      account,
+      roleRecommendations: [],
+      providerKey: "prospeo",
+      capturedAt: now,
+    },
+  );
+
+  const conversation: ResearchConversationView = {
+    conversation: {
+      id: convId,
+      title: "Malaysia dental clinics",
+      status: "complete_without_research",
+      threadId: `ano:ws:${convId}`,
+      createdAt: now,
+      updatedAt: now,
+    },
+    run: {
+      id: "00000000-0000-4000-8000-000000000973",
+      status: "complete_without_research",
+      graphVersion: "phase-a-v1",
+      currentNode: "complete",
+      checkpointRef: null,
+      failureMessage: null,
+    },
+    messages: [],
+    brief: null,
+    pendingQuestion: null,
+    plan: null,
+    events: [],
+  };
+
+  const peopleDiscovery: PeopleDiscoveryView = {
+    shortlistedCount: 1,
+    personSearch: null,
+    verificationRun: null,
+    contacts: [contact],
+    playbooks: [],
+  };
+
+  const { user } = buildConversationChatPrompt(
+    {
+      conversation,
+      peopleDiscovery,
+      emailSources: { prospeoAvailable: true, dropcontactAvailable: true },
+    },
+    "try dropcontact on the unverified contacts",
+  );
+  assert.match(
+    user,
+    /Email sources configured: Company websites \(\$0, always ready\) \| Prospeo \(ready\) \| Dropcontact \(ready\)\./,
+  );
+
+  const routed = applyDeterministicChatFailsafes(
+    "try dropcontact on the unverified contacts",
+    {
+      reply: "Staging Dropcontact verification.",
+      approveAction: null,
+      filterUpdate: null,
+      shortlistUpdate: null,
+      peopleUpdate: null,
+      verificationUpdate: null,
+      templateUpdate: null,
+    },
+    { conversation, peopleDiscovery },
+  );
+  assert.equal(routed.verificationUpdate?.apply, true);
+  assert.equal(routed.verificationUpdate?.providerKey, "dropcontact");
+  assert.equal(routed.verificationUpdate?.allUnverified, true);
+  assert.equal(routed.verificationUpdate?.executeIfApproved, false);
 });

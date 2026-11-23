@@ -72,6 +72,6 @@ Add these in **Vercel Project Settings → Environment Variables** (**never** pu
 - `SEARXNG_BASE_URL` — Public/authenticated HTTPS endpoint of your SearXNG gateway (Phase B)
 - `SEARXNG_GATEWAY_TOKEN` — Server bearer token for SearXNG gateway (Phase B)
 - `PROSPEO_KEY` — Prospeo server API key (Phases D, E, 9A)
-- `DROPCONTACT_API_KEY` — Optional Dropcontact key (Phase E/9A fallback verifier)
+- `DROPCONTACT_API_KEY` — Dropcontact server API key (save as a **Secret** in Vercel Production to enable the 3-way email waterfall: Company websites `$0` → Prospeo → Dropcontact)
 
 *(Note: For GitHub billing protection, set GitHub Actions spending limit to `$0` on your personal/org billing settings so free 2,000 min/month usage is never exceeded unexpectedly.)*
