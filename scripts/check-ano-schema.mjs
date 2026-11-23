@@ -21,6 +21,7 @@ const requiredTables = [
   "outreach_template_packs",
   "conversation_product_sources",
   "autopilot_runs",
+  "workspace_invites",
 ];
 const requiredMigrations = [
   "20261021_000001_ano_workspace_and_research",
@@ -49,6 +50,7 @@ const requiredMigrations = [
   "20261124_000024_internal_api_usage_ledger",
   "20261124_000025_product_sources_and_intake",
   "20261124_000026_autopilot_runs",
+  "20261124_000027_workspace_invite_links",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
@@ -191,8 +193,18 @@ try {
   );
   const phase10cAutopilotReady =
     present.has("autopilot_runs") && planApprovalModeColumns.rows.length === 1;
+  const inviteRpcResult = await client.query(`
+    select
+      count(*)::int as rpc_count
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = any($1::text[])
+  `, [["is_ano_workspace_admin", "ensure_personal_ano_workspace", "preview_workspace_invite", "accept_workspace_invite"]]);
+  const phase11WorkspaceInvitesReady =
+    present.has("workspace_invites") && Number(inviteRpcResult.rows[0]?.rpc_count ?? 0) === 4;
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -211,8 +223,9 @@ try {
     internalUsageLedgerReady,
     phase10bProductIntakeReady,
     phase10cAutopilotReady,
+    phase11WorkspaceInvitesReady,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

@@ -563,6 +563,65 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
+.ano-invite-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.ano-invite-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ano-select-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ano-select {
+  min-height: 38px;
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ano-fresh-invite-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--ano-color-safe-outline);
+  background: var(--ano-color-safe-container);
+  color: var(--ano-color-on-safe-container);
+  font-size: 13px;
+}
+
+.ano-fresh-invite-box code {
+  display: block;
+  overflow-x: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font-size: 12px;
+}
+
+.ano-invite-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .ano-status-pill {
   padding: 5px 10px;
   border-radius: var(--md-sys-shape-corner-full);
