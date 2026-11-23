@@ -665,3 +665,7 @@ Every artifact must show the difference between: **what the user told Ano**, **s
 - [React custom elements reference](https://react.dev/reference/react-dom/components#custom-html-elements) — React 19 custom-element properties and event handling.
 - [Material Web repository](https://github.com/material-components/material-web) — versioning and upstream maintenance status.
 
+
+
+## Update here for failed deployments
+1. phase10A
