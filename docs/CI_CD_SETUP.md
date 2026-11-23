@@ -14,7 +14,7 @@ This repository uses a cost-optimized single-job GitHub Actions pipeline so **al
   - Re-verifies `check:migrations`, `typecheck`, and `npm test`.
   - Runs `npm run db:apply:ci && npm run db:status:ci` against Ano's Supabase database **before** code deployment (when `SUPABASE_DB_URL` is configured).
   - Builds once via `vercel build --prod` and deploys via `vercel deploy --prebuilt --prod` (when Vercel secrets are configured).
-  - Smoke checks `GET /api/health` (`200`, `"ok":true`) and verifies `GET /api/v1/conversations` rejects unauthenticated traffic (`401`/`403`).
+  - Smoke checks `GET /api/health` (`200`, `"ok":true`) and verifies `GET /api/v1/conversations` rejects unauthenticated traffic (`401`/`403`), checking the production alias URL first and falling back to authenticated `vercel curl` when Vercel Authentication protects the immutable deployment URL.
 - `vercel.json` — Configures Fluid Compute `maxDuration` (`300s` for deep Phase B/C/D/E routes, `120s` for Phase 9B templates/chat) and security headers.
 - `src/app/api/health/route.ts` — Unauthenticated liveness probe returning `{ ok, service, commit, agentMode, supabaseConfigured, timestamp }`.
 
@@ -50,6 +50,7 @@ In your GitHub repo **Settings → Environments → New environment: `production
 | `VERCEL_TOKEN` | Vercel Personal Access Token | Prebuilt deploy to Vercel |
 | `VERCEL_ORG_ID` | From `.vercel/project.json` (`orgId`) | Vercel CLI pull/build/deploy |
 | `VERCEL_PROJECT_ID` | From `.vercel/project.json` (`projectId`) | Vercel CLI pull/build/deploy |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | Optional: Vercel Deployment Protection bypass secret | Direct curl smoke check if protection is enabled on the production alias too |
 
 ---
 

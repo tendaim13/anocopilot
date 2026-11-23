@@ -60,6 +60,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
             echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets are not set yet; skipping Vercel deployment."
@@ -68,14 +69,50 @@ jobs:
 
           npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
           npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
-          DEPLOY_URL=$(npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1 | tr -d '[:space:]')
+
+          DEPLOY_OUT=$(mktemp)
+          DEPLOY_ERR=$(mktemp)
+          if ! npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN" >"$DEPLOY_OUT" 2>"$DEPLOY_ERR"; then
+            cat "$DEPLOY_ERR" >&2
+            cat "$DEPLOY_OUT"
+            rm -f "$DEPLOY_OUT" "$DEPLOY_ERR"
+            exit 1
+          fi
+          cat "$DEPLOY_ERR"
+          cat "$DEPLOY_OUT"
+
+          DEPLOY_URL=$(tail -n 1 "$DEPLOY_OUT" | tr -d '[:space:]')
+          ALIAS_URL=$(sed -E $'s/\x1b\\[[0-9;]*[A-Za-z]//g' "$DEPLOY_ERR" | grep -Eo 'Aliased[[:space:]]+https://[^[:space:]]+' | awk '{print $2}' | tail -n 1 | tr -d '[:space:]' || true)
+          rm -f "$DEPLOY_OUT" "$DEPLOY_ERR"
+
+          SMOKE_URL="${ALIAS_URL:-$DEPLOY_URL}"
           echo "Deployed URL: $DEPLOY_URL"
+          if [ -n "$ALIAS_URL" ]; then
+            echo "Production alias URL: $ALIAS_URL"
+          fi
 
-          HEALTH_JSON=$(curl -fsS "${DEPLOY_URL}/api/health")
+          CURL_HEADERS=()
+          if [ -n "$VERCEL_AUTOMATION_BYPASS_SECRET" ]; then
+            CURL_HEADERS=(-H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}")
+          fi
+
+          USE_VERCEL_CURL="false"
+          HEALTH_JSON=$(curl -sS ${CURL_HEADERS[@]+"${CURL_HEADERS[@]}"} "${SMOKE_URL}/api/health" || true)
+          if ! grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$HEALTH_JSON"; then
+            echo "Direct health check against ${SMOKE_URL}/api/health did not return ok:true; retrying with vercel curl..."
+            USE_VERCEL_CURL="true"
+            HEALTH_JSON=$(npx --yes vercel@latest curl /api/health --deployment "$DEPLOY_URL" --token="$VERCEL_TOKEN" -- -fsS)
+          fi
+
           echo "Health check response: $HEALTH_JSON"
-          echo "$HEALTH_JSON" | grep -q '"ok":true'
+          grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$HEALTH_JSON"
 
-          AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${DEPLOY_URL}/api/v1/conversations")
+          if [ "$USE_VERCEL_CURL" = "true" ]; then
+            AUTH_STATUS=$(npx --yes vercel@latest curl /api/v1/conversations --deployment "$DEPLOY_URL" --token="$VERCEL_TOKEN" -- -s -o /dev/null -w "%{http_code}" | tr -d '[:space:]')
+          else
+            AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${CURL_HEADERS[@]+"${CURL_HEADERS[@]}"} "${SMOKE_URL}/api/v1/conversations" | tr -d '[:space:]')
+          fi
+
           echo "Unauthenticated /api/v1/conversations status: $AUTH_STATUS"
           if [ "$AUTH_STATUS" != "401" ] && [ "$AUTH_STATUS" != "403" ]; then
             echo "::error::Expected 401 or 403 from unauthenticated /api/v1/conversations, got $AUTH_STATUS."
