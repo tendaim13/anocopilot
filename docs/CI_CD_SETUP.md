@@ -55,7 +55,7 @@ In your GitHub repo **Settings → Environments → New environment: `production
 
 ## 4. Environment Variables to Add in Vercel (Production & Preview)
 
-Add these in **Vercel Project Settings → Environment Variables** (**never** put `SUPABASE_DB_URL` in Vercel):
+Add these in **Vercel Project Settings → Environment Variables** (**never** put `SUPABASE_DB_URL` in Vercel — runtime LangGraph execution uses Supabase RLS tables plus an in-memory checkpointer whenever `SUPABASE_DB_URL` is absent):
 
 ### Required Runtime & Auth
 - `NEXT_PUBLIC_SUPABASE_URL` — Ano's Supabase URL

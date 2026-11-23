@@ -230,6 +230,7 @@ export function ConversationThread({
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [confirmProspeoApprovalOpen, setConfirmProspeoApprovalOpen] = useState(false);
   const [confirmProspeoPersonApprovalOpen, setConfirmProspeoPersonApprovalOpen] = useState(false);
+  const [confirmVerificationApprovalOpen, setConfirmVerificationApprovalOpen] = useState(false);
   const errorBannerRef = useRef<HTMLDivElement>(null);
   const bottomAnchorRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef<number>(conversation?.messages.length ?? 0);
@@ -360,6 +361,73 @@ export function ConversationThread({
             </MaterialButton>,
           );
         }
+      }
+
+      if (
+        message.role === "assistant" &&
+        meta?.shortlistedUpdated &&
+        !meta?.companySearchUpdated &&
+        companySearch &&
+        companySearch.accounts.length > 0
+      ) {
+        actionNodes.push(
+          <MaterialButton
+            key="open-shortlisted-companies"
+            variant="outlined"
+            onClick={() => openArtifactDrawer(null)}
+          >
+            Open company artifact ({meta.shortlistedCount ?? companySearch.accounts.filter((a) => a.lifecycleState === "shortlisted").length} shortlisted)
+          </MaterialButton>,
+        );
+      }
+
+      if (message.role === "assistant" && meta?.verificationUpdated) {
+        if (
+          meta.awaitingVerificationApproval &&
+          peopleDiscovery?.verificationRun?.status === "awaiting_approval"
+        ) {
+          const providerLabel =
+            peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact";
+          actionNodes.push(
+            <MaterialButton
+              key="approve-email-verification"
+              variant="filled"
+              disabled={isWorking}
+              onClick={() => setConfirmVerificationApprovalOpen(true)}
+            >
+              Approve {providerLabel} email verification
+            </MaterialButton>,
+          );
+        } else if (
+          !meta?.peopleSearchUpdated &&
+          peopleDiscovery &&
+          peopleDiscovery.contacts.length > 0
+        ) {
+          actionNodes.push(
+            <MaterialButton
+              key="open-verified-people-artifact"
+              variant="outlined"
+              onClick={() => openPeopleArtifactDrawer(null)}
+            >
+              Open people artifact ({peopleDiscovery.contacts.length} people)
+            </MaterialButton>,
+          );
+        }
+      }
+
+      if (message.role === "assistant" && meta?.templatePackUpdated && templatePack) {
+        actionNodes.push(
+          <MaterialButton
+            key="open-template-studio"
+            variant="outlined"
+            onClick={() => {
+              setTemplateDrawerStep("initial");
+              setTemplateDrawerOpen(true);
+            }}
+          >
+            Open template studio
+          </MaterialButton>,
+        );
       }
 
       const actionSlot = actionNodes.length > 0 ? <>{actionNodes}</> : null;
@@ -1003,6 +1071,22 @@ export function ConversationThread({
             onApprovePersonSearch?.(peopleDiscovery.personSearch!.id);
           }}
           onCancel={() => setConfirmProspeoPersonApprovalOpen(false)}
+        />
+      )}
+
+      {peopleDiscovery?.verificationRun && (
+        <ApprovalCard
+          open={confirmVerificationApprovalOpen}
+          title={`Approve ${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} email verification?`}
+          body={`Verifies emails for ${peopleDiscovery.verificationRun.selectedContactIds.length} selected contact${peopleDiscovery.verificationRun.selectedContactIds.length === 1 ? "" : "s"} (${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "1 Prospeo credit per email found; 0 credits for misses" : `up to ${peopleDiscovery.verificationRun.estimatedCredits} Dropcontact credit${peopleDiscovery.verificationRun.estimatedCredits === 1 ? "" : "s"}`}).`}
+          confirmLabel="Approve verification"
+          cancelLabel="Keep reviewing"
+          isWorking={isWorking}
+          onConfirm={() => {
+            setConfirmVerificationApprovalOpen(false);
+            onApproveContactVerification?.(peopleDiscovery.verificationRun!.id);
+          }}
+          onCancel={() => setConfirmVerificationApprovalOpen(false)}
         />
       )}
 

@@ -2,19 +2,28 @@ import "server-only";
 
 import { readFile } from "node:fs/promises";
 
+import { MemorySaver } from "@langchain/langgraph";
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { Pool } from "pg";
 
 const CHECKPOINT_SCHEMA = "ano_langgraph";
 
-let saverPromise: Promise<PostgresSaver> | undefined;
+let saverPromise: Promise<BaseCheckpointSaver> | undefined;
+let memorySaver: MemorySaver | undefined;
 
-function databaseUrl() {
+export function hasPostgresCheckpointerConfig(): boolean {
+  return Boolean(process.env.SUPABASE_DB_URL?.trim()) && process.env.ANO_DATABASE_LABEL === "ano";
+}
+
+function configuredPostgresUrl(): string | null {
+  const value = process.env.SUPABASE_DB_URL?.trim();
+  if (!value) {
+    return null;
+  }
   if (process.env.ANO_DATABASE_LABEL !== "ano") {
     throw new Error("Ano refused to initialise graph persistence because the dedicated Ano database label is not set.");
   }
-  const value = process.env.SUPABASE_DB_URL?.trim();
-  if (!value) throw new Error("Ano cannot resume conversations until its server-side Postgres connection is configured.");
   return value;
 }
 
@@ -30,14 +39,19 @@ async function sslConfig(url: string) {
 }
 
 /**
- * Creates one server-only checkpointer for Ano's dedicated database. LangGraph
- * owns low-level execution checkpoints; Ano's own records remain the source of
- * truth for conversations, approvals, and audit history.
+ * Returns the LangGraph checkpointer for Ano. When `SUPABASE_DB_URL` is absent
+ * (as on Vercel serverless runtime where direct Postgres DDL credentials are
+ * intentionally omitted), falls back to an in-memory saver because Ano persists
+ * all durable workflow state in Supabase RLS tables.
  */
-export async function getResearchCheckpointer() {
+export async function getResearchCheckpointer(): Promise<BaseCheckpointSaver> {
+  const url = configuredPostgresUrl();
+  if (!url) {
+    memorySaver ??= new MemorySaver();
+    return memorySaver;
+  }
   if (!saverPromise) {
     saverPromise = (async () => {
-      const url = databaseUrl();
       const pool = new Pool({ connectionString: url, ssl: await sslConfig(url), max: 4 });
       const saver = new PostgresSaver(pool, undefined, { schema: CHECKPOINT_SCHEMA });
       await saver.setup();

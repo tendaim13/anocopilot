@@ -32,6 +32,7 @@ export const chatFilterUpdateSchema = z.object({
   keywords: z.array(z.string().trim().min(3).max(100)).max(15).optional(),
   industries: z.array(z.string().trim().min(1).max(120)).max(8).optional(),
   excludedCategories: z.array(z.string().trim().min(1).max(120)).max(8).optional(),
+  executeIfApproved: z.boolean().optional(),
   reason: z.string().trim().max(280).optional(),
 });
 export type ChatFilterUpdate = z.infer<typeof chatFilterUpdateSchema>;
@@ -43,9 +44,39 @@ export const chatPeopleUpdateSchema = z.object({
   seniorities: z.array(z.string().trim().min(1).max(60)).max(6).optional(),
   includeTitles: z.array(z.string().trim().min(1).max(120)).max(10).optional(),
   excludeTitles: z.array(z.string().trim().min(1).max(120)).max(12).optional(),
+  executeIfApproved: z.boolean().optional(),
   reason: z.string().trim().max(280).optional(),
 });
 export type ChatPeopleUpdate = z.infer<typeof chatPeopleUpdateSchema>;
+
+export const chatApproveActionSchema = z.object({
+  apply: z.boolean(),
+  target: z.enum(["company_search", "person_search", "contact_verification", "any_pending"]),
+  reason: z.string().trim().max(280).optional(),
+});
+export type ChatApproveAction = z.infer<typeof chatApproveActionSchema>;
+
+export const chatShortlistUpdateSchema = z.object({
+  apply: z.boolean(),
+  action: z.enum(["shortlist", "hold", "dismiss"]).default("shortlist"),
+  accountNames: z.array(z.string().trim().min(1).max(160)).max(15).optional(),
+  locationFilter: z.string().trim().min(1).max(120).optional(),
+  topN: z.number().int().min(1).max(10).optional(),
+  all: z.boolean().optional(),
+  reason: z.string().trim().max(280).optional(),
+});
+export type ChatShortlistUpdate = z.infer<typeof chatShortlistUpdateSchema>;
+
+export const chatVerificationUpdateSchema = z.object({
+  apply: z.boolean(),
+  providerKey: z.enum(["prospeo", "dropcontact"]).optional(),
+  contactNames: z.array(z.string().trim().min(1).max(160)).max(10).optional(),
+  topN: z.number().int().min(1).max(10).optional(),
+  allUnverified: z.boolean().optional(),
+  executeIfApproved: z.boolean().optional(),
+  reason: z.string().trim().max(280).optional(),
+});
+export type ChatVerificationUpdate = z.infer<typeof chatVerificationUpdateSchema>;
 
 export const chatTemplateUpdateSchema = z.object({
   apply: z.boolean(),
@@ -60,8 +91,11 @@ export type ChatTemplateUpdate = z.infer<typeof chatTemplateUpdateSchema>;
 
 export const conversationChatOutputSchema = z.object({
   reply: z.string().trim().min(1).max(4_000),
+  approveAction: chatApproveActionSchema.nullable().optional(),
   filterUpdate: chatFilterUpdateSchema.nullable().optional(),
+  shortlistUpdate: chatShortlistUpdateSchema.nullable().optional(),
   peopleUpdate: chatPeopleUpdateSchema.nullable().optional(),
+  verificationUpdate: chatVerificationUpdateSchema.nullable().optional(),
   templateUpdate: chatTemplateUpdateSchema.nullable().optional(),
 });
 export type ConversationChatOutput = z.infer<typeof conversationChatOutputSchema>;
@@ -196,6 +230,28 @@ export function buildConversationChatPrompt(
     );
   }
 
+  const pendingApprovals: string[] = [];
+  if (companySearch?.status === "awaiting_approval") {
+    pendingApprovals.push(
+      `- company_search (provider=${companySearch.providerKey}, locations=[${companySearch.canonicalLocations.join("; ")}], keywords=[${companySearch.industryKeywords.join(", ")}], estMaxCredits=${companySearch.estimatedMaximumCredits})`,
+    );
+  }
+  if (peopleDiscovery?.personSearch?.status === "awaiting_approval") {
+    const ps = peopleDiscovery.personSearch;
+    pendingApprovals.push(
+      `- person_search (provider=${ps.providerKey}, accounts=[${ps.shortlistedAccountNames.join(", ")}], roles=[${ps.approvedRoles.join(", ")}], estMaxCredits=${ps.estimatedMaximumCredits})`,
+    );
+  }
+  if (peopleDiscovery?.verificationRun?.status === "awaiting_approval") {
+    const vr = peopleDiscovery.verificationRun;
+    pendingApprovals.push(
+      `- contact_verification (provider=${vr.providerKey}, contacts=${vr.selectedContactIds.length}, estCredits=${vr.estimatedCredits})`,
+    );
+  }
+  if (pendingApprovals.length > 0) {
+    lines.push("Pending approvals ready to execute upon user confirmation:\n" + pendingApprovals.join("\n"));
+  }
+
   if (templatePack) {
     const stepSummaries = templatePack.steps
       .map(
@@ -218,12 +274,21 @@ export function buildConversationChatPrompt(
     );
   }
 
-  const system = `You are Ano, a practical, concise two-way AI sales-research copilot.
+  const system = `You are Ano, a practical, genuinely agentic two-way AI sales-research copilot.
 Use ONLY the workspace snapshot provided by the user message. Never invent companies, people, websites, emails, statistics, or source facts not present in the snapshot. Refer to discovered people in the third person (never say "you have been identified as <person>").
+
+HONESTY & EXECUTION RULE:
+- NEVER claim a company search, people search, shortlist change, or email verification has ALREADY finished or returned new contacts unless those exact results are already visible in the workspace snapshot above.
+- When you emit an action object below, state concisely what you are initiating or preparing; the server runs the approved step immediately and appends the real saved companies, contacts, or emails below your reply.
 
 Output strictly valid JSON matching:
 {
   "reply": "string — direct, helpful answer referencing exact rows/findings from the snapshot",
+  "approveAction": null | {
+    "apply": boolean,
+    "target": "company_search" | "person_search" | "contact_verification" | "any_pending",
+    "reason": "short summary of what preview the user approved"
+  },
   "filterUpdate": null | {
     "apply": boolean,
     "providerKey": "openstreetmap" | "prospeo" (optional),
@@ -231,7 +296,17 @@ Output strictly valid JSON matching:
     "keywords": ["3+ char keyword", ...] (optional, max 15),
     "industries": ["exact Prospeo industry", ...] (optional, max 8),
     "excludedCategories": ["term to exclude", ...] (optional, max 8),
+    "executeIfApproved": boolean (optional, true ONLY when user explicitly approved spend),
     "reason": "short summary of requested filter adjustment"
+  },
+  "shortlistUpdate": null | {
+    "apply": boolean,
+    "action": "shortlist" | "hold" | "dismiss",
+    "accountNames": ["Company Name", ...] (optional, max 15),
+    "locationFilter": "country or city" (optional),
+    "topN": number (optional, 1-10),
+    "all": boolean (optional),
+    "reason": "short summary of shortlist change"
   },
   "peopleUpdate": null | {
     "apply": boolean,
@@ -240,7 +315,17 @@ Output strictly valid JSON matching:
     "seniorities": ["Founder/Owner"|"C-Suite"|"Partner"|"Vice President"|"Head"|"Director"|"Manager"|"Senior", ...] (optional, max 6),
     "includeTitles": ["Job Title", ...] (optional, max 10),
     "excludeTitles": ["Title to exclude", ...] (optional, max 12),
+    "executeIfApproved": boolean (optional, true ONLY when user explicitly approved spend),
     "reason": "short summary of requested persona update"
+  },
+  "verificationUpdate": null | {
+    "apply": boolean,
+    "providerKey": "prospeo" | "dropcontact" (optional),
+    "contactNames": ["Full Name or Company", ...] (optional, max 10),
+    "topN": number (optional, 1-10),
+    "allUnverified": boolean (optional),
+    "executeIfApproved": boolean (optional, true ONLY when user explicitly approved spend),
+    "reason": "short summary of requested email verification"
   },
   "templateUpdate": null | {
     "apply": boolean,
@@ -254,19 +339,24 @@ Output strictly valid JSON matching:
 }
 
 CRITICAL DEFAULT RULE:
-- Set "filterUpdate": null, "peopleUpdate": null, AND "templateUpdate": null whenever the user asks a question ("who", "what", "which", "why", "how", "compare", "tell me") without commanding you to change filters, add/remove roles, edit/rewrite email templates, or run a search. Never copy existing snapshot settings into filterUpdate, peopleUpdate, or templateUpdate during a question.
+- Set ALL action fields ("approveAction", "filterUpdate", "shortlistUpdate", "peopleUpdate", "verificationUpdate", "templateUpdate") to null whenever the user asks a read-only question ("who", "what", "which", "why", "how", "what hasn't been done", "what next steps") without commanding you to change filters, approve/run a search, shortlist companies, find contacts, verify emails, or edit templates. Never copy existing snapshot settings into any action object during a question.
 
-Rules for filterUpdate (company cohort discovery):
-- Set "filterUpdate": { "apply": true, ... } ONLY when the user explicitly asks to change, filter, narrow, expand, exclude from, switch provider ("openstreetmap" for local clinics/businesses, "prospeo" for B2B corporate database), or re-run the company cohort search.
-- Preserve unchanged filters by omitting fields the user did not ask to change.
-
-Rules for peopleUpdate (buying committee & decision-maker discovery):
-- Set "peopleUpdate": { "apply": true, ... } ONLY when the user explicitly commands you to add/change/remove target job titles (preserve any requested title accurately in includeTitles), change departments (${PROSPEO_DEPARTMENT_OPTIONS.join(", ")}), change seniorities (${PROSPEO_SENIORITY_OPTIONS.join(", ")}), add exclusions (\`excludeTitles\`), switch people provider ("website_team" for $0 website crawl vs "prospeo" for B2B database), or run a people search.
-- Never claim a credit-bearing Prospeo search has already executed; free OpenStreetMap ($0) and free website_team ($0) scans can run right away while Prospeo searches prepare a preview for explicit credit approval.
-
-Rules for templateUpdate (blaster-ready cold email sequence, $0 external spend):
-- Set "templateUpdate": { "apply": true, ... } ONLY when the user explicitly asks to write, generate, rewrite, shorten, adjust the tone/CTA/offer of, or refine outreach email templates.
-- Updating templates costs $0 external spend and never sends emails autonomously.`;
+Action Rules:
+1. approveAction:
+   - Set "approveAction": { "apply": true, "target": ... } whenever Pending approvals exist in the snapshot and the user says "yes", "approved", "approve", "go ahead", "confirm", or "proceed to search".
+   - Choose the specific target if clear, otherwise "any_pending".
+2. filterUpdate (company cohort discovery):
+   - Set "filterUpdate": { "apply": true, ... } when the user asks to filter, narrow, focus on a country/city (e.g. "only Malaysia", "find contacts in Malaysia" when the current company cohort is mixed across other countries), exclude terms, switch provider ("openstreetmap" for local clinics/businesses, "prospeo" for B2B corporate database), or re-run company discovery.
+   - Only include fields the user wants changed. Set "executeIfApproved": true ONLY when the user explicitly approved running/spending credits right now.
+3. shortlistUpdate (shortlist / hold / dismiss companies):
+   - Set "shortlistUpdate": { "apply": true, ... } when the user asks to shortlist, select, focus on, hold, or dismiss discovered companies by name ("accountNames"), country/city ("locationFilter"), count ("topN"), or "all": true.
+4. peopleUpdate (buying committee & decision-maker discovery):
+   - Set "peopleUpdate": { "apply": true, ... } when the user asks to get/find contacts or decision-makers, shortlist & find buyers at discovered companies, add/remove target job titles, change departments (${PROSPEO_DEPARTMENT_OPTIONS.join(", ")}), change seniorities (${PROSPEO_SENIORITY_OPTIONS.join(", ")}), or switch people provider ("website_team" for $0 website crawl vs "prospeo" for B2B database).
+   - If the user asks to get contacts in a country where companies aren't filtered/shortlisted yet (e.g. "give me 10 contacts in Malaysia"), emit BOTH "filterUpdate" (for that location) AND "shortlistUpdate" (locationFilter/topN) AND "peopleUpdate" so the backend coordinates the workflow smoothly without dead ends.
+5. verificationUpdate (Phase 9A email lookup/enrichment, max 10 contacts):
+   - Set "verificationUpdate": { "apply": true, ... } when the user asks to verify, enrich, or look up email addresses for discovered contacts (default providerKey "prospeo" unless Dropcontact is requested; set executeIfApproved: true only if spend is approved).
+6. templateUpdate (blaster-ready cold email sequence, $0 external spend):
+   - Set "templateUpdate": { "apply": true, ... } ONLY when the user explicitly asks to write, generate, rewrite, shorten, adjust tone/CTA/offer of, or refine outreach email templates.`;
 
   const user = `WORKSPACE SNAPSHOT:\n${lines.join("\n\n")}\n\nLATEST USER MESSAGE:\n${userMessage}`;
 
@@ -285,14 +375,23 @@ function stripJsonCodeFence(raw: string) {
   return trimmed;
 }
 
-function cleanStringArray(value: unknown, minLen = 1, maxItems = 10): string[] | undefined {
+function cleanStringArray(
+  value: unknown,
+  minLen = 1,
+  maxItems = 10,
+  maxLen = 120,
+): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const cleaned = value
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
-    .filter((item) => item.length >= minLen && item.length <= 120)
+    .filter((item) => item.length >= minLen && item.length <= maxLen)
     .slice(0, maxItems);
   return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function cleanReason(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 280) : undefined;
 }
 
 export function parseConversationChatResponse(rawText: string): ConversationChatOutput {
@@ -300,14 +399,39 @@ export function parseConversationChatResponse(rawText: string): ConversationChat
   if (!trimmed) {
     return {
       reply: "I reviewed the current workspace state, but my response came back empty. Try asking again.",
+      approveAction: null,
       filterUpdate: null,
+      shortlistUpdate: null,
       peopleUpdate: null,
+      verificationUpdate: null,
+      templateUpdate: null,
     };
   }
 
   try {
     const candidate = JSON.parse(stripJsonCodeFence(trimmed)) as Record<string, unknown>;
     if (candidate && typeof candidate === "object" && typeof candidate.reply === "string" && candidate.reply.trim()) {
+      const rawApprove =
+        candidate.approveAction && typeof candidate.approveAction === "object"
+          ? (candidate.approveAction as Record<string, unknown>)
+          : null;
+      let normalizedApprove: ChatApproveAction | null = null;
+      if (rawApprove && rawApprove.apply === true) {
+        const targetRaw = rawApprove.target;
+        const target =
+          targetRaw === "company_search" ||
+          targetRaw === "person_search" ||
+          targetRaw === "contact_verification" ||
+          targetRaw === "any_pending"
+            ? targetRaw
+            : "any_pending";
+        normalizedApprove = chatApproveActionSchema.parse({
+          apply: true,
+          target,
+          reason: cleanReason(rawApprove.reason),
+        });
+      }
+
       const rawFilter =
         candidate.filterUpdate && typeof candidate.filterUpdate === "object"
           ? (candidate.filterUpdate as Record<string, unknown>)
@@ -321,13 +445,44 @@ export function parseConversationChatResponse(rawText: string): ConversationChat
           providerKey:
             providerRaw === "openstreetmap" || providerRaw === "prospeo" ? providerRaw : undefined,
           locations: cleanStringArray(rawFilter.locations, 1, 5),
-          keywords: cleanStringArray(rawFilter.keywords, 3, 15),
+          keywords: cleanStringArray(rawFilter.keywords, 3, 15, 100),
           industries: cleanStringArray(rawFilter.industries, 1, 8),
           excludedCategories: cleanStringArray(rawFilter.excludedCategories, 1, 8),
-          reason:
-            typeof rawFilter.reason === "string" && rawFilter.reason.trim()
-              ? rawFilter.reason.trim().slice(0, 280)
+          executeIfApproved:
+            typeof rawFilter.executeIfApproved === "boolean"
+              ? rawFilter.executeIfApproved
               : undefined,
+          reason: cleanReason(rawFilter.reason),
+        });
+      }
+
+      const rawShortlist =
+        candidate.shortlistUpdate && typeof candidate.shortlistUpdate === "object"
+          ? (candidate.shortlistUpdate as Record<string, unknown>)
+          : null;
+      let normalizedShortlist: ChatShortlistUpdate | null = null;
+      if (rawShortlist && rawShortlist.apply === true) {
+        const actionRaw = rawShortlist.action;
+        const action =
+          actionRaw === "hold" || actionRaw === "dismiss" ? actionRaw : "shortlist";
+        const topN =
+          typeof rawShortlist.topN === "number" &&
+          Number.isFinite(rawShortlist.topN) &&
+          rawShortlist.topN >= 1 &&
+          rawShortlist.topN <= 10
+            ? Math.round(rawShortlist.topN)
+            : undefined;
+        normalizedShortlist = chatShortlistUpdateSchema.parse({
+          apply: true,
+          action,
+          accountNames: cleanStringArray(rawShortlist.accountNames, 1, 15, 160),
+          locationFilter:
+            typeof rawShortlist.locationFilter === "string" && rawShortlist.locationFilter.trim()
+              ? rawShortlist.locationFilter.trim().slice(0, 120)
+              : undefined,
+          topN,
+          all: rawShortlist.all === true ? true : undefined,
+          reason: cleanReason(rawShortlist.reason),
         });
       }
 
@@ -343,14 +498,46 @@ export function parseConversationChatResponse(rawText: string): ConversationChat
           apply: true,
           providerKey:
             pProviderRaw === "website_team" || pProviderRaw === "prospeo" ? pProviderRaw : undefined,
-          departments: cleanStringArray(rawPeople.departments, 1, 6),
-          seniorities: cleanStringArray(rawPeople.seniorities, 1, 6),
+          departments: cleanStringArray(rawPeople.departments, 1, 6, 80),
+          seniorities: cleanStringArray(rawPeople.seniorities, 1, 6, 60),
           includeTitles: cleanStringArray(rawPeople.includeTitles, 1, 10),
           excludeTitles: cleanStringArray(rawPeople.excludeTitles, 1, 12),
-          reason:
-            typeof rawPeople.reason === "string" && rawPeople.reason.trim()
-              ? rawPeople.reason.trim().slice(0, 280)
+          executeIfApproved:
+            typeof rawPeople.executeIfApproved === "boolean"
+              ? rawPeople.executeIfApproved
               : undefined,
+          reason: cleanReason(rawPeople.reason),
+        });
+      }
+
+      const rawVerification =
+        candidate.verificationUpdate && typeof candidate.verificationUpdate === "object"
+          ? (candidate.verificationUpdate as Record<string, unknown>)
+          : null;
+      let normalizedVerification: ChatVerificationUpdate | null = null;
+      if (rawVerification && rawVerification.apply === true) {
+        const vProviderRaw = rawVerification.providerKey;
+        const topN =
+          typeof rawVerification.topN === "number" &&
+          Number.isFinite(rawVerification.topN) &&
+          rawVerification.topN >= 1 &&
+          rawVerification.topN <= 10
+            ? Math.round(rawVerification.topN)
+            : undefined;
+        normalizedVerification = chatVerificationUpdateSchema.parse({
+          apply: true,
+          providerKey:
+            vProviderRaw === "prospeo" || vProviderRaw === "dropcontact"
+              ? vProviderRaw
+              : undefined,
+          contactNames: cleanStringArray(rawVerification.contactNames, 1, 10, 160),
+          topN,
+          allUnverified: rawVerification.allUnverified === true ? true : undefined,
+          executeIfApproved:
+            typeof rawVerification.executeIfApproved === "boolean"
+              ? rawVerification.executeIfApproved
+              : undefined,
+          reason: cleanReason(rawVerification.reason),
         });
       }
 
@@ -383,17 +570,17 @@ export function parseConversationChatResponse(rawText: string): ConversationChat
               ? rawTemplate.entryOffer.trim().slice(0, 240)
               : undefined,
           maxWords: parsedMaxWords,
-          reason:
-            typeof rawTemplate.reason === "string" && rawTemplate.reason.trim()
-              ? rawTemplate.reason.trim().slice(0, 280)
-              : undefined,
+          reason: cleanReason(rawTemplate.reason),
         });
       }
 
       return conversationChatOutputSchema.parse({
         reply: candidate.reply.trim().slice(0, 4_000),
+        approveAction: normalizedApprove,
         filterUpdate: normalisedFilter,
+        shortlistUpdate: normalizedShortlist,
         peopleUpdate: normalisedPeople,
+        verificationUpdate: normalizedVerification,
         templateUpdate: normalisedTemplate,
       });
     }
@@ -403,25 +590,46 @@ export function parseConversationChatResponse(rawText: string): ConversationChat
 
   return conversationChatOutputSchema.parse({
     reply: trimmed.slice(0, 4_000),
+    approveAction: null,
     filterUpdate: null,
+    shortlistUpdate: null,
     peopleUpdate: null,
+    verificationUpdate: null,
     templateUpdate: null,
   });
 }
 
 const EXPLICIT_MUTATION_OR_SEARCH_VERB =
-  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|without|skip|omit|drop|remove|add|include|focus|switch|find|search|run|scan|refresh|re-run|rerun|replace|set\s+(?!to\b)|target|prefer|prioritize|use|only|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate|shorter)\b/i;
+  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|without|skip|omit|drop|remove|add|include|focus|switch|find|search|run|scan|refresh|re-run|rerun|replace|set\s+(?!to\b)|target|prefer|prioritize|approve|approved|confirm|confirmed|proceed|go\s+ahead|do\s+it|execute|continue|shortlist|hold|dismiss|select|fetch|pull|enrich|verify|start|launch|yes|give\s+(?:me|us)|get\s+(?:me|us)|list\s+(?:of|at\s+least)|use\s+(?:prospeo|openstreetmap|osm|website[_\s]team|dropcontact)|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate|shorter)\b/i;
 
-const INTERROGATIVE_START_REGEX = /^(?:why|what|which|who|when|where|how)\b/i;
+const INTERROGATIVE_START_REGEX =
+  /^(?:(?:ok(?:ay)?|so|well|hey|ano|please)[,\s]+)*(?:why|what|which|who|when|where|how)\b/i;
 const STRONG_IMPERATIVE_REGEX =
-  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|remove|drop|add|switch|run|scan|refresh|rerun|re-run|replace|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate)\b/i;
+  /\b(change|update|modify|edit|refine|filter|narrow|expand|exclude|remove|drop|add|switch|run|scan|refresh|rerun|re-run|replace|shortlist|dismiss|hold|approve|approved|execute|verify|enrich|proceed|write|draft|rewrite|generate|shorten|tighten|rephrase|tweak|regenerate)\b/i;
 
-function userRequestedAction(userMessage: string): boolean {
+const EXPLICIT_SPEND_APPROVAL_REGEX =
+  /\b(approve|approved|i\s+approve|yes[\s,!.-]+(proceed|go\s+ahead|approve|approved|run|search|do\s+it|please|continue|verify|enrich)|go\s+ahead|confirmed?|execute(\s+the)?\s+(search|prospeo|verification|run)|run\s+(the\s+)?(prospeo|search|verification)|proceed\s+to\s+(search|run|verify|enrich)|proceed\s+please|yes\s+please)\b/i;
+const SPEND_QUESTION_PREFIX_REGEX =
+  /^(?:should|would|could|can|may|might|who|what|which|when|where|how|why)\b/i;
+
+export function userRequestedAction(userMessage: string): boolean {
   const trimmed = userMessage.trim();
   if (INTERROGATIVE_START_REGEX.test(trimmed) && !STRONG_IMPERATIVE_REGEX.test(trimmed)) {
     return false;
   }
   return EXPLICIT_MUTATION_OR_SEARCH_VERB.test(trimmed);
+}
+
+/** Strict deterministic gate before any credit-bearing Prospeo or Dropcontact execution in chat. */
+export function userExplicitlyApprovedSpend(userMessage: string): boolean {
+  const trimmed = userMessage.trim();
+  if (!trimmed || trimmed.endsWith("?")) {
+    return false;
+  }
+  if (SPEND_QUESTION_PREFIX_REGEX.test(trimmed)) {
+    return false;
+  }
+  return EXPLICIT_SPEND_APPROVAL_REGEX.test(trimmed);
 }
 
 export async function replyInResearchConversation(
@@ -451,12 +659,20 @@ export async function replyInResearchConversation(
   const parsed = parseConversationChatResponse(rawContent);
   if (
     !userRequestedAction(userMessage) &&
-    (parsed.filterUpdate?.apply || parsed.peopleUpdate?.apply || parsed.templateUpdate?.apply)
+    (parsed.approveAction?.apply ||
+      parsed.filterUpdate?.apply ||
+      parsed.shortlistUpdate?.apply ||
+      parsed.peopleUpdate?.apply ||
+      parsed.verificationUpdate?.apply ||
+      parsed.templateUpdate?.apply)
   ) {
     return {
       ...parsed,
+      approveAction: null,
       filterUpdate: null,
+      shortlistUpdate: null,
       peopleUpdate: null,
+      verificationUpdate: null,
       templateUpdate: null,
     };
   }
