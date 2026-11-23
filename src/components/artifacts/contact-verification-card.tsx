@@ -57,14 +57,16 @@ export function ContactVerificationCard({
         </span>
       </header>
 
-      <p className="m3-artifact-lead">{verificationRun.estimateDetail}</p>
+      <p className="m3-artifact-lead">
+        {`${providerLabel} email verification runs selectively on the ${verificationRun.previewPairs.length} contact${verificationRun.previewPairs.length === 1 ? "" : "s"} you selected.`}
+      </p>
 
       <div className="m3-metric-strip">
         <div>
           <span>Provider</span>
           <strong>
             {isProspeo
-              ? "Prospeo bulk enrich (1 credit/found)"
+              ? "Prospeo bulk verification"
               : "Dropcontact (selective batch)"}
           </strong>
         </div>
@@ -73,8 +75,8 @@ export function ContactVerificationCard({
           <strong>{verificationRun.previewPairs.length}</strong>
         </div>
         <div>
-          <span>Estimated credits</span>
-          <strong>{verificationRun.estimatedCredits}</strong>
+          <span>Batch limit</span>
+          <strong>Up to 10 contacts</strong>
         </div>
       </div>
 
@@ -115,12 +117,12 @@ export function ContactVerificationCard({
             </p>
           </div>
           <div className="m3-action-row">
-            <MaterialButton
+              <MaterialButton
               variant="filled"
               disabled={isWorking || !providerAvailable}
               onClick={() => setConfirmOpen(true)}
             >
-              Approve selective verification
+              Verify selected contacts
             </MaterialButton>
           </div>
         </footer>
@@ -128,13 +130,9 @@ export function ContactVerificationCard({
 
       <ApprovalCard
         open={confirmOpen}
-        title={`Approve selective ${providerLabel} verification?`}
-        body={
-          isProspeo
-            ? `Submits ${verificationRun.previewPairs.length} selected contact${verificationRun.previewPairs.length === 1 ? "" : "s"} to Prospeo /bulk-enrich-person (up to ${verificationRun.estimatedCredits} credit${verificationRun.estimatedCredits === 1 ? "" : "s"} — 1 credit per matched verified email, 0 on misses or 90-day repeats).`
-            : `Submits ${verificationRun.previewPairs.length} selected name-and-company pair${verificationRun.previewPairs.length === 1 ? "" : "s"} (${verificationRun.estimatedCredits} estimated credit${verificationRun.estimatedCredits === 1 ? "" : "s"}) to Dropcontact.`
-        }
-        confirmLabel="Submit selected pairs"
+        title={`Run ${providerLabel} email verification?`}
+        body={`Submits ${verificationRun.previewPairs.length} selected contact${verificationRun.previewPairs.length === 1 ? "" : "s"} to ${providerLabel} for work email lookup and verification.`}
+        confirmLabel="Verify contacts"
         cancelLabel="Cancel"
         isWorking={isWorking}
         onConfirm={() => {

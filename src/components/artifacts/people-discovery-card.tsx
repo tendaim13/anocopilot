@@ -239,15 +239,15 @@ export function PeopleDiscoveryCard({
         <div>
           <p className="m3-artifact-kicker">
             PHASE E · BUYING COMMITTEE &amp; PEOPLE (
-            {isWebsiteSelected ? "WEBSITE TEAM · FREE" : "PROSPEO PEOPLE"})
+            {isWebsiteSelected ? "WEBSITE TEAM" : "PROSPEO PEOPLE"})
           </p>
           <h2>
             {!personSearch
               ? "Configure buying committee for shortlisted companies"
               : personSearch.status === "awaiting_approval"
                 ? personSearch.providerKey === "website_team"
-                  ? "Ready to scan shortlisted company websites ($0)"
-                  : "Review buying committee & 1-page Prospeo search"
+                  ? "Ready to scan shortlisted company websites"
+                  : "Review buying committee & Prospeo people search"
                 : personSearch.status === "running"
                   ? "Discovering decision-makers…"
                   : personSearch.status === "completed"
@@ -268,8 +268,10 @@ export function PeopleDiscoveryCard({
 
       <p className="m3-artifact-lead">
         {personSearch
-          ? personSearch.estimateDetail
-          : "Ano infers target departments, seniority bands, and job titles from your product and shortlisted company size. Run a free website team scan first or query Prospeo with structured filters."}
+          ? personSearch.providerKey === "website_team"
+            ? "Scans shortlisted company websites (up to 3 pages per site) to extract named owners, directors, and managers with public emails."
+            : "Returns up to 25 named decision-makers matching your Buying Committee filters across shortlisted companies."
+          : "Ano infers target departments, seniority bands, and job titles from your product and shortlisted company size. Run a website team scan first or query Prospeo with structured filters."}
       </p>
 
       <div className="m3-metric-strip">
@@ -278,8 +280,8 @@ export function PeopleDiscoveryCard({
           <strong>{shortlistedAccounts.length}</strong>
         </div>
         <div>
-          <span>People source &amp; cost</span>
-          <strong>{isWebsiteSelected ? "Website team · Free ($0)" : "Prospeo · max 1 credit"}</strong>
+          <span>People source</span>
+          <strong>{isWebsiteSelected ? "Company websites" : "Prospeo directory"}</strong>
         </div>
         <div>
           <span>Email verification</span>
@@ -287,9 +289,9 @@ export function PeopleDiscoveryCard({
             {prospeo?.available && dropcontact?.available
               ? "Prospeo or Dropcontact"
               : prospeo?.available
-                ? "Prospeo enrich (1 cr/found)"
+                ? "Prospeo Verify"
                 : dropcontact?.available
-                  ? "Dropcontact selective"
+                  ? "Dropcontact Verify"
                   : "No verifier key configured"}
           </strong>
         </div>
@@ -305,14 +307,14 @@ export function PeopleDiscoveryCard({
                 disabled={isWorking}
                 onClick={() => setProviderKey("website_team")}
               >
-                Website Team Pages · Free ($0)
+                Company Website Team Pages
               </MaterialButton>
               <MaterialButton
                 variant={!isWebsiteSelected ? "filled" : "outlined"}
                 disabled={isWorking}
                 onClick={() => setProviderKey("prospeo")}
               >
-                Prospeo People DB · 1 credit
+                Prospeo People Directory
               </MaterialButton>
             </div>
           </div>
@@ -392,7 +394,7 @@ export function PeopleDiscoveryCard({
           <details className="m3-details-preview">
             <summary>
               {isWebsiteSelected
-                ? "Inspect free website team crawl scope ($0)"
+                ? "Inspect website team crawl scope"
                 : "Inspect Prospeo /search-person JSON payload"}
             </summary>
             <pre className="m3-json-preview" aria-label="Person search query preview">
@@ -515,11 +517,15 @@ export function PeopleDiscoveryCard({
                       <td>{row.sourceLabel}</td>
                       <td>
                         <span className={`m3-status-badge status-${row.verificationStatus}`}>
-                          {row.verificationStatus === "not_requested"
-                            ? "Named only"
-                            : row.verificationStatus === "verified"
-                              ? "Verified"
-                              : row.verificationStatus.replaceAll("_", " ")}
+                          {row.verificationStatus === "verified"
+                            ? "Verified work email"
+                            : row.publicEmail
+                              ? row.publicEmailKind === "direct_public"
+                                ? "Public website email"
+                                : "Public website inbox"
+                              : row.verificationStatus === "not_requested"
+                                ? "Named only"
+                                : row.verificationStatus.replaceAll("_", " ")}
                         </span>
                       </td>
                     </tr>
@@ -562,11 +568,11 @@ export function PeopleDiscoveryCard({
                   : "Preparing Prospeo preview…"
                 : isWebsiteSelected && onRunFreePeopleSearch
                   ? contacts.length > 0
-                    ? "Refresh website people (Free)"
-                    : "Find decision-makers on websites (Free)"
+                    ? "Refresh website people"
+                    : "Find decision-makers on websites"
                   : personSearch
                     ? "Refresh Prospeo preview"
-                    : "Prepare Prospeo people preview (0 credits)"}
+                    : "Prepare Prospeo people preview"}
             </MaterialButton>
           )}
 
@@ -585,8 +591,8 @@ export function PeopleDiscoveryCard({
               }}
             >
               {personSearch.providerKey === "website_team"
-                ? "Run free website scan"
-                : "Approve 1-page Prospeo person search"}
+                ? "Run website team scan"
+                : "Run Prospeo people search"}
             </MaterialButton>
           )}
 
@@ -610,14 +616,14 @@ export function PeopleDiscoveryCard({
                   disabled={isWorking}
                   onClick={() => setVerificationProvider("prospeo")}
                 >
-                  Prospeo Enrich · 1 cr/found
+                  Prospeo Verify
                 </MaterialButton>
                 <MaterialButton
                   variant={verificationProvider === "dropcontact" ? "tonal" : "outlined"}
                   disabled={isWorking}
                   onClick={() => setVerificationProvider("dropcontact")}
                 >
-                  Dropcontact
+                  Dropcontact Verify
                 </MaterialButton>
               </div>
               <MaterialButton
@@ -625,7 +631,7 @@ export function PeopleDiscoveryCard({
                 disabled={isWorking || effectiveSelectedIds.length === 0}
                 onClick={() => onPrepareVerification(effectiveSelectedIds, verificationProvider)}
               >
-                {`Preview ${verificationProvider === "prospeo" ? "Prospeo" : "Dropcontact"} verification (${effectiveSelectedIds.length})`}
+                {`Find & verify emails (${effectiveSelectedIds.length})`}
               </MaterialButton>
             </>
           )}
@@ -642,7 +648,7 @@ export function PeopleDiscoveryCard({
           personSearch.providerKey === "prospeo" &&
           !prospeoAvailable && (
             <p className="m3-helper-note">
-              Add PROSPEO_KEY on the server before approving a Prospeo person search, or switch to free Website Team Pages above.
+              Add PROSPEO_KEY on the server before running a Prospeo person search, or switch to Website Team Pages above.
             </p>
           )}
       </footer>
@@ -650,9 +656,9 @@ export function PeopleDiscoveryCard({
       {personSearch && personSearch.providerKey === "prospeo" && (
         <ApprovalCard
           open={confirmApproveOpen}
-          title="Approve 1-page Prospeo person search?"
-          body={`Searches up to 25 named buyers matching [${personSearch.approvedRoles.join(", ")}] across ${personSearch.shortlistedAccountNames.join(", ")} (max 1 credit). Contact email verification remains separate and unrun.`}
-          confirmLabel="Approve 1-page person search"
+          title="Run Prospeo people search?"
+          body={`Searches up to 25 named buyers matching [${personSearch.approvedRoles.join(", ")}] across ${personSearch.shortlistedAccountNames.join(", ")}. Email verification runs separately.`}
+          confirmLabel="Run people search"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}
           onConfirm={() => {

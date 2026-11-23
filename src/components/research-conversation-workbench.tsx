@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { AutopilotExecutableStage, AutopilotRunView } from "@/lib/ano/autopilot";
 import type {
   CompanySearchView,
   ProspeoProviderState,
@@ -68,6 +69,7 @@ export function ResearchConversationWorkbench({
   const [outreachExecution, setOutreachExecution] = useState<OutreachExecutionView | null>(null);
   const [mercury, setMercury] = useState<MercuryConnectorState | null>(null);
   const [templatePack, setTemplatePack] = useState<OutreachTemplatePackView | null>(null);
+  const [autopilotRun, setAutopilotRun] = useState<AutopilotRunView | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [draft, setDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -77,6 +79,7 @@ export function ResearchConversationWorkbench({
   const [isWorking, setIsWorking] = useState(false);
   const [marketChoice, setMarketChoice] = useState("");
   const [industryChoice, setIndustryChoice] = useState("");
+  const autoStartedConversationRef = useRef<string | null>(null);
 
   async function loadResearch(targetConversationId: string) {
     try {
@@ -178,6 +181,8 @@ export function ResearchConversationWorkbench({
     setOutreachExecution(null);
     setMercury(null);
     setTemplatePack(null);
+    setAutopilotRun(null);
+    autoStartedConversationRef.current = null;
     setPendingUserMessage(null);
     setError(null);
     setDraft("");
@@ -246,6 +251,10 @@ export function ResearchConversationWorkbench({
 
         if ("templatePack" in record) {
           setTemplatePack((record.templatePack ?? null) as OutreachTemplatePackView | null);
+        }
+
+        if ("autopilotRun" in record) {
+          setAutopilotRun((record.autopilotRun ?? null) as AutopilotRunView | null);
         }
       })
       .catch(() => {
@@ -332,6 +341,63 @@ export function ResearchConversationWorkbench({
     );
   }, [shellSyncedTitle]);
 
+  const startAutopilot = useCallback(
+    async (targetConversationId: string, fromStage?: AutopilotExecutableStage) => {
+      try {
+        const response = await fetch(
+          `/api/v1/conversations/${targetConversationId}/autopilot/start`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(fromStage ? { fromStage } : {}),
+          },
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setError(errorText(payload, "Ano could not start autopilot."));
+          return;
+        }
+        if (payload && typeof payload === "object" && "autopilotRun" in payload) {
+          setAutopilotRun((payload.autopilotRun ?? null) as AutopilotRunView | null);
+        }
+      } catch {
+        setError("Ano could not reach the server to start autopilot.");
+      }
+    },
+    [],
+  );
+
+  const pauseAutopilot = useCallback(async () => {
+    if (!conversation) return;
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${conversation.conversation.id}/autopilot/cancel`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "paused" }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(errorText(payload, "Ano could not pause autopilot cleanly."));
+        return;
+      }
+      if (payload && typeof payload === "object" && "autopilotRun" in payload) {
+        setAutopilotRun((payload.autopilotRun ?? null) as AutopilotRunView | null);
+      }
+    } catch {
+      setError("Ano could not pause autopilot cleanly.");
+    }
+  }, [conversation]);
+
+  const resumeAutopilot = useCallback(async () => {
+    if (!conversation) return;
+    setError(null);
+    await startAutopilot(conversation.conversation.id);
+  }, [conversation, startAutopilot]);
+
   const activeMode = embeddedInShell ? shell?.mode : workspace?.mode;
   const needsSignIn = Boolean(
     error?.toLowerCase().includes("sign in") ||
@@ -339,6 +405,112 @@ export function ResearchConversationWorkbench({
       activeMode === "demo" ||
       activeMode === "unauthenticated",
   );
+
+  useEffect(() => {
+    const activeId = conversation?.conversation.id;
+    if (
+      !activeId ||
+      needsSignIn ||
+      autopilotRun ||
+      research ||
+      synthesis ||
+      !conversation?.brief?.intakeComplete ||
+      conversation?.plan?.approvalStatus !== "approved" ||
+      autoStartedConversationRef.current === activeId
+    ) {
+      return;
+    }
+    autoStartedConversationRef.current = activeId;
+    void startAutopilot(activeId);
+  }, [
+    conversation?.conversation.id,
+    conversation?.brief?.intakeComplete,
+    conversation?.plan?.approvalStatus,
+    autopilotRun,
+    research,
+    synthesis,
+    needsSignIn,
+    startAutopilot,
+  ]);
+
+  useEffect(() => {
+    const activeId = conversation?.conversation.id;
+    if (!activeId || autopilotRun?.status !== "running") return;
+
+    let cancelled = false;
+    async function runLoop() {
+      while (!cancelled) {
+        try {
+          const response = await fetch(`/api/v1/conversations/${activeId}/autopilot/step`, {
+            method: "POST",
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (cancelled) return;
+          if (!response.ok) {
+            setError(errorText(payload, "Ano paused the autonomous pipeline cleanly."));
+            return;
+          }
+          const record =
+            payload && typeof payload === "object"
+              ? (payload as Record<string, unknown>)
+              : {};
+
+          if ("autopilotRun" in record) {
+            setAutopilotRun((record.autopilotRun ?? null) as AutopilotRunView | null);
+          }
+          if ("conversation" in record && record.conversation) {
+            setConversation(record.conversation as ResearchConversationView);
+          }
+          if ("research" in record) {
+            setResearch((record.research ?? null) as EvidenceResearchView | null);
+          }
+          if ("synthesis" in record) {
+            setSynthesis((record.synthesis ?? null) as MarketSynthesis | null);
+          }
+          if ("companySearch" in record) {
+            setCompanySearch((record.companySearch ?? null) as CompanySearchView | null);
+          }
+          if ("peopleDiscovery" in record) {
+            setPeopleDiscovery((record.peopleDiscovery ?? null) as PeopleDiscoveryView | null);
+          }
+          if ("templatePack" in record) {
+            setTemplatePack((record.templatePack ?? null) as OutreachTemplatePackView | null);
+          }
+
+          const nextRun = ("autopilotRun" in record
+            ? record.autopilotRun
+            : null) as AutopilotRunView | null;
+          if (!nextRun || nextRun.status !== "running") {
+            if (embeddedInShell) void refreshShellConversations?.();
+            return;
+          }
+
+          if (record.skippedBecauseInFlight === true) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 2_500);
+            });
+          }
+        } catch {
+          if (!cancelled) {
+            setError(
+              "Connection interrupted while stepping autopilot. Click Resume autopilot to continue.",
+            );
+          }
+          return;
+        }
+      }
+    }
+
+    void runLoop();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    conversation?.conversation.id,
+    autopilotRun?.status,
+    embeddedInShell,
+    refreshShellConversations,
+  ]);
 
   const activeMarketId = marketChoice || synthesis?.markets[0]?.id || "";
   const selectableIndustries =
@@ -410,6 +582,10 @@ export function ResearchConversationWorkbench({
       }
       setPendingUserMessage(null);
       setConversation(created);
+      if (created.brief?.intakeComplete && created.plan?.approvalStatus === "approved") {
+        autoStartedConversationRef.current = created.conversation.id;
+        await startAutopilot(created.conversation.id);
+      }
       if (embeddedInShell) {
         void refreshShellConversations?.();
         router.push(`/research/${created.conversation.id}`);
@@ -564,6 +740,14 @@ export function ResearchConversationWorkbench({
       );
       setPendingUserMessage(null);
       setConversation(next);
+      if (
+        next.brief?.intakeComplete &&
+        next.plan?.approvalStatus === "approved" &&
+        !autopilotRun
+      ) {
+        autoStartedConversationRef.current = next.conversation.id;
+        await startAutopilot(next.conversation.id);
+      }
       if (embeddedInShell) void refreshShellConversations?.();
     } catch (requestError) {
       setPendingUserMessage(null);
@@ -1077,6 +1261,8 @@ export function ResearchConversationWorkbench({
     setOutreachExecution(null);
     setMercury(null);
     setTemplatePack(null);
+    setAutopilotRun(null);
+    autoStartedConversationRef.current = null;
     setPendingUserMessage(null);
     setDraft("");
     setPendingFiles([]);
@@ -1103,11 +1289,14 @@ export function ResearchConversationWorkbench({
           outreachExecution={outreachExecution}
           mercury={mercury}
           templatePack={templatePack}
+          autopilotRun={autopilotRun}
           provider={provider}
           pendingUserMessage={pendingUserMessage}
           error={error}
           needsSignIn={needsSignIn}
           isWorking={isWorking}
+          onPauseAutopilot={() => void pauseAutopilot()}
+          onResumeAutopilot={() => void resumeAutopilot()}
           selectedMarketId={activeMarketId}
           selectedIndustryId={activeIndustryId}
           onSelectStarterPrompt={(prompt) => setDraft(prompt)}
@@ -1222,6 +1411,7 @@ export function ResearchConversationWorkbench({
       <ConversationComposer
         conversation={conversation}
         research={research}
+        autopilotRunning={autopilotRun?.status === "running"}
         value={draft}
         onChange={setDraft}
         onSubmit={() => void handleComposerSubmit()}

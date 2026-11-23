@@ -181,12 +181,12 @@ export function CompanySearchPreviewCard({
           <h2>
             {!companySearch
               ? isOsmSelected
-                ? "Prepare a free OpenStreetMap local business preview"
-                : "Prepare a free Prospeo location & query preview"
+                ? "Prepare an OpenStreetMap local business preview"
+                : "Prepare a Prospeo location & query preview"
               : companySearch.status === "awaiting_approval"
                 ? companySearch.providerKey === "openstreetmap"
-                  ? "Review OpenStreetMap area & category tags ($0 credits)"
-                  : "Review canonical Prospeo filters before spending 1 credit"
+                  ? "Review OpenStreetMap area & category tags"
+                  : "Review verified Prospeo filters before searching"
                 : isRunning
                   ? "Running approved bounded company search…"
                   : isCompleted
@@ -207,7 +207,7 @@ export function CompanySearchPreviewCard({
         >
           {!companySearch
             ? isOsmSelected
-              ? "OpenStreetMap ready (Free)"
+              ? "OpenStreetMap ready"
               : prospeoAvailable
                 ? "Prospeo ready"
                 : "Prospeo key missing"
@@ -218,9 +218,11 @@ export function CompanySearchPreviewCard({
       <p className="m3-artifact-lead">
         {!companySearch
           ? isOsmSelected
-            ? "OpenStreetMap finds real local physical businesses (like dental clinics) by area and map category tags for 0 credits, with optional free SearXNG official-website resolution."
-            : "Canonicalizing locations and industries with Prospeo’s suggestion endpoint is free. Company searches use profile-only keyword matching (no blog/page noise) and stay capped at 1 page (25 companies, max 1 credit)."
-          : companySearch.estimateDetail}
+            ? "OpenStreetMap finds real local physical businesses (like dental clinics) by area and map category tags, with optional official-website resolution."
+            : "Location and industry suggestions verify your query before returning up to 25 matching organizations using profile-only matching."
+          : companySearch.providerKey === "openstreetmap"
+            ? "Finds local physical businesses matching your area and category tags, with optional website resolution."
+            : "Finds up to 25 matching organizations using verified location and segment profile filters."}
       </p>
 
       <div className="m3-metric-strip">
@@ -236,9 +238,9 @@ export function CompanySearchPreviewCard({
           <strong>Max 25 companies</strong>
         </div>
         <div>
-          <span>Credit cost</span>
+          <span>Discovery mode</span>
           <strong>
-            {displayedProvider === "openstreetmap" ? "0 credits (Free)" : "Max 1 credit"}
+            {displayedProvider === "openstreetmap" ? "Local map search" : "B2B company directory"}
           </strong>
         </div>
         <div>
@@ -257,14 +259,14 @@ export function CompanySearchPreviewCard({
               disabled={isWorking}
               onClick={() => handleSelectProvider("openstreetmap")}
             >
-              OpenStreetMap Local Map (Free)
+              OpenStreetMap Local Map
             </MaterialButton>
             <MaterialButton
               variant={providerKey === "prospeo" ? "filled" : "outlined"}
               disabled={isWorking}
               onClick={() => handleSelectProvider("prospeo")}
             >
-              Prospeo B2B Database (1 credit max)
+              Prospeo B2B Directory
             </MaterialButton>
           </div>
 
@@ -288,7 +290,7 @@ export function CompanySearchPreviewCard({
               supportingText={
                 isOsmSelected
                   ? "Separate multiple locations with semicolons (or commas). Specific cities/metros work fastest on OpenStreetMap."
-                  : "Comma-separated countries, states, or cities verified free against Prospeo suggestions."
+                  : "Comma-separated countries, states, or cities verified against Prospeo suggestions."
               }
               error={Boolean(locationError)}
               errorText={locationError ?? undefined}
@@ -316,7 +318,7 @@ export function CompanySearchPreviewCard({
                 value={industryInput}
                 onValueChange={setIndustryInput}
                 placeholder="e.g. Medical Practices, Hospitals and Health Care"
-                supportingText="Verified free against Prospeo taxonomy; defaults automatically when blank for healthcare/B2B routes."
+                supportingText="Verified against Prospeo taxonomy; defaults automatically when blank for healthcare/B2B routes."
                 disabled={isWorking || formBlockedByMissingKey}
               />
             )}
@@ -357,7 +359,7 @@ export function CompanySearchPreviewCard({
                   />
                 </div>
                 <div className="m3-person-meta">
-                  <strong>Resolve missing websites via private SearXNG (Free, up to 10)</strong>
+                  <strong>Resolve missing websites via SearXNG (up to 10)</strong>
                   <p className="m3-helper-note">
                     Looks up official clinic domains when OpenStreetMap lacks a website tag, unlocking Phase E decision-maker lookup.
                   </p>
@@ -369,7 +371,7 @@ export function CompanySearchPreviewCard({
           {formBlockedByMissingKey && (
             <p className="m3-helper-note">
               Add PROSPEO_KEY to the server environment before preparing a live Prospeo preview, or
-              switch to OpenStreetMap Local Map above for free discovery.
+              switch to OpenStreetMap Local Map above for local discovery.
             </p>
           )}
         </div>
@@ -425,10 +427,10 @@ export function CompanySearchPreviewCard({
             <strong>
               {showFilterEditor
                 ? companySearch && !isCompleted
-                  ? "No search has run with these filters yet and 0 search credits have been spent."
+                  ? "No search has run with these filters yet."
                   : isOsmSelected
-                    ? "Preparing a preview resolves your areas via free OpenStreetMap Nominatim."
-                    : "Preparing a preview only calls Prospeo’s free location and industry suggestion endpoints."
+                    ? "Preparing a preview resolves your areas via OpenStreetMap Nominatim."
+                    : "Preparing a preview verifies your location and industry filters."
                 : "Want narrower, more relevant businesses for your product?"}
             </strong>
             <p>
@@ -506,13 +508,13 @@ export function CompanySearchPreviewCard({
                       : "Verifying with Prospeo…"
                     : isOsmSelected && onRunFreeSearch
                       ? companySearch
-                        ? "Update OpenStreetMap list (Free)"
-                        : "Find local businesses (Free)"
+                        ? "Update OpenStreetMap list"
+                        : "Find local businesses"
                       : companySearch
-                        ? "Refresh free preview"
+                        ? "Refresh preview"
                         : isOsmSelected
-                          ? "Prepare free OpenStreetMap preview"
-                          : "Prepare free Prospeo preview"}
+                          ? "Prepare OpenStreetMap preview"
+                          : "Prepare Prospeo preview"}
                 </MaterialButton>
               </>
             )}
@@ -530,8 +532,8 @@ export function CompanySearchPreviewCard({
                 }}
               >
                 {companySearch.providerKey === "openstreetmap"
-                  ? "Run free OpenStreetMap search"
-                  : "Approve 1-page company search"}
+                  ? "Run OpenStreetMap search"
+                  : "Discover companies"}
               </MaterialButton>
             )}
           </div>
@@ -541,9 +543,9 @@ export function CompanySearchPreviewCard({
       {companySearch && companySearch.providerKey !== "openstreetmap" && (
         <ApprovalCard
           open={confirmApproveOpen}
-          title="Approve 1-page Prospeo company search?"
-          body={`This runs a single Prospeo /search-company call (page 1, max 25 companies, max 1 credit) for ${companySearch.canonicalLocations.join(", ")}. Ano will not paginate or retry automatically.`}
-          confirmLabel="Approve 1-page search"
+          title="Run Prospeo company search?"
+          body={`Searches up to 25 matching companies in ${companySearch.canonicalLocations.join(", ")} using your verified filters.`}
+          confirmLabel="Run company search"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}
           onConfirm={() => {

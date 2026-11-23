@@ -89,7 +89,7 @@ export function OutreachTemplatePackCard({
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">PHASE 9B · BLASTER-READY OUTREACH TEMPLATES ($0)</p>
+          <p className="m3-artifact-kicker">PHASE 9B · BLASTER-READY OUTREACH TEMPLATES</p>
           <h2>
             {templatePack
               ? `Human-voice 3-step sequence · v${templatePack.version}`
@@ -107,7 +107,7 @@ export function OutreachTemplatePackCard({
         >
           {templatePack
             ? `${passedCount}/${steps.length} clean voice`
-            : "Ready to generate ($0)"}
+            : "Ready to generate"}
         </span>
       </header>
 
@@ -141,8 +141,8 @@ export function OutreachTemplatePackCard({
             </strong>
           </div>
           <div>
-            <span>External spend</span>
-            <strong>$0 (Free)</strong>
+            <span>Export ready</span>
+            <strong>CSV &amp; Markdown</strong>
           </div>
         </div>
       )}
@@ -252,8 +252,8 @@ export function OutreachTemplatePackCard({
             {isWorking
               ? "Writing sequence…"
               : templatePack
-                ? "Regenerate sequence (Free)"
-                : "Generate human-sounding email sequence (Free)"}
+                ? "Regenerate sequence"
+                : "Generate human-sounding email sequence"}
           </MaterialButton>
 
           {templatePack && (

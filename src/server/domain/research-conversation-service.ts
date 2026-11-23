@@ -558,7 +558,7 @@ export async function continueResearchConversation(
   if (effectiveApproveTarget) {
     if (!spendApproved) {
       executionNotes.push(
-        "Pending provider runs stay paused until you confirm spend. Click the approval button below or reply \"yes, approved\".",
+        "Pending searches stay paused until you confirm. Click the confirmation button below or reply \"yes, approved\".",
       );
     } else {
       try {
@@ -594,10 +594,10 @@ export async function continueResearchConversation(
                     Boolean(c.verifiedDetails?.email || c.publicEmail),
                   );
                   return withAnyEmail.length > 0
-                    ? `Verification found 0 additional emails from the credit provider, but ${withAnyEmail.length} contact(s) now have public website email addresses:\n${formatContactBullets(withAnyEmail)}`
+                    ? `Verification found 0 additional work emails, and ${withAnyEmail.length} contact(s) now have public website email addresses:\n${formatContactBullets(withAnyEmail)}`
                     : vProvider === "prospeo" && updatedDropcontact.available
-                      ? `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "try Dropcontact on unverified contacts" or "scan shortlisted company websites ($0)" to fall back to your other email sources.`
-                      : `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "scan shortlisted company websites ($0)" to fall back to public clinic contact pages.`;
+                      ? `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "try Dropcontact on unverified contacts" or "scan shortlisted company websites" to check your other email sources.`
+                      : `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "scan shortlisted company websites" to pull public clinic contact pages.`;
                 })(),
           );
         } else if (
@@ -623,7 +623,7 @@ export async function continueResearchConversation(
           meta.awaitingPersonCreditApproval = false;
           meta.actionSummary =
             pStatus === "completed"
-              ? `Approved ${pProvider === "prospeo" ? "Prospeo" : "website team"} person search: ${count} contacts.`
+              ? `${pProvider === "prospeo" ? "Prospeo" : "Website team"} person search finished: ${count} contacts.`
               : updatedPeopleDiscovery.personSearch?.failureMessage ?? "Person search needs review.";
           hasMetadata = true;
           if (pStatus !== "completed") {
@@ -636,7 +636,7 @@ export async function continueResearchConversation(
               (c) => Boolean(c.verifiedDetails?.email || c.publicEmail),
             ).length;
             executionNotes.push(
-              `Saved ${count} decision-maker${count === 1 ? "" : "s"} (${withAnyEmailCount} with email found):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}\n\nReply "verify emails via Prospeo" to look up direct work emails or "scan shortlisted company websites ($0)" for website contacts.`,
+              `Saved ${count} decision-maker${count === 1 ? "" : "s"} (${withAnyEmailCount} with email found):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}\n\nReply "verify emails via Prospeo" to look up direct work emails or "scan shortlisted company websites" for website contacts.`,
             );
           } else {
             executionNotes.push(
@@ -742,7 +742,7 @@ export async function continueResearchConversation(
           meta.awaitingCreditApproval = false;
           meta.actionSummary =
             updatedCompanySearch.status === "completed"
-              ? `Updated OpenStreetMap cohort: ${count} companies ($0 credits).`
+              ? `Updated OpenStreetMap cohort: ${count} companies.`
               : updatedCompanySearch.failureMessage ?? "OpenStreetMap search needs review.";
           hasMetadata = true;
           if (updatedCompanySearch.status !== "completed") {
@@ -752,11 +752,11 @@ export async function continueResearchConversation(
             );
           } else if (count > 0) {
             executionNotes.push(
-              `Updated the Company Cohort via OpenStreetMap (${count} companies, $0 credits):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
+              `Updated the Company Cohort via OpenStreetMap (${count} companies):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
             );
           } else {
             executionNotes.push(
-              "OpenStreetMap returned 0 companies for those filters. Try a specific city or switch to Prospeo B2B database search.",
+              "OpenStreetMap returned 0 companies for those filters. Try a specific city or switch to Prospeo B2B directory search.",
             );
           }
         } else {
@@ -798,7 +798,7 @@ export async function continueResearchConversation(
             meta.awaitingCreditApproval = false;
             meta.actionSummary =
               updatedCompanySearch.status === "completed"
-                ? `Executed Prospeo company search: ${count} companies (max 1 credit).`
+                ? `Executed Prospeo company search: ${count} companies.`
                 : updatedCompanySearch.failureMessage ?? "Prospeo search needs review.";
             hasMetadata = true;
             if (updatedCompanySearch.status !== "completed") {
@@ -808,11 +808,11 @@ export async function continueResearchConversation(
               );
             } else if (count > 0) {
               executionNotes.push(
-                `Ran approved Prospeo company search for [${updatedCompanySearch.canonicalLocations.join(", ")}] (${count} companies saved):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
+                `Ran Prospeo company search for [${updatedCompanySearch.canonicalLocations.join(", ")}] (${count} companies saved):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
               );
             } else {
               executionNotes.push(
-                `Prospeo returned 0 companies for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Try broadening keywords or switching to OpenStreetMap ($0).`,
+                `Prospeo returned 0 companies for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Try broadening keywords or switching to OpenStreetMap.`,
               );
             }
           } else {
@@ -820,11 +820,10 @@ export async function continueResearchConversation(
             meta.companySearchProvider = "prospeo";
             meta.companySearchId = updatedCompanySearch.id;
             meta.awaitingCreditApproval = true;
-            meta.actionSummary =
-              "Prepared updated Prospeo preview (max 1 credit on approval).";
+            meta.actionSummary = "Prepared updated Prospeo company search preview.";
             hasMetadata = true;
             executionNotes.push(
-              `Prepared updated Prospeo company search preview for [${updatedCompanySearch.canonicalLocations.join(", ")}] (max 1 credit, not executed yet). Click "Approve 1-credit Prospeo search" below or reply "yes, approved" to run it.`,
+              `Prepared updated Prospeo company search preview for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Click "Run Prospeo company search" below or reply "yes, go ahead" to run it.`,
             );
           }
         }
@@ -1000,7 +999,7 @@ export async function continueResearchConversation(
             meta.awaitingPersonCreditApproval = false;
             meta.actionSummary =
               searchStatus === "completed"
-                ? `Updated people cohort via website team scan: ${count} decision-makers ($0 credits).`
+                ? `Updated people cohort via website team scan: ${count} decision-makers.`
                 : updatedPeopleDiscovery.personSearch?.failureMessage ??
                   "Website team scan needs review.";
             hasMetadata = true;
@@ -1026,11 +1025,11 @@ export async function continueResearchConversation(
               const unreachableCount = rawReports.filter((r) => r.pagesFetched === 0).length;
               if (count > 0) {
                 executionNotes.push(
-                  `Scanned shortlisted websites ($0 credits). Total saved contacts: ${count} (${withAnyEmail.length} with email${withPhone.length > 0 ? `, ${withPhone.length} with phone` : ""}):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}${unreachableCount > 0 ? `\n\n(${unreachableCount} site(s) were unreachable or blocked automated HTML checks.)` : ""}`,
+                  `Scanned shortlisted websites. Total saved contacts: ${count} (${withAnyEmail.length} with email${withPhone.length > 0 ? `, ${withPhone.length} with phone` : ""}):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}${unreachableCount > 0 ? `\n\n(${unreachableCount} site(s) were unreachable or blocked automated HTML checks.)` : ""}`,
                 );
               } else {
                 executionNotes.push(
-                  "Website scan ($0 credits) checked the shortlisted websites but did not find public emails or named leadership profiles (some clinics only embed JavaScript contact forms).",
+                  "Website scan checked the shortlisted websites but did not find public emails or named leadership profiles (some clinics only embed JavaScript contact forms).",
                 );
               }
             }
@@ -1069,7 +1068,7 @@ export async function continueResearchConversation(
               meta.awaitingPersonCreditApproval = false;
               meta.actionSummary =
                 searchStatus === "completed"
-                  ? `Executed Prospeo person search: ${count} named buyers (max 1 credit).`
+                  ? `Executed Prospeo person search: ${count} named buyers.`
                   : updatedPeopleDiscovery.personSearch?.failureMessage ??
                     "Prospeo person search needs review.";
               hasMetadata = true;
@@ -1080,7 +1079,7 @@ export async function continueResearchConversation(
                 );
               } else if (count > 0) {
                 executionNotes.push(
-                  `Ran approved Prospeo person search (max 1 credit), saving ${count} named buyer${count === 1 ? "" : "s"}:\n${formatContactBullets(updatedPeopleDiscovery.contacts)}`,
+                  `Ran Prospeo person search, saving ${count} named buyer${count === 1 ? "" : "s"}:\n${formatContactBullets(updatedPeopleDiscovery.contacts)}`,
                 );
               } else {
                 executionNotes.push(
@@ -1092,11 +1091,10 @@ export async function continueResearchConversation(
               meta.peopleSearchProvider = "prospeo";
               meta.peopleSearchId = updatedPeopleDiscovery.personSearch?.id;
               meta.awaitingPersonCreditApproval = true;
-              meta.actionSummary =
-                "Prepared updated Prospeo Buying Committee preview (max 1 credit on approval).";
+              meta.actionSummary = "Prepared updated Prospeo Buying Committee preview.";
               hasMetadata = true;
               executionNotes.push(
-                `Prepared the 1-page Prospeo Buying Committee search for ${shortlistedAccounts.map((a) => a.name).join(", ")} (max 1 credit, not executed yet). Click "Approve 1-credit Prospeo person search" below or reply "yes, approved" to run it.`,
+                `Prepared the Prospeo Buying Committee search for ${shortlistedAccounts.map((a) => a.name).join(", ")}. Click "Run Prospeo people search" below or reply "yes, go ahead" to run it.`,
               );
             }
           }
@@ -1142,7 +1140,7 @@ export async function continueResearchConversation(
         const requestedProvider = requestedVerificationProvider;
         if (requestedProvider === "dropcontact" && !updatedDropcontact.available) {
           executionErrors.push(
-            "Dropcontact is not configured on the server yet. Add DROPCONTACT_API_KEY as a Vercel Production Secret (and in .env.local for local dev) to enable Dropcontact as your 3rd email source, or reply \"scan shortlisted company websites ($0)\" to pull public clinic emails now.",
+            "Dropcontact is not configured on the server yet. Add DROPCONTACT_API_KEY as a Vercel Production Secret (and in .env.local for local dev) to enable Dropcontact, or reply \"scan shortlisted company websites\" to pull public clinic emails now.",
           );
         } else {
           try {
@@ -1191,8 +1189,8 @@ export async function continueResearchConversation(
                       return withAnyEmail.length > 0
                         ? `Verification returned 0 additional provider emails, and ${withAnyEmail.length} contact(s) now carry public website email addresses:\n${formatContactBullets(withAnyEmail)}`
                         : requestedProvider === "prospeo" && updatedDropcontact.available
-                          ? "Verification finished with 0 newly verified emails. Reply \"try Dropcontact on unverified contacts\" or \"scan shortlisted company websites ($0)\" to pull public clinic emails from their websites."
-                          : "Verification finished with 0 newly verified emails. Reply \"scan shortlisted company websites ($0)\" to pull public clinic emails from their websites.";
+                          ? "Verification finished with 0 newly verified emails. Reply \"try Dropcontact on unverified contacts\" or \"scan shortlisted company websites\" to pull public clinic emails from their websites."
+                          : "Verification finished with 0 newly verified emails. Reply \"scan shortlisted company websites\" to pull public clinic emails from their websites.";
                     })(),
               );
             } else {
@@ -1219,7 +1217,7 @@ export async function continueResearchConversation(
     }
   }
 
-  // 6. Phase 9B Outreach Email Templates ($0 external spend).
+  // 6. Phase 9B Outreach Email Templates.
   if (chatOutput.templateUpdate?.apply) {
     if (synthesis?.decision?.status !== "locked") {
       executionErrors.push(
@@ -1244,10 +1242,10 @@ export async function continueResearchConversation(
         meta.templatePackUpdated = true;
         meta.templatePackVersion = updatedTemplatePack.version;
         meta.lintPassedCount = passedCount;
-        meta.actionSummary = `Updated outreach email templates (v${updatedTemplatePack.version}, ${passedCount}/${updatedTemplatePack.steps.length} clean anti-AI check, $0 credits).`;
+        meta.actionSummary = `Updated outreach email templates (v${updatedTemplatePack.version}, ${passedCount}/${updatedTemplatePack.steps.length} clean anti-AI check).`;
         hasMetadata = true;
         executionNotes.push(
-          `Updated your outreach email sequence (v${updatedTemplatePack.version}, ${passedCount}/${updatedTemplatePack.steps.length} steps passed human-voice checks, $0 external spend). Open "Open template studio" below to inspect or copy it.`,
+          `Updated your outreach email sequence (v${updatedTemplatePack.version}, ${passedCount}/${updatedTemplatePack.steps.length} steps passed human-voice checks). Open "Open template studio" below to inspect or copy it.`,
         );
       } catch (templateError) {
         executionErrors.push(
@@ -1271,7 +1269,7 @@ export async function continueResearchConversation(
       replyText,
     )
   ) {
-    replyText = `${replyText.trim()}\n\nNote: No search or enrichment tool ran on this turn yet. Reply with a direct command such as "scan shortlisted company websites ($0) for emails" or "approve the pending search", or use the action buttons in the cards above.`.slice(
+    replyText = `${replyText.trim()}\n\nNote: No search or enrichment tool ran on this turn yet. Reply with a direct command such as "scan shortlisted company websites for emails" or "approve the pending search", or use the action buttons in the cards above.`.slice(
       0,
       7_500,
     );

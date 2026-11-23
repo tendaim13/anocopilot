@@ -51,8 +51,7 @@ export function TargetDecisionCard({
           <span className="m3-status-badge status-approved">Locked</span>
         </header>
         <p className="m3-artifact-lead">
-          Your target route is recorded. Review the free Prospeo location preview below before
-          approving a 1-page (25-company, 1-credit max) discovery search.
+          Your target route is locked and ready for company discovery.
         </p>
       </article>
     );

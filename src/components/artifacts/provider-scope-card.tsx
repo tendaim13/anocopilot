@@ -43,7 +43,7 @@ export function ProviderScopeCard({
         </header>
 
         <p className="m3-artifact-lead">
-          Bedrock generates bounded search queries, while Ano’s server executes approved SearXNG
+          Ano generates bounded search queries, while Ano’s server executes approved SearXNG
           searches and retrieves only saved public source URLs. Prospeo, Dropcontact, outreach, and
           CRM writes remain off.
         </p>
@@ -65,7 +65,7 @@ export function ProviderScopeCard({
 
         <p className="m3-helper-note">
           {providerAvailable
-            ? provider?.pricingNote
+            ? "Searches bounded public web sources and stores verified excerpts for market analysis."
             : "Add SEARXNG_BASE_URL and SEARXNG_GATEWAY_TOKEN to the server environment, then reload."}
         </p>
 

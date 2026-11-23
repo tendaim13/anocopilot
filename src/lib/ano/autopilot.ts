@@ -368,3 +368,54 @@ export function buildAutopilotExecutiveSummaryMarkdown(input: ExecutiveSummaryIn
 
   return lines.join("\n\n");
 }
+
+export const AUTOPILOT_STAGE_METADATA: ReadonlyArray<{
+  stage: AutopilotExecutableStage;
+  stepNumber: number;
+  title: string;
+  activeHint: string;
+}> = [
+  {
+    stage: "brief_and_plan",
+    stepNumber: 1,
+    title: "Analyzing product & location",
+    activeHint: "Confirming your product brief and search scope…",
+  },
+  {
+    stage: "market_research",
+    stepNumber: 2,
+    title: "Market research",
+    activeHint: "Collecting public market evidence and segment demand…",
+  },
+  {
+    stage: "synthesis_and_lock",
+    stepNumber: 3,
+    title: "Target market & segment",
+    activeHint: "Evaluating evidence and selecting the top target segment…",
+  },
+  {
+    stage: "company_discovery",
+    stepNumber: 4,
+    title: "Matching companies",
+    activeHint: "Discovering and shortlisting the strongest matching companies…",
+  },
+  {
+    stage: "people_and_emails",
+    stepNumber: 5,
+    title: "Finding decision-makers & emails",
+    activeHint: "Extracting leadership contacts and verifying work emails…",
+  },
+  {
+    stage: "outreach_templates",
+    stepNumber: 6,
+    title: "Drafting email templates",
+    activeHint: "Writing plain-text human-voice outreach templates…",
+  },
+];
+
+export function buildLeadsCsvDownloadUrl(
+  conversationId: string,
+  scope: "with_email" | "verified_only" | "all" = "with_email",
+): string {
+  return `/api/v1/conversations/${encodeURIComponent(conversationId)}/export?format=leads_csv&scope=${scope}`;
+}

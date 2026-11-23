@@ -15,6 +15,7 @@ import { AttachFileIcon, LinkIcon } from "@/components/shell/ano-icons";
 export interface ConversationComposerProps {
   conversation: ResearchConversationView | null;
   research: EvidenceResearchView | null;
+  autopilotRunning?: boolean;
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -35,6 +36,7 @@ export interface ConversationComposerProps {
 export function ConversationComposer({
   conversation,
   research,
+  autopilotRunning = false,
   value,
   onChange,
   onSubmit,
@@ -59,8 +61,9 @@ export function ConversationComposer({
   const status = conversation?.run.status;
   const isClarifying = status === "awaiting_context" && Boolean(conversation?.pendingQuestion);
   const isRunningResearch = research?.run.status === "running";
+  const isBusyPipeline = isRunningResearch || autopilotRunning;
 
-  const isDisabled = isWorking || needsSignIn || isRunningResearch;
+  const isDisabled = isWorking || needsSignIn || isBusyPipeline;
   const hasAttachments = pendingFiles.length > 0 || pendingUrls.length > 0;
   const canSubmit = !isDisabled && Boolean(value.trim() || hasAttachments);
 
@@ -80,6 +83,11 @@ export function ConversationComposer({
       "Share where your business is located and where you want to sell (or say 'recommend the best market')…";
     helper = "Your reply completes setup so Ano can research markets, find emails, and draft templates.";
     buttonLabel = isWorking ? "Updating…" : "Continue";
+  } else if (autopilotRunning) {
+    label = "Autopilot is running…";
+    placeholder = "Ano is researching markets, finding decision-makers, and drafting templates…";
+    helper = "Live stage progress updates above. You can pause autopilot anytime from the progress card.";
+    buttonLabel = "Running";
   } else if (isRunningResearch) {
     label = "Research in progress";
     placeholder = "Ano is researching public market evidence…";

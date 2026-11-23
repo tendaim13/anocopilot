@@ -200,15 +200,8 @@ export function ContextRail({
                 <dd>{companySearch.canonicalLocations.join(", ")}</dd>
               </div>
               <div>
-                <dt>Cap / credits</dt>
-                <dd>
-                  {companySearch.maximumResults} max ·{" "}
-                  {companySearch.providerKey === "openstreetmap" || companySearch.providerReceipt.free
-                    ? "0 credits (free)"
-                    : companySearch.providerReceipt.credit_bearing_request
-                      ? "1 credit max"
-                      : "0 credits spent"}
-                </dd>
+                <dt>Result limit</dt>
+                <dd>{companySearch.maximumResults} companies max</dd>
               </div>
               <div>
                 <dt>Returned / shortlisted</dt>
@@ -221,7 +214,7 @@ export function ContextRail({
           ) : (
             <p className="ano-rail-empty">
               {synthesis?.decision?.status === "locked"
-                ? "Target locked. Prepare a free OpenStreetMap local preview or Prospeo B2B preview before executing."
+                ? "Target locked. Prepare an OpenStreetMap local search or Prospeo B2B search."
                 : "Lock a Phase C market and industry route before preparing Phase D company discovery."}
             </p>
           )}
@@ -305,7 +298,7 @@ export function ContextRail({
               </div>
               <div>
                 <dt>Steps</dt>
-                <dd>{templatePack.steps.length} steps ($0)</dd>
+                <dd>{templatePack.steps.length} steps</dd>
               </div>
               <div>
                 <dt>Phase C claims</dt>
@@ -314,7 +307,7 @@ export function ContextRail({
             </dl>
           ) : (
             <p className="ano-rail-empty">
-              Generate human-voice cold email sequences with standard merge variables at $0 external spend.
+              Generate human-voice cold email sequences with standard merge variables.
             </p>
           )}
         </section>

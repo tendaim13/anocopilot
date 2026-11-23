@@ -308,6 +308,7 @@ Use ONLY the workspace snapshot provided by the user message. Never invent compa
 
 HONESTY & EXECUTION RULE:
 - NEVER claim a company search, people search, shortlist change, or email verification has ALREADY finished or returned new contacts unless those exact results are already visible in the workspace snapshot above.
+- NEVER mention API credits, dollar costs, '$0', or billing to the user.
 - When you emit an action object below, state concisely what you are initiating or preparing; the server runs the approved step immediately and appends the real saved companies, contacts, or emails below your reply.
 
 Output strictly valid JSON matching:
@@ -325,7 +326,7 @@ Output strictly valid JSON matching:
     "keywords": ["3+ char keyword", ...] (optional, max 15),
     "industries": ["exact Prospeo industry", ...] (optional, max 8),
     "excludedCategories": ["term to exclude", ...] (optional, max 8),
-    "executeIfApproved": boolean (optional, true ONLY when user explicitly approved spend),
+    "executeIfApproved": boolean (optional, true ONLY when user explicitly confirmed running the search),
     "reason": "short summary of requested filter adjustment"
   },
   "shortlistUpdate": null | {
@@ -344,7 +345,7 @@ Output strictly valid JSON matching:
     "seniorities": ["Founder/Owner"|"C-Suite"|"Partner"|"Vice President"|"Head"|"Director"|"Manager"|"Senior", ...] (optional, max 6),
     "includeTitles": ["Job Title", ...] (optional, max 10),
     "excludeTitles": ["Title to exclude", ...] (optional, max 12),
-    "executeIfApproved": boolean (optional, true ONLY when user explicitly approved spend),
+    "executeIfApproved": boolean (optional, true ONLY when user explicitly confirmed running the search),
     "reason": "short summary of requested persona update"
   },
   "verificationUpdate": null | {
@@ -353,7 +354,7 @@ Output strictly valid JSON matching:
     "contactNames": ["Full Name or Company", ...] (optional, max 10),
     "topN": number (optional, 1-10),
     "allUnverified": boolean (optional),
-    "executeIfApproved": boolean (optional, true ONLY when user explicitly approved spend),
+    "executeIfApproved": boolean (optional, true ONLY when user explicitly confirmed running email verification),
     "reason": "short summary of requested email verification"
   },
   "templateUpdate": null | {
@@ -376,17 +377,17 @@ Action Rules:
    - Choose the specific target if clear, otherwise "any_pending".
 2. filterUpdate (company cohort discovery):
    - Set "filterUpdate": { "apply": true, ... } when the user asks to filter, narrow, focus on a country/city (e.g. "only Malaysia", "find contacts in Malaysia" when the current company cohort is mixed across other countries), exclude terms, switch provider ("openstreetmap" for local clinics/businesses, "prospeo" for B2B corporate database), or re-run company discovery.
-   - Only include fields the user wants changed. Set "executeIfApproved": true ONLY when the user explicitly approved running/spending credits right now.
+   - Only include fields the user wants changed. Set "executeIfApproved": true ONLY when the user explicitly approved running the search right now.
 3. shortlistUpdate (shortlist / hold / dismiss companies):
    - Set "shortlistUpdate": { "apply": true, ... } when the user asks to shortlist, select, focus on, hold, or dismiss discovered companies by name ("accountNames"), country/city ("locationFilter"), count ("topN"), or "all": true.
 4. peopleUpdate (buying committee & decision-maker discovery):
-   - Set "peopleUpdate": { "apply": true, ... } when the user asks to get/find contacts or decision-makers, shortlist & find buyers at discovered companies, add/remove target job titles, change departments (${PROSPEO_DEPARTMENT_OPTIONS.join(", ")}), change seniorities (${PROSPEO_SENIORITY_OPTIONS.join(", ")}), or switch people provider ("website_team" for $0 website crawl vs "prospeo" for B2B database).
-   - IMPORTANT FALLBACK RULE: When the user asks to get/extract/check emails or contacts FROM COMPANY WEBSITES or says Prospeo didn't work / returned 0 emails, set "peopleUpdate": { "apply": true, "providerKey": "website_team" } ($0 website scan + automatic backfill of public emails/phones onto existing contacts) — do NOT re-stage Prospeo verification.
+   - Set "peopleUpdate": { "apply": true, ... } when the user asks to get/find contacts or decision-makers, shortlist & find buyers at discovered companies, add/remove target job titles, change departments (${PROSPEO_DEPARTMENT_OPTIONS.join(", ")}), change seniorities (${PROSPEO_SENIORITY_OPTIONS.join(", ")}), or switch people provider ("website_team" for website crawl vs "prospeo" for B2B database).
+   - IMPORTANT FALLBACK RULE: When the user asks to get/extract/check emails or contacts FROM COMPANY WEBSITES or says Prospeo didn't work / returned 0 emails, set "peopleUpdate": { "apply": true, "providerKey": "website_team" } (website scan + automatic backfill of public emails/phones onto existing contacts) — do NOT re-stage Prospeo verification.
    - If the user asks to get contacts in a country where companies aren't filtered/shortlisted yet (e.g. "give me 10 contacts in Malaysia"), emit BOTH "filterUpdate" (for that location) AND "shortlistUpdate" (locationFilter/topN) AND "peopleUpdate" so the backend coordinates the workflow smoothly without dead ends.
 5. verificationUpdate (Phase 9A email lookup/enrichment, max 10 contacts):
-   - Set "verificationUpdate": { "apply": true, ... } when the user asks to verify, enrich, or look up email addresses for discovered contacts (default providerKey "prospeo" unless Dropcontact is requested; set executeIfApproved: true only if spend is approved).
-   - If Prospeo returned 0 emails and Dropcontact is ready, suggest trying Dropcontact ("try Dropcontact on unverified contacts") or scanning company websites ($0).
-6. templateUpdate (blaster-ready cold email sequence, $0 external spend):
+   - Set "verificationUpdate": { "apply": true, ... } when the user asks to verify, enrich, or look up email addresses for discovered contacts (default providerKey "prospeo" unless Dropcontact is requested; set executeIfApproved: true only if confirmed).
+   - If Prospeo returned 0 emails and Dropcontact is ready, suggest trying Dropcontact ("try Dropcontact on unverified contacts") or scanning company websites ("scan shortlisted company websites").
+6. templateUpdate (blaster-ready cold email sequence):
    - Set "templateUpdate": { "apply": true, ... } ONLY when the user explicitly asks to write, generate, rewrite, shorten, adjust tone/CTA/offer of, or refine outreach email templates.`;
 
   const user = `WORKSPACE SNAPSHOT:\n${lines.join("\n\n")}\n\nLATEST USER MESSAGE:\n${userMessage}`;

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import type { AutopilotRunView } from "@/lib/ano/autopilot";
 import type {
   CompanyDiscoveryProvider,
   CompanySearchView,
@@ -35,6 +36,7 @@ import {
 import { useMaterialWeb } from "@/components/material/register";
 import { MaterialButton } from "@/components/material/material-button";
 import { AccountCohortCard } from "@/components/artifacts/account-cohort-card";
+import { AutopilotProgressCard } from "@/components/artifacts/autopilot-progress-card";
 import { CompanyCohortArtifactDrawer } from "@/components/artifacts/company-cohort-artifact-drawer";
 import { CompanySearchPreviewCard } from "@/components/artifacts/company-search-preview-card";
 import { ContactVerificationCard } from "@/components/artifacts/contact-verification-card";
@@ -52,6 +54,7 @@ import { PlaybookCard } from "@/components/artifacts/playbook-card";
 import { ProviderScopeCard } from "@/components/artifacts/provider-scope-card";
 import { RecommendationCard } from "@/components/artifacts/recommendation-card";
 import { ResearchPlanCard } from "@/components/artifacts/research-plan-card";
+import { ResultsJumpBar } from "@/components/artifacts/results-jump-bar";
 import { TargetDecisionCard } from "@/components/artifacts/target-decision-card";
 import { ApprovalCard } from "./approval-card";
 import { ArtifactMessage } from "./artifact-message";
@@ -75,6 +78,7 @@ export interface ConversationThreadProps {
   outreachExecution?: OutreachExecutionView | null;
   mercury?: MercuryConnectorState | null;
   templatePack?: OutreachTemplatePackView | null;
+  autopilotRun?: AutopilotRunView | null;
   provider: {
     provider: ResearchProviderKey;
     available: boolean;
@@ -162,6 +166,8 @@ export interface ConversationThreadProps {
   ) => void;
   onOpenContextRail: () => void;
   onStartNewResearch: () => void;
+  onPauseAutopilot?: () => void;
+  onResumeAutopilot?: () => void;
 }
 
 type TimelineRenderEntry = {
@@ -182,6 +188,7 @@ export function ConversationThread({
   outreachExecution = null,
   mercury = null,
   templatePack = null,
+  autopilotRun = null,
   provider,
   pendingUserMessage = null,
   error,
@@ -218,6 +225,8 @@ export function ConversationThread({
   onDecideExecutionProposal,
   onOpenContextRail,
   onStartNewResearch,
+  onPauseAutopilot,
+  onResumeAutopilot,
 }: ConversationThreadProps) {
   useMaterialWeb();
   const [confirmDeclineOpen, setConfirmDeclineOpen] = useState(false);
@@ -296,8 +305,32 @@ export function ConversationThread({
     [synthesis?.industries, synthesis?.decision?.industryProfileId],
   );
 
+  const isAutopilotMode = Boolean(autopilotRun);
+
   const timelineEntries = useMemo(() => {
     const entries: TimelineRenderEntry[] = [];
+
+    if (autopilotRun) {
+      entries.push({
+        id: `artifact:autopilot:${autopilotRun.id}`,
+        timestamp: autopilotRun.startedAt ?? autopilotRun.createdAt,
+        orderHint: 95,
+        render: () => (
+          <ArtifactMessage
+            key={`autopilot-${autopilotRun.id}`}
+            label="Autopilot pipeline"
+            timestamp={autopilotRun.updatedAt}
+          >
+            <AutopilotProgressCard
+              autopilotRun={autopilotRun}
+              isWorking={isWorking}
+              onPause={onPauseAutopilot}
+              onResume={onResumeAutopilot}
+            />
+          </ArtifactMessage>
+        ),
+      });
+    }
 
     visibleMessages.forEach((message, index) => {
       const meta = message.metadata;
@@ -315,7 +348,7 @@ export function ConversationThread({
               disabled={isWorking}
               onClick={() => setConfirmProspeoApprovalOpen(true)}
             >
-              Approve 1-credit Prospeo search
+              Run Prospeo company search
             </MaterialButton>,
           );
         } else if (
@@ -347,7 +380,7 @@ export function ConversationThread({
               disabled={isWorking}
               onClick={() => setConfirmProspeoPersonApprovalOpen(true)}
             >
-              Approve 1-credit Prospeo person search
+              Run Prospeo people search
             </MaterialButton>,
           );
         } else if (peopleDiscovery && peopleDiscovery.contacts.length > 0) {
@@ -448,7 +481,7 @@ export function ConversationThread({
       });
     });
 
-    if (plan) {
+    if (plan && !isAutopilotMode) {
       entries.push({
         id: `artifact:plan:${plan.id}`,
         timestamp: plan.createdAt,
@@ -471,7 +504,7 @@ export function ConversationThread({
       });
     }
 
-    if (plan?.approvalStatus === "approved") {
+    if (plan?.approvalStatus === "approved" && !isAutopilotMode) {
       entries.push({
         id: `artifact:scope:${research?.run.id ?? plan.id}`,
         timestamp: research?.run.createdAt ?? plan.createdAt,
@@ -495,7 +528,7 @@ export function ConversationThread({
       });
     }
 
-    if (research) {
+    if (research && !isAutopilotMode) {
       entries.push({
         id: `artifact:progress:${research.run.id}`,
         timestamp: research.run.createdAt,
@@ -538,7 +571,7 @@ export function ConversationThread({
       }
     }
 
-    if (synthesis) {
+    if (synthesis && !isAutopilotMode) {
       entries.push({
         id: `artifact:synthesis:${synthesis.id}`,
         timestamp: synthesis.createdAt,
@@ -593,7 +626,7 @@ export function ConversationThread({
       }
     }
 
-    if (synthesis?.decision?.status === "locked") {
+    if (synthesis?.decision?.status === "locked" && !isAutopilotMode) {
       entries.push({
         id: `artifact:company-preview:${companySearch?.id ?? synthesis.decision.id}`,
         timestamp:
@@ -625,7 +658,7 @@ export function ConversationThread({
       });
     }
 
-    if (companySearch?.status === "completed" && companySearch.cohort) {
+    if (companySearch?.status === "completed" && companySearch.cohort && !isAutopilotMode) {
       entries.push({
         id: `artifact:company-cohort:${companySearch.id}`,
         timestamp: companySearch.completedAt ?? companySearch.createdAt,
@@ -647,6 +680,7 @@ export function ConversationThread({
     }
 
     if (
+      !isAutopilotMode &&
       peopleDiscovery &&
       (peopleDiscovery.shortlistedCount > 0 ||
         peopleDiscovery.personSearch !== null ||
@@ -701,7 +735,7 @@ export function ConversationThread({
       });
     }
 
-    if (peopleDiscovery?.verificationRun) {
+    if (peopleDiscovery?.verificationRun && !isAutopilotMode) {
       const verification = peopleDiscovery.verificationRun;
       entries.push({
         id: `artifact:verification:${verification.id}`,
@@ -729,30 +763,33 @@ export function ConversationThread({
       });
     }
 
-    (peopleDiscovery?.playbooks ?? []).forEach((playbook, idx) => {
-      entries.push({
-        id: `artifact:playbook:${playbook.id}`,
-        timestamp: playbook.createdAt,
-        orderHint: 200 + idx,
-        render: () => (
-          <ArtifactMessage
-            key={playbook.id}
-            label={`Account playbook · ${playbook.accountName}`}
-            timestamp={playbook.updatedAt}
-          >
-            <PlaybookCard playbook={playbook} />
-          </ArtifactMessage>
-        ),
+    if (!isAutopilotMode) {
+      (peopleDiscovery?.playbooks ?? []).forEach((playbook, idx) => {
+        entries.push({
+          id: `artifact:playbook:${playbook.id}`,
+          timestamp: playbook.createdAt,
+          orderHint: 200 + idx,
+          render: () => (
+            <ArtifactMessage
+              key={playbook.id}
+              label={`Account playbook · ${playbook.accountName}`}
+              timestamp={playbook.updatedAt}
+            >
+              <PlaybookCard playbook={playbook} />
+            </ArtifactMessage>
+          ),
+        });
       });
-    });
+    }
 
     const hasShortlistedForTemplates =
       companySearch?.accounts.some((account) => account.lifecycleState === "shortlisted") ?? false;
     const hasPeopleForTemplates = (peopleDiscovery?.contacts.length ?? 0) > 0;
     if (
-      Boolean(templatePack) ||
-      (synthesis?.decision?.status === "locked" &&
-        (hasShortlistedForTemplates || hasPeopleForTemplates))
+      !isAutopilotMode &&
+      (Boolean(templatePack) ||
+        (synthesis?.decision?.status === "locked" &&
+          (hasShortlistedForTemplates || hasPeopleForTemplates)))
     ) {
       entries.push({
         id: "artifact:template-pack",
@@ -910,6 +947,10 @@ export function ConversationThread({
     conversation?.brief,
     effectiveSelectedContactIds,
     handleToggleContact,
+    isAutopilotMode,
+    autopilotRun,
+    onPauseAutopilot,
+    onResumeAutopilot,
   ]);
 
   return (
@@ -956,6 +997,24 @@ export function ConversationThread({
       )}
 
       {timelineEntries.map((entry) => entry.render())}
+
+      {conversation && (
+        <ResultsJumpBar
+          conversationId={conversation.conversation.id}
+          synthesis={synthesis}
+          companySearch={companySearch}
+          peopleDiscovery={peopleDiscovery}
+          templatePack={templatePack}
+          isWorking={isWorking}
+          onOpenEvidence={onOpenContextRail}
+          onOpenCompanies={() => openArtifactDrawer(null)}
+          onOpenPeople={() => openPeopleArtifactDrawer(null)}
+          onOpenTemplates={() => {
+            setTemplateDrawerStep("initial");
+            setTemplateDrawerOpen(true);
+          }}
+        />
+      )}
 
       {conversation?.pendingQuestion && (
         <section className="m3-clarification-card" aria-label="Clarifying question">
@@ -1045,9 +1104,9 @@ export function ConversationThread({
       {companySearch && companySearch.providerKey === "prospeo" && (
         <ApprovalCard
           open={confirmProspeoApprovalOpen}
-          title="Approve 1-page Prospeo company search?"
-          body={`This runs a single Prospeo /search-company call (page 1, max 25 companies, max 1 credit) for ${companySearch.canonicalLocations.join(", ")}. Ano will not paginate or retry automatically.`}
-          confirmLabel="Approve 1-page search"
+          title="Run Prospeo company search?"
+          body={`Searches up to 25 matching companies in ${companySearch.canonicalLocations.join(", ")} using your verified filters.`}
+          confirmLabel="Run company search"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}
           onConfirm={() => {
@@ -1061,9 +1120,9 @@ export function ConversationThread({
       {peopleDiscovery?.personSearch && peopleDiscovery.personSearch.providerKey === "prospeo" && (
         <ApprovalCard
           open={confirmProspeoPersonApprovalOpen}
-          title="Approve 1-page Prospeo person search?"
-          body={`Searches up to 25 named buyers matching [${peopleDiscovery.personSearch.approvedRoles.join(", ")}] across ${peopleDiscovery.personSearch.shortlistedAccountNames.join(", ")} (max 1 credit). Contact email verification remains separate and unrun.`}
-          confirmLabel="Approve 1-page person search"
+          title="Run Prospeo decision-maker search?"
+          body={`Searches up to 25 named buyers matching [${peopleDiscovery.personSearch.approvedRoles.join(", ")}] across ${peopleDiscovery.personSearch.shortlistedAccountNames.join(", ")}.`}
+          confirmLabel="Run people search"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}
           onConfirm={() => {
@@ -1077,9 +1136,9 @@ export function ConversationThread({
       {peopleDiscovery?.verificationRun && (
         <ApprovalCard
           open={confirmVerificationApprovalOpen}
-          title={`Approve ${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} email verification?`}
-          body={`Verifies emails for ${peopleDiscovery.verificationRun.selectedContactIds.length} selected contact${peopleDiscovery.verificationRun.selectedContactIds.length === 1 ? "" : "s"} (${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "1 Prospeo credit per email found; 0 credits for misses" : `up to ${peopleDiscovery.verificationRun.estimatedCredits} Dropcontact credit${peopleDiscovery.verificationRun.estimatedCredits === 1 ? "" : "s"}`}).`}
-          confirmLabel="Approve verification"
+          title="Run email verification?"
+          body={`Verifies work emails for ${peopleDiscovery.verificationRun.selectedContactIds.length} selected contact${peopleDiscovery.verificationRun.selectedContactIds.length === 1 ? "" : "s"} via ${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact"}.`}
+          confirmLabel="Verify emails"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}
           onConfirm={() => {

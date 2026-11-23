@@ -38,9 +38,11 @@ export interface PeopleCohortArtifactDrawerProps {
 }
 
 function verificationBadgeLabel(contact: ContactCandidateView) {
-  if (contact.verificationStatus === "verified") return "Verified email";
+  if (contact.verificationStatus === "verified") return "Verified work email";
   if (contact.publicEmail) {
-    return contact.publicEmailKind === "direct_public" ? "Public email" : "Office inbox";
+    return contact.publicEmailKind === "direct_public"
+      ? "Public website email"
+      : "Public website inbox";
   }
   if (contact.verificationStatus === "not_requested") return "Named only";
   return contact.verificationStatus.replaceAll("_", " ");
@@ -296,8 +298,8 @@ export function PeopleCohortArtifactDrawer({
                       Public website email (
                       {activeContact.publicEmailKind === "direct_public"
                         ? "direct person match"
-                        : "office inbox"}{" "}
-                      · $0): <strong>{activeContact.publicEmail}</strong>
+                        : "office inbox"}
+                      ): <strong>{activeContact.publicEmail}</strong>
                       {activeContact.publicPhone ? ` · Phone: ${activeContact.publicPhone}` : ""}
                       {" "}— unverified until Prospeo or Dropcontact verification completes.
                     </p>
@@ -481,14 +483,14 @@ export function PeopleCohortArtifactDrawer({
                     disabled={isWorking}
                     onClick={() => setVerificationProvider("prospeo")}
                   >
-                    Prospeo Enrich · 1 cr/found
+                    Prospeo Verify
                   </MaterialButton>
                   <MaterialButton
                     variant={verificationProvider === "dropcontact" ? "tonal" : "outlined"}
                     disabled={isWorking}
                     onClick={() => setVerificationProvider("dropcontact")}
                   >
-                    Dropcontact
+                    Dropcontact Verify
                   </MaterialButton>
                   <MaterialButton
                     variant="filled"
