@@ -42,9 +42,13 @@ export async function getEvidenceResearchForConversation(session: WorkspaceSessi
 }
 
 /** Creates a visible, non-executing provider scope. It never calls SearXNG. */
-export async function prepareEvidenceResearchForConversation(session: WorkspaceSession, conversationId: string) {
+export async function prepareEvidenceResearchForConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+  options?: { maximumSearches?: number; maximumFetches?: number },
+) {
   const conversation = await getResearchConversation(session, conversationId);
-  return prepareEvidenceResearchRun(session, conversation);
+  return prepareEvidenceResearchRun(session, conversation, options);
 }
 
 /**
@@ -52,7 +56,12 @@ export async function prepareEvidenceResearchForConversation(session: WorkspaceS
  * Ano-owned source retrieval. The parent approval is claimed atomically before
  * graph execution, and every child request has its own durable idempotency record.
  */
-export async function startApprovedEvidenceResearch(session: WorkspaceSession, conversationId: string, runId: string): Promise<EvidenceResearchView | null> {
+export async function startApprovedEvidenceResearch(
+  session: WorkspaceSession,
+  conversationId: string,
+  runId: string,
+  options?: { maxWaves?: number },
+): Promise<EvidenceResearchView | null> {
   const before = await getEvidenceResearchForConversation(session, conversationId);
   if (!before || before.run.id !== runId) throw new EvidenceResearchServiceError("Ano could not find that approved public-research scope.", "RUN_NOT_FOUND");
   const claim = await claimEvidenceResearchRun(session, runId);
@@ -71,6 +80,7 @@ export async function startApprovedEvidenceResearch(session: WorkspaceSession, c
       createIterativeResearchPlanner(configuration),
       createIterativeEvidenceResearchExecutor(session),
       checkpointer,
+      { maxWaves: options?.maxWaves },
     );
     await graph.invoke({
       researchRunId: runId,

@@ -11,6 +11,7 @@ import {
 import type { ResearchConversationView } from "@/lib/ano/research-conversation";
 import type { EvidenceResearchExecutor } from "@/server/langgraph/evidence-research-graph";
 import type { IterativeResearchExecutor, IterativeResearchStartNode } from "@/server/langgraph/iterative-evidence-research-graph";
+import type { StoredProductSource } from "@/server/persistence/product-source-store";
 import { IterativeResearchPlannerError } from "@/server/agents/iterative-research-planner";
 import {
   ResearchProviderError,
@@ -917,7 +918,11 @@ export function createIterativeEvidenceResearchExecutor(session: WorkspaceSessio
   };
 }
 
-export async function prepareEvidenceResearchRun(session: WorkspaceSession, conversation: ResearchConversationView) {
+export async function prepareEvidenceResearchRun(
+  session: WorkspaceSession,
+  conversation: ResearchConversationView,
+  options?: { maximumSearches?: number; maximumFetches?: number },
+) {
   requireLiveSession(session);
   const plan = conversation.plan;
   if (!plan || plan.approvalStatus !== "approved") throw new EvidenceResearchPersistenceError("Approve the research plan before Ano can prepare a provider scope.", "PLAN_NOT_APPROVED");
@@ -943,8 +948,22 @@ export async function prepareEvidenceResearchRun(session: WorkspaceSession, conv
 
   const runId = crypto.randomUUID();
   const threadId = `ano:${session.workspace.id}:${conversation.conversation.id}:evidence:${runId}`;
-  const maximumSearches = Math.min(plan.budget.maximumSearches, configuration.maximumSearches);
-  const maximumFetches = Math.min(plan.budget.maximumFetches, configuration.maximumFetches);
+  const maximumSearches = Math.max(
+    1,
+    Math.min(
+      plan.budget.maximumSearches,
+      configuration.maximumSearches,
+      options?.maximumSearches ?? configuration.maximumSearches,
+    ),
+  );
+  const maximumFetches = Math.max(
+    1,
+    Math.min(
+      plan.budget.maximumFetches,
+      configuration.maximumFetches,
+      options?.maximumFetches ?? configuration.maximumFetches,
+    ),
+  );
   const { error: runError } = await session.client.from("ano_research_runs").insert({
     id: runId,
     workspace_id: session.workspace.id,
@@ -1001,6 +1020,245 @@ export async function stopEvidenceResearchRun(session: WorkspaceSession, runId: 
   const message = safeProviderMessage(error);
   const status = await hasProviderRisk(session, runId) ? "requires_manual_review" : "failed_safe";
   await setStopped(session, runId, status, message, error);
+}
+
+export async function ensureAutopilotFallbackResearchRun(
+  session: WorkspaceSession,
+  conversation: ResearchConversationView,
+  productSources: StoredProductSource[],
+  warningReason: string,
+): Promise<EvidenceResearchView> {
+  requireLiveSession(session);
+  const existingView = await readEvidenceResearchView(session, conversation.conversation.id);
+  if (
+    existingView &&
+    existingView.run.status === "sources_ready" &&
+    existingView.sources.some((source) => source.status === "fetched" && Boolean(source.excerpt))
+  ) {
+    return existingView;
+  }
+
+  const plan = conversation.plan;
+  if (!plan) {
+    throw new EvidenceResearchPersistenceError(
+      "Approve or generate the research plan before Ano can prepare fallback research sources.",
+      "PLAN_NOT_APPROVED",
+    );
+  }
+
+  const { data: priorAttempts, error: attemptsError } = await session.client
+    .from("ano_research_runs")
+    .select("attempt_number")
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversation.conversation.id)
+    .eq("research_plan_id", plan.id);
+  if (attemptsError) {
+    throw new EvidenceResearchPersistenceError("Ano could not inspect previous research attempts.");
+  }
+  const attemptNumber =
+    (priorAttempts ?? []).reduce(
+      (maximum, row) => Math.max(maximum, Number(row.attempt_number) || 0),
+      0,
+    ) + 1;
+
+  const now = new Date().toISOString();
+  const runId = crypto.randomUUID();
+  const actionId = crypto.randomUUID();
+  const threadId = `ano:${session.workspace.id}:${conversation.conversation.id}:autopilot-seed:${runId}`;
+
+  const { error: runError } = await session.client.from("ano_research_runs").insert({
+    id: runId,
+    workspace_id: session.workspace.id,
+    conversation_id: conversation.conversation.id,
+    graph_run_id: conversation.run.id,
+    research_plan_id: plan.id,
+    thread_id: threadId,
+    attempt_number: attemptNumber,
+    provider_key: "searxng",
+    status: "sources_ready",
+    maximum_searches: 15,
+    maximum_fetches: 20,
+    consumed_searches: 0,
+    consumed_fetches: 0,
+    started_by: session.actorId,
+    approved_by: session.actorId,
+    approved_at: now,
+    started_at: now,
+    completed_at: now,
+  });
+  if (runError) {
+    throw new EvidenceResearchPersistenceError("Ano could not prepare fallback product-source evidence.");
+  }
+
+  const { error: actionError } = await session.client.from("provider_action_requests").insert({
+    id: actionId,
+    workspace_id: session.workspace.id,
+    ano_research_run_id: runId,
+    provider_key: "searxng",
+    action_kind: "search",
+    request_key: `autopilot-product-seed:${runId}`,
+    request_json: { fallback: "product_sources", warningReason },
+    status: "succeeded",
+    maximum_operations: 1,
+    reported_credits: 0,
+    provider_receipt_json: { fallback: "product_sources", warningReason },
+    created_by: session.actorId,
+    approved_by: session.actorId,
+    approved_at: now,
+    started_at: now,
+    completed_at: now,
+  });
+  if (actionError) {
+    throw new EvidenceResearchPersistenceError("Ano could not record fallback product-source provenance.");
+  }
+
+  const seedItems = productSources
+    .filter((source) => source.extractionStatus === "ready" && source.extractedText.trim().length > 0)
+    .slice(0, 3);
+
+  const seenCanonicalUrls = new Set<string>();
+  const searchResultRows: Record<string, unknown>[] = [];
+  const sourceRows: Record<string, unknown>[] = [];
+
+  for (const item of seedItems) {
+    let canonicalUrl = `https://product-brief.ano.local/${item.id}`;
+    if (item.sourceUrl) {
+      try {
+        const parsed = new URL(item.sourceUrl);
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+          parsed.hash = "";
+          canonicalUrl = parsed.toString();
+        }
+      } catch {
+        // Retain safe synthetic URL below.
+      }
+    }
+    if (seenCanonicalUrls.has(canonicalUrl)) {
+      canonicalUrl = `https://product-brief.ano.local/${item.id}`;
+    }
+    seenCanonicalUrls.add(canonicalUrl);
+
+    const searchResultId = crypto.randomUUID();
+    const excerpt =
+      safeText(item.extractedText, 1_200) ??
+      safeText(item.summaryText, 1_200) ??
+      "Uploaded product information supplied by workspace.";
+    const title = safeText(item.label, 500) ?? "Uploaded product source";
+
+    searchResultRows.push({
+      id: searchResultId,
+      workspace_id: session.workspace.id,
+      ano_research_run_id: runId,
+      provider_action_request_id: actionId,
+      provider_result_id: `product-seed:${item.id}`,
+      rank: searchResultRows.length + 1,
+      title,
+      url: canonicalUrl,
+      canonical_url: canonicalUrl,
+      snippet: excerpt.slice(0, 300),
+      provider_score: null,
+      published_at: null,
+    });
+
+    sourceRows.push({
+      id: crypto.randomUUID(),
+      workspace_id: session.workspace.id,
+      ano_research_run_id: runId,
+      search_result_id: searchResultId,
+      provider_action_request_id: actionId,
+      title,
+      canonical_url: canonicalUrl,
+      source_class: "company",
+      content_type: item.mimeType ?? "text/plain",
+      supporting_excerpt: excerpt,
+      content_hash: stableHash(excerpt),
+      published_at: null,
+      retrieved_at: now,
+      status: "fetched",
+      failure_message: null,
+    });
+  }
+
+  if (sourceRows.length === 0) {
+    const searchResultId = crypto.randomUUID();
+    const canonicalUrl = `https://product-brief.ano.local/${conversation.conversation.id}`;
+    const brief = conversation.brief;
+    const syntheticExcerpt =
+      safeText(
+        [
+          brief?.offer ? `Product & offer: ${brief.offer}.` : "",
+          brief?.goal ? `Objective: ${brief.goal}.` : "",
+          brief?.businessLocation ? `Business location: ${brief.businessLocation}.` : "",
+          brief?.targetMarkets?.length
+            ? `Target markets: ${brief.targetMarkets.join(", ")}.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        1_200,
+      ) ?? "User-supplied product brief for autonomous target market evaluation.";
+
+    searchResultRows.push({
+      id: searchResultId,
+      workspace_id: session.workspace.id,
+      ano_research_run_id: runId,
+      provider_action_request_id: actionId,
+      provider_result_id: `product-brief:${conversation.conversation.id}`,
+      rank: 1,
+      title: "Product brief supplied in conversation",
+      url: canonicalUrl,
+      canonical_url: canonicalUrl,
+      snippet: syntheticExcerpt.slice(0, 300),
+      provider_score: null,
+      published_at: null,
+    });
+
+    sourceRows.push({
+      id: crypto.randomUUID(),
+      workspace_id: session.workspace.id,
+      ano_research_run_id: runId,
+      search_result_id: searchResultId,
+      provider_action_request_id: actionId,
+      title: "Product brief supplied in conversation",
+      canonical_url: canonicalUrl,
+      source_class: "company",
+      content_type: "text/plain",
+      supporting_excerpt: syntheticExcerpt,
+      content_hash: stableHash(syntheticExcerpt),
+      published_at: null,
+      retrieved_at: now,
+      status: "fetched",
+      failure_message: null,
+    });
+  }
+
+  const { error: resultsError } = await session.client
+    .from("research_search_results")
+    .insert(searchResultRows);
+  if (resultsError) {
+    throw new EvidenceResearchPersistenceError("Ano could not store fallback product-source references.");
+  }
+
+  const { error: sourcesError } = await session.client
+    .from("research_sources")
+    .insert(sourceRows);
+  if (sourcesError) {
+    throw new EvidenceResearchPersistenceError("Ano could not store fallback product-source excerpts.");
+  }
+
+  await appendEvent(
+    session,
+    conversation.run.id,
+    `autopilot-research-fallback:${runId}`,
+    "Used product materials for market framing",
+    "Proceeding using the uploaded product information and brief while external web research was limited.",
+  );
+
+  const view = await readEvidenceResearchView(session, conversation.conversation.id);
+  if (!view) {
+    throw new EvidenceResearchPersistenceError("Ano could not reload the prepared evidence view.");
+  }
+  return view;
 }
 
 export async function readEvidenceResearchView(session: WorkspaceSession, conversationId: string): Promise<EvidenceResearchView | null> {

@@ -19,6 +19,9 @@
     },
     "src/app/api/v1/conversations/[conversationId]/messages/route.ts": {
       "maxDuration": 120
+    },
+    "src/app/api/v1/conversations/[conversationId]/autopilot/step/route.ts": {
+      "maxDuration": 300
     }
   },
   "headers": [

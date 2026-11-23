@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { SupabaseWorkspaceSession, WorkspaceSession } from "@/contracts/ano";
+import { isOpenMarketRecommendationIntent } from "@/lib/ano/autopilot";
 import {
   evidenceAssessmentSchema,
   lockTargetDecisionInputSchema,
@@ -13,6 +14,7 @@ import {
   type RecommendationMode,
   type SynthesisStatus,
 } from "@/lib/ano/market-synthesis";
+import type { ResearchBrief, ResearchPlan } from "@/lib/ano/research-conversation";
 import { MarketSynthesisModelError, type SynthesisSource } from "@/server/agents/market-synthesis-model";
 import type { ResearchCoverage } from "@/server/research/deep-research-assessment";
 
@@ -459,5 +461,234 @@ export async function lockTargetDecision(session: WorkspaceSession, conversation
     label: "Target route locked",
     detail: `You selected ${market.name} / ${industry.name}. Ano has not searched Prospeo, people, or contacts.`,
   }, { onConflict: "graph_run_id,event_key" });
+  return (await readMarketSynthesis(session, conversationId))!;
+}
+
+export async function ensureAutopilotFallbackSynthesis(
+  session: WorkspaceSession,
+  conversationId: string,
+  brief: ResearchBrief,
+  plan: ResearchPlan,
+): Promise<MarketSynthesis> {
+  requireLiveSession(session);
+  const existingView = await readMarketSynthesis(session, conversationId);
+  if (existingView && existingView.markets.length > 0 && existingView.industries.length > 0) {
+    return existingView;
+  }
+
+  const input = await loadSynthesisSources(session, conversationId);
+  if (input.sources.length === 0) {
+    throw new MarketSynthesisPersistenceError(
+      "Ano needs at least one saved source before preparing a fallback market route.",
+      "SOURCES_NOT_READY",
+    );
+  }
+
+  const explicitTargetMarket = (brief.targetMarkets ?? []).find(
+    (entry) => entry.trim().length > 0 && !isOpenMarketRecommendationIntent(entry),
+  );
+  const scopeMarket = plan.plannedScope.markets.find(
+    (entry) => entry.trim().length > 0 && !isOpenMarketRecommendationIntent(entry),
+  );
+  const marketName = (
+    explicitTargetMarket ??
+    scopeMarket ??
+    brief.businessLocation ??
+    "Primary target market"
+  )
+    .trim()
+    .slice(0, 140);
+
+  const industryName = (
+    plan.plannedScope.industries[0]?.trim() ||
+    brief.marketHints[0]?.trim() ||
+    "B2B & Service Organizations"
+  ).slice(0, 140);
+
+  const primarySource = input.sources[0];
+  const claimId = existingView?.claims[0]?.id ?? crypto.randomUUID();
+  const marketId = existingView?.markets[0]?.id ?? crypto.randomUUID();
+  const industryId = crypto.randomUUID();
+  const assessment = assessSourceLedger(input.sources, input.missionCoverage);
+  const draft: MarketSynthesisDraft = {
+    claims: [
+      {
+        id: claimId,
+        kind: "observation",
+        statement:
+          text(
+            `Based on supplied product context: ${brief.offer} Aiming for ${brief.goal}.`,
+            680,
+          ) ?? "Product brief supplied by the workspace for outbound discovery.",
+        sourceIds: [primarySource.id],
+        comparisonBasis: null,
+        evidenceStrength: "limited",
+        citationStatus: "limited",
+      },
+    ],
+    markets: [
+      {
+        id: marketId,
+        name: marketName,
+        summary:
+          text(
+            `Target geography derived from workspace intake (${marketName}) to evaluate buyer density and direct outreach fit.`,
+            680,
+          ) ?? `Target market: ${marketName}.`,
+        evidenceStrength: "limited",
+        claimIds: [claimId],
+        unknowns: ["External market statistics were supplemented by product context."],
+        nextResearchActions: ["Validate buyer responsiveness during initial outreach."],
+      },
+    ],
+    industries: [
+      {
+        id: industryId,
+        marketProfileId: marketId,
+        name: industryName,
+        summary:
+          text(
+            `Primary segment (${industryName}) aligned with the supplied product brief: ${brief.offer}`,
+            680,
+          ) ?? `Target industry segment: ${industryName}.`,
+        operationalProblems: [
+          text(`Workflow bottlenecks addressed by ${brief.offer}`, 260) ??
+            "Operational workflow inefficiency",
+        ],
+        solutionFit: [
+          text(brief.goal, 260) ?? "Direct value alignment with the product offering",
+        ],
+        buyerRoleHypotheses:
+          plan.plannedScope.buyerRoles.length > 0
+            ? plan.plannedScope.buyerRoles.slice(0, 5)
+            : ["Founder / Managing Director", "Operations Manager"],
+        evidenceStrength: "limited",
+        claimIds: [claimId],
+        unknowns: ["Confirm segment-specific adoption triggers during discovery."],
+      },
+    ],
+    contradictions: [],
+    gaps: assessment.gaps.slice(0, 6),
+    summary:
+      text(
+        `Prepared market and segment route (${marketName} · ${industryName}) grounded in your product brief and uploaded sources.`,
+        680,
+      ) ?? "Prepared fallback market synthesis.",
+  };
+
+  let rawRow = await synthesisRow(session, conversationId);
+  const now = new Date().toISOString();
+
+  if (!rawRow || String(rawRow.ano_research_run_id) !== input.researchRunId) {
+    const claim = await claimMarketSynthesis(
+      session,
+      conversationId,
+      input.researchRunId,
+      assessment,
+    );
+    if (!claim.claimed) {
+      rawRow = await synthesisRow(session, conversationId);
+    } else {
+      await saveMarketSynthesis(session, claim.synthesisId, input.graphRunId, assessment, draft, input.sources);
+      return (await readMarketSynthesis(session, conversationId))!;
+    }
+  }
+
+  if (!rawRow) {
+    throw new MarketSynthesisPersistenceError("Ano could not prepare the fallback market synthesis row.");
+  }
+
+  const synthesisId = String(rawRow.id);
+  const partialExists = await hasPartialSynthesis(session, synthesisId);
+
+  if (!partialExists) {
+    await session.client
+      .from("ano_research_syntheses")
+      .update({
+        status: "running",
+        recommendation_mode: "pending",
+        assessment_json: assessment,
+        failure_message: null,
+        started_at: now,
+        completed_at: null,
+        heartbeat_at: now,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", synthesisId);
+
+    await saveMarketSynthesis(session, synthesisId, input.graphRunId, assessment, draft, input.sources);
+    return (await readMarketSynthesis(session, conversationId))!;
+  }
+
+  if (!existingView?.claims.length) {
+    await session.client.from("research_claims").insert({
+      id: claimId,
+      workspace_id: session.workspace.id,
+      synthesis_id: synthesisId,
+      ano_research_run_id: input.researchRunId,
+      claim_kind: draft.claims[0].kind,
+      statement: draft.claims[0].statement,
+      source_ids: draft.claims[0].sourceIds,
+      comparison_basis: null,
+      evidence_strength: draft.claims[0].evidenceStrength,
+      citation_status: draft.claims[0].citationStatus,
+    });
+  }
+  if (!existingView?.markets.length) {
+    await session.client.from("market_profiles").insert({
+      id: marketId,
+      workspace_id: session.workspace.id,
+      synthesis_id: synthesisId,
+      ano_research_run_id: input.researchRunId,
+      name: draft.markets[0].name,
+      summary: draft.markets[0].summary,
+      evidence_strength: draft.markets[0].evidenceStrength,
+      claim_ids: draft.markets[0].claimIds,
+      unknowns_json: draft.markets[0].unknowns,
+      next_research_actions_json: draft.markets[0].nextResearchActions,
+    });
+  }
+  if (!existingView?.industries.length) {
+    await session.client.from("industry_profiles").insert({
+      id: industryId,
+      workspace_id: session.workspace.id,
+      synthesis_id: synthesisId,
+      ano_research_run_id: input.researchRunId,
+      market_profile_id: marketId,
+      name: draft.industries[0].name,
+      summary: draft.industries[0].summary,
+      operational_problems_json: draft.industries[0].operationalProblems,
+      solution_fit_json: draft.industries[0].solutionFit,
+      buyer_role_hypotheses_json: draft.industries[0].buyerRoleHypotheses,
+      evidence_strength: draft.industries[0].evidenceStrength,
+      claim_ids: draft.industries[0].claimIds,
+      unknowns_json: draft.industries[0].unknowns,
+    });
+  }
+  if (!existingView?.decision) {
+    await session.client.from("target_decisions").insert({
+      workspace_id: session.workspace.id,
+      conversation_id: conversationId,
+      synthesis_id: synthesisId,
+      status: "awaiting_selection",
+    });
+  }
+
+  await session.client
+    .from("ano_research_syntheses")
+    .update({
+      status: "ready_for_decision",
+      recommendation_mode: "exploratory",
+      assessment_json: {
+        ...assessment,
+        summary: draft.summary,
+      },
+      failure_message: null,
+      completed_at: now,
+      heartbeat_at: null,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", synthesisId);
+
   return (await readMarketSynthesis(session, conversationId))!;
 }

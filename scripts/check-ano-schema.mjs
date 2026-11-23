@@ -20,6 +20,7 @@ const requiredTables = [
   "provider_person_searches", "contact_verification_runs", "account_playbooks", "outreach_drafts",
   "outreach_template_packs",
   "conversation_product_sources",
+  "autopilot_runs",
 ];
 const requiredMigrations = [
   "20261021_000001_ano_workspace_and_research",
@@ -47,6 +48,7 @@ const requiredMigrations = [
   "20261122_000023_phase_9b_outreach_template_packs",
   "20261124_000024_internal_api_usage_ledger",
   "20261124_000025_product_sources_and_intake",
+  "20261124_000026_autopilot_runs",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
@@ -184,8 +186,13 @@ try {
   );
   const phase10bProductIntakeReady =
     present.has("conversation_product_sources") && intakeColumns.rows.length === 3;
+  const planApprovalModeColumns = await client.query(
+    "select column_name from information_schema.columns where table_schema = 'public' and table_name = 'research_plans' and column_name = 'plan_approval_mode'",
+  );
+  const phase10cAutopilotReady =
+    present.has("autopilot_runs") && planApprovalModeColumns.rows.length === 1;
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -203,8 +210,9 @@ try {
     phase9bTemplatesReady,
     internalUsageLedgerReady,
     phase10bProductIntakeReady,
+    phase10cAutopilotReady,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

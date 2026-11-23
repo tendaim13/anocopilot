@@ -64,12 +64,15 @@ export function createIterativeEvidenceResearchGraph(
   planner: IterativeResearchPlanner,
   executor: IterativeResearchExecutor,
   checkpointer: BaseCheckpointSaver,
+  options?: { maxWaves?: number },
 ) {
+  const maxWaves = Math.max(1, Math.min(options?.maxWaves ?? MAX_WAVES, MAX_WAVES));
+
   const planWave = async (state: IterativeEvidenceResearchStateValue) => {
     const waveNumber = state.waveNumber + 1;
     const remainingSearches = state.maximumSearches - state.consumedSearches;
     const remainingFetches = state.maximumFetches - state.consumedFetches;
-    if (remainingSearches <= 0 || remainingFetches <= 0 || waveNumber > MAX_WAVES) {
+    if (remainingSearches <= 0 || remainingFetches <= 0 || waveNumber > maxWaves) {
       return { currentNode: "complete" };
     }
     const planned = waveNumber === 1
@@ -116,7 +119,7 @@ export function createIterativeEvidenceResearchGraph(
   };
 
   const routeAfterCoverage = (state: IterativeEvidenceResearchStateValue) => {
-    if (!state.coverage || state.coverage.comparisonReady || state.consumedSearches >= state.maximumSearches || state.consumedFetches >= state.maximumFetches || state.waveNumber >= MAX_WAVES) return "complete";
+    if (!state.coverage || state.coverage.comparisonReady || state.consumedSearches >= state.maximumSearches || state.consumedFetches >= state.maximumFetches || state.waveNumber >= maxWaves) return "complete";
     return "plan_wave";
   };
 

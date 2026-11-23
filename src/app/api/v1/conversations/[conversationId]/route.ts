@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { buildConversationMessageParts } from "@/lib/ano/research-conversation";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
+import { getAutopilotRunForConversation } from "@/server/domain/autopilot-orchestrator-service";
 import {
   EvidenceResearchServiceError,
   getEvidenceResearchForConversation,
@@ -92,6 +93,7 @@ export async function GET(
       peopleState,
       outreachState,
       templateState,
+      autopilotRun,
     ] = await Promise.all([
       getResearchConversation(session, conversationId),
       getEvidenceResearchForConversation(session, conversationId),
@@ -102,6 +104,7 @@ export async function GET(
       getOutreachTemplatePackForConversation(session, conversationId).catch(() => ({
         templatePack: null,
       })),
+      getAutopilotRunForConversation(session, conversationId).catch(() => null),
     ]);
     const provider = searxngConfiguration();
     const messageParts = buildConversationMessageParts(
@@ -125,6 +128,7 @@ export async function GET(
       outreachExecution: outreachState.outreachExecution,
       mercury: outreachState.mercury,
       templatePack: templateState.templatePack,
+      autopilotRun,
       messageParts,
     });
   } catch (error) {

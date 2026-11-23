@@ -834,6 +834,10 @@ export async function syncResearchGraphSnapshot(session: WorkspaceSession, conve
     if (error) throw new ResearchConversationPersistenceError(failure());
   }
   if (state.plan) {
+    const planApprovalMode =
+      state.brief?.intakeComplete && state.plan.approvalStatus === "approved"
+        ? "autopilot"
+        : "manual";
     const { error } = await session.client.from("research_plans").upsert({
       id: state.plan.id,
       workspace_id: session.workspace.id,
@@ -841,6 +845,7 @@ export async function syncResearchGraphSnapshot(session: WorkspaceSession, conve
       graph_run_id: run.id,
       version: state.plan.version,
       approval_status: state.plan.approvalStatus,
+      plan_approval_mode: planApprovalMode,
       content_json: state.plan,
       approved_by: state.plan.approvalStatus === "approved" ? session.actorId : null,
       approved_at: state.plan.approvalStatus === "approved" ? now : null,
@@ -877,4 +882,53 @@ export async function failResearchConversation(session: WorkspaceSession, conver
   const { error } = await session.client.from("ano_graph_runs").update({ status: "failed_safe", failure_message: message, completed_at: new Date().toISOString() }).eq("workspace_id", session.workspace.id).eq("id", run.id);
   if (error) throw new ResearchConversationPersistenceError(failure());
   await session.client.from("ano_conversations").update({ status: "failed_safe" }).eq("workspace_id", session.workspace.id).eq("id", conversationId);
+}
+
+export async function approveResearchPlanForAutopilot(
+  session: WorkspaceSession,
+  conversationId: string,
+  planId: string,
+): Promise<ResearchConversationView> {
+  requireLiveSession(session);
+  const now = new Date().toISOString();
+  const { error: planError } = await session.client
+    .from("research_plans")
+    .update({
+      approval_status: "approved",
+      plan_approval_mode: "autopilot",
+      approved_by: session.actorId,
+      approved_at: now,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId)
+    .eq("id", planId);
+
+  if (planError) {
+    throw new ResearchConversationPersistenceError(failure());
+  }
+
+  const run = await readGraphRun(session, conversationId);
+  if (run.status === "awaiting_plan_approval") {
+    await session.client
+      .from("ano_graph_runs")
+      .update({
+        status: "complete_without_research",
+        current_node: "intake_complete_autopilot_ready",
+        completed_at: now,
+        updated_at: now,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", run.id);
+
+    await session.client
+      .from("ano_conversations")
+      .update({
+        status: "complete_without_research",
+        updated_at: now,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", conversationId);
+  }
+
+  return readResearchConversation(session, conversationId);
 }
