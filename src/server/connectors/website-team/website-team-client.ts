@@ -11,6 +11,7 @@ import type { AccountCandidateDossier } from "@/lib/ano/company-discovery";
 import type { BuyingCommitteeCriteria } from "@/lib/ano/people-playbooks";
 import type { InvokableChatModel, LlmPlannerConfig } from "@/server/agents/bedrock-contracts";
 import { createPlannerChatModel } from "@/server/agents/ollama-chat-model";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 1_500_000;
@@ -527,7 +528,128 @@ const NOISY_EMAIL_PREFIX_REGEX =
 const SHARED_INBOX_PREFIX_REGEX =
   /^(?:info|contact|hello|hi|admin|office|reception|enquiries|enquiry|inquiry|inquiries|appointments|appointment|booking|bookings|support|sales|marketing|team|general|help|care|clinic|dental|frontdesk|mail|service|services|billing|accounts|careers|jobs|hr|press|media|legal|privacy|feedback)$/i;
 
-const EMAIL_FINDER_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,12}\b/g;
+const EMAIL_FINDER_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b/g;
+
+const ASSET_OR_DUMMY_TLDS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "svg",
+  "webp",
+  "gif",
+  "css",
+  "js",
+  "ico",
+  "woff",
+  "woff2",
+  "pdf",
+  "mp4",
+  "invalid",
+  "localhost",
+  "local",
+]);
+
+const KNOWN_VALID_TLDS = new Set([
+  "com",
+  "net",
+  "org",
+  "edu",
+  "gov",
+  "mil",
+  "int",
+  "biz",
+  "info",
+  "name",
+  "pro",
+  "asia",
+  "app",
+  "dev",
+  "cloud",
+  "tech",
+  "site",
+  "online",
+  "store",
+  "shop",
+  "web",
+  "digital",
+  "agency",
+  "studio",
+  "design",
+  "media",
+  "press",
+  "news",
+  "blog",
+  "dental",
+  "dentist",
+  "clinic",
+  "health",
+  "healthcare",
+  "care",
+  "med",
+  "medical",
+  "doctor",
+  "hospital",
+  "pharmacy",
+  "surgery",
+  "wellness",
+  "group",
+  "global",
+  "international",
+  "company",
+  "community",
+  "network",
+  "organic",
+  "education",
+  "business",
+  "careers",
+  "consulting",
+  "contact",
+  "solutions",
+  "services",
+  "systems",
+  "partners",
+  "ventures",
+  "capital",
+  "finance",
+  "legal",
+  "law",
+  "life",
+  "live",
+  "world",
+  "today",
+  "center",
+  "centre",
+  "zone",
+  "space",
+  "team",
+  "work",
+  "works",
+  "plus",
+  "expert",
+  "academy",
+  "institute",
+  "foundation",
+  "support",
+  "email",
+  "direct",
+  "xyz",
+  "top",
+  "vip",
+  "club",
+  "fun",
+  "icu",
+  "link",
+  "click",
+  "example",
+  "melbourne",
+  "sydney",
+  "london",
+  "berlin",
+  "tokyo",
+]);
+
+const TWO_LETTER_SECOND_LEVEL_CCTLD_RE =
+  /^(my|sg|au|uk|nz|id|th|ph|vn|hk|jp|in|cn|tw|kr|de|fr|ca|us)([a-z]{2,})$/;
 
 export type ExtractedPublicEmail = {
   email: string;
@@ -535,17 +657,131 @@ export type ExtractedPublicEmail = {
   matchesDomain: boolean;
 };
 
-function cleanValidEmail(raw: string): string | null {
-  const cleaned = raw.trim().replace(/^mailto:/i, "").split("?")[0]?.trim().toLowerCase() ?? "";
+export function classifyPublicEmailKind(email: string): "direct_public" | "shared_inbox" {
+  const localPart = email.split("@")[0]?.toLowerCase() ?? "";
+  return SHARED_INBOX_PREFIX_REGEX.test(localPart) ? "shared_inbox" : "direct_public";
+}
+
+export function sanitizePublicEmail(
+  raw: string,
+  options?: { stripLeadingPhoneDigits?: boolean },
+): string | null {
+  const withoutMailto = raw.trim().replace(/^mailto:/i, "").split("?")[0] ?? "";
+  const cleaned = withoutMailto.replace(/^[\s<(["']+|[.,;:>\])"'\s]+$/g, "");
   if (!cleaned || cleaned.length > 160) return null;
-  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,12}$/.test(cleaned)) return null;
-  const [localPart, domain] = cleaned.split("@");
-  if (!localPart || !domain) return null;
-  if (/\.(png|jpg|jpeg|svg|webp|gif|css|js|ico|woff2?)$/i.test(domain)) return null;
-  if (NOISY_EMAIL_DOMAIN_REGEX.test(domain) || NOISY_EMAIL_PREFIX_REGEX.test(localPart)) {
+
+  const atIdx = cleaned.indexOf("@");
+  if (atIdx <= 0 || atIdx !== cleaned.lastIndexOf("@")) return null;
+
+  const rawLocal = cleaned.slice(0, atIdx);
+  const rawDomain = cleaned.slice(atIdx + 1);
+  if (!rawLocal || !rawDomain) return null;
+
+  const domainParts = rawDomain.split(".");
+  if (domainParts.length < 2 || domainParts.some((part) => !part)) return null;
+
+  const rawTld = domainParts[domainParts.length - 1] ?? "";
+  const tldLower = rawTld.toLowerCase();
+  if (ASSET_OR_DUMMY_TLDS.has(tldLower)) return null;
+
+  let fixedTld = tldLower;
+  if (!/^[a-z]{2}$/.test(tldLower) && !KNOWN_VALID_TLDS.has(tldLower)) {
+    const camelMatch = rawTld.match(/^([a-z]{2,6})([A-Z][A-Za-z]+)$/);
+    const camelPrefixLower = camelMatch?.[1]?.toLowerCase() ?? "";
+    if (
+      camelPrefixLower &&
+      (/^[a-z]{2}$/.test(camelPrefixLower) || KNOWN_VALID_TLDS.has(camelPrefixLower))
+    ) {
+      fixedTld = camelPrefixLower;
+    } else if (
+      domainParts.length >= 3 &&
+      /^(com|co|org|net|edu|gov)$/i.test(domainParts[domainParts.length - 2] ?? "")
+    ) {
+      const ccMatch = tldLower.match(TWO_LETTER_SECOND_LEVEL_CCTLD_RE);
+      if (ccMatch) {
+        fixedTld = ccMatch[1];
+      }
+    } else {
+      const majorMatch = tldLower.match(/^(com|net|org|edu|gov|biz|info)([a-z]{2,})$/);
+      if (majorMatch) {
+        fixedTld = majorMatch[1];
+      }
+    }
+  }
+
+  if (ASSET_OR_DUMMY_TLDS.has(fixedTld)) return null;
+  if (!/^[a-z]{2}$/.test(fixedTld) && !KNOWN_VALID_TLDS.has(fixedTld)) {
     return null;
   }
-  return cleaned;
+
+  const domain = [...domainParts.slice(0, -1).map((part) => part.toLowerCase()), fixedTld].join(
+    ".",
+  );
+  if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(domain) || domain.length > 120) return null;
+  if (NOISY_EMAIL_DOMAIN_REGEX.test(domain)) return null;
+
+  let localPart = rawLocal.toLowerCase();
+  if (options?.stripLeadingPhoneDigits !== false) {
+    const gluedDigitsMatch = localPart.match(/^\d{4,}([a-z][a-z0-9._%+-]*)$/);
+    if (gluedDigitsMatch) {
+      localPart = gluedDigitsMatch[1];
+    }
+  }
+
+  if (!localPart || !/^[a-z0-9._%+-]+$/.test(localPart)) return null;
+  if (localPart.startsWith(".") || localPart.endsWith(".") || localPart.includes("..")) {
+    return null;
+  }
+  if (NOISY_EMAIL_PREFIX_REGEX.test(localPart)) return null;
+
+  const result = `${localPart}@${domain}`;
+  return result.length <= 160 ? result : null;
+}
+
+function cleanValidEmail(
+  raw: string,
+  options?: { stripLeadingPhoneDigits?: boolean },
+): string | null {
+  return sanitizePublicEmail(raw, options);
+}
+
+type DomNodeLike = {
+  type?: string;
+  data?: string;
+  children?: DomNodeLike[];
+};
+
+function extractSpacedVisibleText($: ReturnType<typeof load>): string {
+  const chunks: string[] = [];
+  const visit = (node: DomNodeLike | undefined) => {
+    if (!node) return;
+    if (node.type === "text" && typeof node.data === "string") {
+      const normalized = node.data.replace(/\s+/g, " ").trim();
+      if (normalized) {
+        chunks.push(normalized);
+      }
+      return;
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        visit(child);
+      }
+    }
+  };
+
+  visit(($("body").get(0) ?? $.root().get(0)) as unknown as DomNodeLike | undefined);
+
+  let joined = "";
+  for (const chunk of chunks) {
+    if (!joined) {
+      joined = chunk;
+    } else if (joined.endsWith("@") || chunk.startsWith("@")) {
+      joined += chunk;
+    } else {
+      joined += ` ${chunk}`;
+    }
+  }
+  return joined;
 }
 
 export function extractPublicContactsFromHtml(
@@ -556,30 +792,28 @@ export function extractPublicContactsFromHtml(
   const emailsByAddr = new Map<string, ExtractedPublicEmail>();
   const normalizedHost = companyDomain?.replace(/^www\./i, "").trim().toLowerCase() ?? "";
 
-  const registerEmail = (raw: string) => {
-    const email = cleanValidEmail(raw);
+  const registerEmail = (raw: string, stripLeadingPhoneDigits: boolean) => {
+    const email = cleanValidEmail(raw, { stripLeadingPhoneDigits });
     if (!email || emailsByAddr.has(email)) return;
-    const [localPart, domain] = email.split("@");
+    const domain = email.split("@")[1] ?? "";
     const matchesDomain = Boolean(
       normalizedHost && (domain === normalizedHost || domain.endsWith(`.${normalizedHost}`)),
     );
-    const kind: "direct_public" | "shared_inbox" = SHARED_INBOX_PREFIX_REGEX.test(localPart)
-      ? "shared_inbox"
-      : "direct_public";
+    const kind = classifyPublicEmailKind(email);
     emailsByAddr.set(email, { email, kind, matchesDomain });
   };
 
   $('a[href^="mailto:"]').each((_idx, el) => {
     const href = $(el).attr("href");
-    if (href) registerEmail(href);
+    if (href) registerEmail(href, false);
   });
 
   $("script, style, noscript, svg").remove();
-  const visibleText = $("body").text();
+  const visibleText = extractSpacedVisibleText($);
   let match: RegExpExecArray | null;
   EMAIL_FINDER_REGEX.lastIndex = 0;
   while ((match = EMAIL_FINDER_REGEX.exec(visibleText)) !== null) {
-    registerEmail(match[0]);
+    registerEmail(match[0], true);
   }
 
   const phonesSet = new Set<string>();
@@ -704,13 +938,13 @@ export function extractPeopleFromHtml(
     const { seniority, department } = inferSeniorityAndDepartment(title, criteria);
     const score = scoreExtractedPerson(title, seniority, department, criteria);
     const existing = byName.get(key);
-    const parsedMail = cardMailto ? cleanValidEmail(cardMailto) : null;
+    const parsedMail = cardMailto
+      ? cleanValidEmail(cardMailto, { stripLeadingPhoneDigits: false })
+      : null;
     if (existing && existing.score >= score) {
       if (parsedMail && !existing.publicEmail) {
         existing.publicEmail = parsedMail;
-        existing.publicEmailKind = SHARED_INBOX_PREFIX_REGEX.test(parsedMail.split("@")[0] ?? "")
-          ? "shared_inbox"
-          : "direct_public";
+        existing.publicEmailKind = classifyPublicEmailKind(parsedMail);
       }
       return;
     }
@@ -734,9 +968,7 @@ export function extractPeopleFromHtml(
       linkedInUrl: linkedInUrl ?? existing?.linkedInUrl,
       publicEmail: parsedMail ?? existing?.publicEmail,
       publicEmailKind: parsedMail
-        ? SHARED_INBOX_PREFIX_REGEX.test(parsedMail.split("@")[0] ?? "")
-          ? "shared_inbox"
-          : "direct_public"
+        ? classifyPublicEmailKind(parsedMail)
         : existing?.publicEmailKind,
       sourceUrl: pageUrl,
       location: account.location ?? undefined,
@@ -940,6 +1172,7 @@ export async function discoverPeopleFromCompanyWebsites(
   const companyReports: WebsiteTeamCompanyReport[] = [];
   let totalPagesScanned = 0;
   let llmFallbackCalls = 0;
+  const startedAt = Date.now();
 
   for (const account of targetAccounts) {
     if (totalPagesScanned >= MAX_TOTAL_PAGES_PER_RUN || allPeople.length >= MAX_TOTAL_PEOPLE) {
@@ -1170,8 +1403,25 @@ export async function discoverPeopleFromCompanyWebsites(
     }
   }
 
+  const finalPeople = allPeople.slice(0, MAX_TOTAL_PEOPLE);
+  recordInternalApiUsage({
+    provider: "website_team",
+    operation: "crawl_websites",
+    modelOrEndpoint: "direct_http",
+    status: "success",
+    requestCount: totalPagesScanned,
+    creditsUsed: 0,
+    durationMs: Date.now() - startedAt,
+    metadata: {
+      companiesScanned: companyReports.length,
+      pagesScanned: totalPagesScanned,
+      peopleFound: finalPeople.length,
+      llmFallbackCalls,
+    },
+  });
+
   return {
-    people: allPeople.slice(0, MAX_TOTAL_PEOPLE),
+    people: finalPeople,
     pagesScanned: totalPagesScanned,
     companiesScanned: companyReports.length,
     companyReports,

@@ -6,6 +6,7 @@ import type { AgentFinalAnswer } from "@/lib/ano/types";
 import type { BedrockConverse, BedrockPlannerConfig } from "@/server/agents/bedrock-contracts";
 import { BedrockAdapterError, mockResearchToolConfig, salesResearchBedrockPrompt, salesResearchBedrockSystemPrompt } from "@/server/agents/bedrock-contracts";
 import { AgentRuntimeError, createBoundedMockToolLoop } from "@/server/agents/runtime";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const modelAnswerSchema = z.object({
   summary: z.string().trim().min(1).max(420),
@@ -93,6 +94,7 @@ export async function runBedrockSalesResearch(
     }
 
     let response;
+    const turnStartedAt = Date.now();
     try {
       response = await converse({
         messages,
@@ -100,7 +102,31 @@ export async function runBedrockSalesResearch(
         toolConfig: mockResearchToolConfig,
         timeoutMs: remainingTimeMs,
       });
+      recordInternalApiUsage({
+        provider: "bedrock",
+        operation: "sales_research_converse",
+        modelOrEndpoint: config.modelId,
+        status: "success",
+        inputTokens: response.usage?.inputTokens ?? 0,
+        outputTokens: response.usage?.outputTokens ?? 0,
+        durationMs: Date.now() - turnStartedAt,
+        metadata: { turn: modelTurns, stopReason: response.stopReason ?? "unknown" },
+      });
     } catch (error) {
+      recordInternalApiUsage({
+        provider: "bedrock",
+        operation: "sales_research_converse",
+        modelOrEndpoint: config.modelId,
+        status:
+          error instanceof BedrockAdapterError && error.code === "TIMEOUT"
+            ? "timeout"
+            : "error",
+        durationMs: Date.now() - turnStartedAt,
+        metadata: {
+          turn: modelTurns,
+          errorCode: error instanceof BedrockAdapterError ? error.code : "BEDROCK_UNAVAILABLE",
+        },
+      });
       if (error instanceof BedrockAdapterError) {
         fail(loop, error.message, error.code === "TIMEOUT" ? "MODEL_TIMEOUT" : "BEDROCK_UNAVAILABLE");
       }

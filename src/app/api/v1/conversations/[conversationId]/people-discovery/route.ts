@@ -15,6 +15,7 @@ import {
 import { TargetAccountDiscoveryServiceError } from "@/server/domain/target-account-discovery-service";
 import { PeoplePlaybookPersistenceError } from "@/server/persistence/people-playbook-store";
 import { TargetAccountDiscoveryPersistenceError } from "@/server/persistence/target-account-discovery-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -75,56 +76,52 @@ export async function POST(
     const { conversationId } = await context.params;
     const action = parsed.data;
 
-    if (action.action === "propose_roles") {
-      return NextResponse.json(
-        await proposeBuyerRolesForConversation(session, conversationId, {
-          providerKey: action.providerKey,
-          roleOverrides: action.roleOverrides,
-          departments: action.departments,
-          seniorities: action.seniorities,
-          excludeTitles: action.excludeTitles,
-          archetype: action.archetype,
-        }),
-      );
-    }
-    if (action.action === "run_free_people_search") {
-      return NextResponse.json(
-        await runWebsiteTeamDiscoveryForConversation(session, conversationId, {
-          roleOverrides: action.roleOverrides,
-          departments: action.departments,
-          seniorities: action.seniorities,
-          excludeTitles: action.excludeTitles,
-          archetype: action.archetype,
-        }),
-      );
-    }
-    if (action.action === "approve_person_search") {
-      return NextResponse.json(
-        await approvePersonSearchForConversation(session, conversationId, action.personSearchId),
-      );
-    }
-    if (action.action === "prepare_verification") {
-      return NextResponse.json(
-        await prepareContactVerificationForConversation(
-          session,
-          conversationId,
-          action.contactIds,
-          action.providerKey,
-        ),
-      );
-    }
-    if (action.action === "approve_verification") {
-      return NextResponse.json(
-        await approveContactVerificationForConversation(
-          session,
-          conversationId,
-          action.verificationRunId,
-        ),
-      );
-    }
-
     return NextResponse.json(
-      await generateAccountPlaybooksForConversation(session, conversationId),
+      await runWithInternalUsageContext({ session, conversationId }, async () => {
+        if (action.action === "propose_roles") {
+          return await proposeBuyerRolesForConversation(session, conversationId, {
+            providerKey: action.providerKey,
+            roleOverrides: action.roleOverrides,
+            departments: action.departments,
+            seniorities: action.seniorities,
+            excludeTitles: action.excludeTitles,
+            archetype: action.archetype,
+          });
+        }
+        if (action.action === "run_free_people_search") {
+          return await runWebsiteTeamDiscoveryForConversation(session, conversationId, {
+            roleOverrides: action.roleOverrides,
+            departments: action.departments,
+            seniorities: action.seniorities,
+            excludeTitles: action.excludeTitles,
+            archetype: action.archetype,
+          });
+        }
+        if (action.action === "approve_person_search") {
+          return await approvePersonSearchForConversation(
+            session,
+            conversationId,
+            action.personSearchId,
+          );
+        }
+        if (action.action === "prepare_verification") {
+          return await prepareContactVerificationForConversation(
+            session,
+            conversationId,
+            action.contactIds,
+            action.providerKey,
+          );
+        }
+        if (action.action === "approve_verification") {
+          return await approveContactVerificationForConversation(
+            session,
+            conversationId,
+            action.verificationRunId,
+          );
+        }
+
+        return await generateAccountPlaybooksForConversation(session, conversationId);
+      }),
     );
   } catch (error) {
     return errorResponse(error);

@@ -9,6 +9,7 @@ import type {
   OllamaPlannerConfig,
 } from "@/server/agents/bedrock-contracts";
 import { createGeminiChatModel } from "@/server/agents/gemini-chat-model";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const DEFAULT_OLLAMA_TIMEOUT_MS = 120_000;
 
@@ -80,6 +81,8 @@ export function createOllamaChatModel(
     async invoke(messages: BaseMessage[]) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const startedAt = Date.now();
+      let lastHttpStatus: number | undefined;
 
       try {
         const headers: Record<string, string> = {
@@ -109,6 +112,7 @@ export function createOllamaChatModel(
             },
           }),
         });
+        lastHttpStatus = response.status;
 
         const rawBody = await response.text().catch(() => "");
 
@@ -127,6 +131,8 @@ export function createOllamaChatModel(
           message?: { content?: unknown };
           response?: unknown;
           error?: unknown;
+          prompt_eval_count?: number;
+          eval_count?: number;
         };
         if (typeof parsed.error === "string" && parsed.error) {
           if (/not found|pull/i.test(parsed.error)) {
@@ -137,21 +143,43 @@ export function createOllamaChatModel(
           throw new OllamaConnectionError(`Ano: ${parsed.error}`);
         }
 
+        recordInternalApiUsage({
+          provider: "ollama",
+          operation: "chat",
+          modelOrEndpoint: config.modelId,
+          status: "success",
+          httpStatus: response.status,
+          inputTokens: parsed.prompt_eval_count ?? 0,
+          outputTokens: parsed.eval_count ?? 0,
+          durationMs: Date.now() - startedAt,
+        });
+
         return {
           content: toMessageText(parsed.message?.content ?? parsed.response ?? ""),
         };
       } catch (error) {
-        if (error instanceof OllamaConnectionError || error instanceof OllamaModelNotFoundError) {
-          throw error;
-        }
-        if (controller.signal.aborted) {
-          throw new OllamaConnectionError(
-            `Ano: Ollama at ${config.baseUrl} timed out after ${Math.round(timeoutMs / 1000)}s.`,
-          );
-        }
-        throw new OllamaConnectionError(
-          `Ano could not reach Ollama at ${config.baseUrl}. Make sure Ollama is running locally.`,
-        );
+        const mappedError =
+          error instanceof OllamaConnectionError || error instanceof OllamaModelNotFoundError
+            ? error
+            : controller.signal.aborted
+              ? new OllamaConnectionError(
+                  `Ano: Ollama at ${config.baseUrl} timed out after ${Math.round(timeoutMs / 1000)}s.`,
+                )
+              : new OllamaConnectionError(
+                  `Ano could not reach Ollama at ${config.baseUrl}. Make sure Ollama is running locally.`,
+                );
+
+        recordInternalApiUsage({
+          provider: "ollama",
+          operation: "chat",
+          modelOrEndpoint: config.modelId,
+          status: controller.signal.aborted ? "timeout" : "error",
+          httpStatus: lastHttpStatus ?? null,
+          durationMs: Date.now() - startedAt,
+          metadata: { errorName: mappedError.name },
+        });
+
+        throw mappedError;
       } finally {
         clearTimeout(timer);
       }
@@ -174,7 +202,7 @@ export function createPlannerChatModel(
     return createOllamaChatModel(config, { maxTokens: options.maxTokens });
   }
 
-  return new ChatBedrockConverse({
+  const bedrockModel = new ChatBedrockConverse({
     model: config.modelId,
     region: config.region,
     temperature: 0,
@@ -186,4 +214,48 @@ export function createPlannerChatModel(
       trace: "enabled",
     },
   });
+
+  return {
+    async invoke(messages: BaseMessage[]) {
+      const startedAt = Date.now();
+      try {
+        const result = await bedrockModel.invoke(messages);
+        const usageCarrier = result as unknown as {
+          content: unknown;
+          usage_metadata?: { input_tokens?: number; output_tokens?: number };
+          response_metadata?: { usage?: { inputTokens?: number; outputTokens?: number } };
+        };
+        const inputTokens =
+          usageCarrier.usage_metadata?.input_tokens ??
+          usageCarrier.response_metadata?.usage?.inputTokens ??
+          0;
+        const outputTokens =
+          usageCarrier.usage_metadata?.output_tokens ??
+          usageCarrier.response_metadata?.usage?.outputTokens ??
+          0;
+
+        recordInternalApiUsage({
+          provider: "bedrock",
+          operation: "converse",
+          modelOrEndpoint: config.modelId,
+          status: "success",
+          inputTokens,
+          outputTokens,
+          durationMs: Date.now() - startedAt,
+        });
+
+        return { content: result.content };
+      } catch (error) {
+        recordInternalApiUsage({
+          provider: "bedrock",
+          operation: "converse",
+          modelOrEndpoint: config.modelId,
+          status: "error",
+          durationMs: Date.now() - startedAt,
+          metadata: { errorName: error instanceof Error ? error.name : "Error" },
+        });
+        throw error;
+      }
+    },
+  };
 }

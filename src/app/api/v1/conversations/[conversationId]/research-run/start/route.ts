@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
 import { EvidenceResearchServiceError, startApprovedEvidenceResearch } from "@/server/domain/evidence-research-service";
 import { EvidenceResearchPersistenceError } from "@/server/persistence/evidence-research-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,8 +20,13 @@ export async function POST(request: Request, context: { params: Promise<{ conver
   const runId = body && typeof body === "object" && "runId" in body && typeof body.runId === "string" ? body.runId : "";
   if (!runId) return NextResponse.json({ error: "Ano needs the approved research scope before it can start." }, { status: 400 });
   try {
+    const session = await requireWorkspaceSession();
     const { conversationId } = await context.params;
-    return NextResponse.json({ research: await startApprovedEvidenceResearch(await requireWorkspaceSession(), conversationId, runId) });
+    return NextResponse.json({
+      research: await runWithInternalUsageContext({ session, conversationId }, () =>
+        startApprovedEvidenceResearch(session, conversationId, runId),
+      ),
+    });
   } catch (error) {
     return errorResponse(error);
   }

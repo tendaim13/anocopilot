@@ -99,6 +99,10 @@ const migrations = [
     id: "20261122_000023_phase_9b_outreach_template_packs",
     file: path.join(projectRoot, "supabase/migrations/20261122_000023_phase_9b_outreach_template_packs.sql"),
   },
+  {
+    id: "20261124_000024_internal_api_usage_ledger",
+    file: path.join(projectRoot, "supabase/migrations/20261124_000024_internal_api_usage_ledger.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {

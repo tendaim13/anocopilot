@@ -49,9 +49,11 @@ import {
   searchProspeoPeople,
 } from "@/server/connectors/prospeo/prospeo-client";
 import {
+  classifyPublicEmailKind,
   createWebsiteTeamLlmExtractor,
   discoverPeopleFromCompanyWebsites,
   matchWebsiteContactForPerson,
+  sanitizePublicEmail,
   type WebsiteTeamCompanyReport,
 } from "@/server/connectors/website-team/website-team-client";
 import { readMarketSynthesis } from "@/server/persistence/market-synthesis-store";
@@ -206,14 +208,20 @@ function mapContactRow(
     typeof receipt.source_url === "string" && receipt.source_url.trim()
       ? receipt.source_url.trim()
       : null;
-  const rawPublicEmail =
-    typeof receipt.public_email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receipt.public_email.trim())
-      ? receipt.public_email.trim().toLowerCase()
-      : null;
+  const storedPublicEmail =
+    typeof receipt.public_email === "string" ? receipt.public_email.trim() : "";
+  const rawPublicEmail = storedPublicEmail ? sanitizePublicEmail(storedPublicEmail) : null;
+  const emailWasRepaired = Boolean(
+    rawPublicEmail && storedPublicEmail.toLowerCase() !== rawPublicEmail,
+  );
   const publicEmailKind: PublicEmailKind | null = rawPublicEmail
-    ? receipt.public_email_kind === "direct_public"
-      ? "direct_public"
-      : "shared_inbox"
+    ? emailWasRepaired ||
+      (receipt.public_email_kind !== "direct_public" &&
+        receipt.public_email_kind !== "shared_inbox")
+      ? classifyPublicEmailKind(rawPublicEmail)
+      : receipt.public_email_kind === "direct_public"
+        ? "direct_public"
+        : "shared_inbox"
     : null;
   const publicPhone =
     typeof receipt.public_phone === "string" && receipt.public_phone.trim()
@@ -646,10 +654,18 @@ async function backfillExistingContactsFromWebsiteReports(
     if (!report) continue;
 
     const prevReceipt = asRecord(row.provider_receipt_json);
-    const alreadyHasEmail = hasNonEmptyString(prevReceipt.public_email);
+    const existingRawEmail = hasNonEmptyString(prevReceipt.public_email)
+      ? String(prevReceipt.public_email).trim()
+      : null;
+    const existingCleanEmail = existingRawEmail ? sanitizePublicEmail(existingRawEmail) : null;
+    const needsEmailRepair = Boolean(
+      existingRawEmail &&
+        (!existingCleanEmail || existingCleanEmail !== existingRawEmail.toLowerCase()),
+    );
+    const alreadyHasCleanEmail = Boolean(existingCleanEmail) && !needsEmailRepair;
     const alreadyHasPhone = hasNonEmptyString(prevReceipt.public_phone);
     if (
-      alreadyHasEmail &&
+      alreadyHasCleanEmail &&
       (alreadyHasPhone || !(report.publicPhones && report.publicPhones.length > 0))
     ) {
       continue;
@@ -663,21 +679,30 @@ async function backfillExistingContactsFromWebsiteReports(
       },
       report,
     );
-    if (!match) continue;
+    if (!match && !needsEmailRepair) continue;
 
     const nextReceipt: Record<string, unknown> = { ...prevReceipt };
     let changed = false;
 
-    if (!alreadyHasEmail && match.publicEmail) {
-      nextReceipt.public_email = match.publicEmail;
-      nextReceipt.public_email_kind = match.publicEmailKind ?? "shared_inbox";
-      changed = true;
+    if (!alreadyHasCleanEmail) {
+      const replacementEmail = match?.publicEmail ?? existingCleanEmail;
+      if (replacementEmail && replacementEmail !== existingRawEmail?.toLowerCase()) {
+        nextReceipt.public_email = replacementEmail;
+        nextReceipt.public_email_kind = match?.publicEmail
+          ? (match.publicEmailKind ?? classifyPublicEmailKind(replacementEmail))
+          : classifyPublicEmailKind(replacementEmail);
+        changed = true;
+      } else if (needsEmailRepair && !replacementEmail) {
+        delete nextReceipt.public_email;
+        delete nextReceipt.public_email_kind;
+        changed = true;
+      }
     }
-    if (!alreadyHasPhone && match.publicPhone) {
+    if (!alreadyHasPhone && match?.publicPhone) {
       nextReceipt.public_phone = match.publicPhone;
       changed = true;
     }
-    if (!hasNonEmptyString(nextReceipt.source_url) && match.sourceUrl) {
+    if (!hasNonEmptyString(nextReceipt.source_url) && match?.sourceUrl) {
       nextReceipt.source_url = match.sourceUrl;
       changed = true;
     }

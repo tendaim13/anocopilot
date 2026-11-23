@@ -7,6 +7,7 @@ import {
   MarketSynthesisServiceError,
 } from "@/server/domain/market-synthesis-service";
 import { MarketSynthesisPersistenceError } from "@/server/persistence/market-synthesis-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,8 +31,13 @@ export async function GET(_request: Request, context: { params: Promise<{ conver
 /** This deliberate UI action analyzes existing saved excerpts only. */
 export async function POST(_request: Request, context: { params: Promise<{ conversationId: string }> }) {
   try {
+    const session = await requireWorkspaceSession();
     const { conversationId } = await context.params;
-    return NextResponse.json({ synthesis: await analyseMarketSynthesisForConversation(await requireWorkspaceSession(), conversationId) });
+    return NextResponse.json({
+      synthesis: await runWithInternalUsageContext({ session, conversationId }, () =>
+        analyseMarketSynthesisForConversation(session, conversationId),
+      ),
+    });
   } catch (error) {
     return errorResponse(error);
   }

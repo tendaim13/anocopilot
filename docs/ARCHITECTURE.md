@@ -26,6 +26,7 @@ Browser client (Material Web 2.4.1 + React 19 Client Components)
 | Graph & Agent | `src/server/langgraph/`, `src/server/agents/` | Checkpointed Phase A/B/C/D/E/F LangGraph flows and server-only Bedrock/Ollama planners/synthesizers with strict JSON schema validation. |
 | Research Retrieval | `src/server/research/` | Private SearXNG client, SSRF-hardened `EvidenceSourceRetriever`, source scoring, and coverage assessment. |
 | Persistence | `src/server/persistence/` | Idempotent runs, conversation pagination/rename/archive, and append-only `audit_logs` via user-session RLS. |
+| Internal Telemetry | `src/server/telemetry/`, `scripts/report-api-usage.mjs` | Operator-only `ano_internal.api_usage_logs` writer RPC, silent boolean daily budget guard (`check_internal_usage_budget`), and local operator usage report CLI (`npm run usage:report`); zero browser or HTTP exposure. |
 | Connectors & Jobs | `src/server/connectors/`, `src/server/jobs/` | OpenStreetMap (Nominatim/Overpass), Prospeo, Dropcontact, and Mercury capability adapters plus safe stale-run/lease recovery (never retries uncertain calls). |
 
 ## Schema groups
@@ -40,6 +41,7 @@ Browser client (Material Web 2.4.1 + React 19 Client Components)
 | Phase D Account Discovery | `provider_company_searches`, `account_candidates` (plus `provider_action_requests` audit rows) | Dual-source OpenStreetMap/Prospeo discovery, 1-click free OpenStreetMap runs, interactive cohort artifact table/drawer, two-way grounded chat filter refinements (`conversation-chat-model.ts`), structured `signals_json`, fit scores, and `claim_ids` separated from industry claims. |
 | Phase E People & Playbooks | `provider_person_searches`, `contact_candidates`, `contact_verification_runs`, `account_playbooks` | Product-aware Buying Committee criteria (archetype, seniority, department, title include/exclude), dual-source people discovery (`website_team` \$0 crawl with free `public_website` email/phone capture separating `direct_public` person emails from `shared_inbox` addresses + fixed Prospeo `/search-person`), interactive People Cohort artifact drawer, multi-provider selective email verification (`prospeo` `/bulk-enrich-person` or `dropcontact` `/batch`, re-runnable across additional batches), and factual evidence-backed account playbooks. |
 | Phase F Outreach & Accountability | `outreach_template_packs`, `outreach_drafts`, `proposals`, `approval_decisions`, `audit_logs`, `notifications` | Blaster-ready human-voice 3-step email sequences (anti-AI linter enforcing 60/50/30 word caps, zero dashes/exclamation marks/AI clichés, lowercase subjects, no Email 1 URLs, standard merge variables, single bounded LLM rewrite pass, `$0` external spend, and chat `templateUpdate` refinements), 1-click RFC-4180 formula-safe CSV/Markdown export pack (`LeadExportCard`, `/api/v1/conversations/[conversationId]/export`, `/api/v1/people/export`, `/people` directory export), plus versioned multi-channel drafts with deterministic eligibility checks, immutable per-action human decisions, Mercury proposal receipts, and append-only audit trail (`leads.exported_csv`, `templates.exported`). |
+| Internal Usage Ledger | `ano_internal.api_usage_logs` (write-only `public.record_internal_api_usage` & boolean `public.check_internal_usage_budget` RPCs) | Private operator-only telemetry ledger capturing provider calls, LLM tokens, Prospeo/Dropcontact credits, remaining balances, and estimated USD cost. Revoked from `public`/`anon`/`authenticated`, unexposed in PostgREST, and excluded from all `/api/v1/*` routes and UI; readable solely via `npm run usage:report` using local `SUPABASE_DB_URL`. |
 
 Every table is protected by RLS. A signed-in member can only read their workspace. `viewer` is read-only; `owner`, `admin`, and `member` can write approved Ano records. `audit_logs` allows select/insert only—no client update or delete policy.
 
@@ -60,11 +62,12 @@ Every table is protected by RLS. A signed-in member can only read their workspac
 
 ## Database operation
 
-Schema migrations live in `supabase/migrations/` (`000001` through `000023`). The application's runtime never uses a service-role key for DDL. To apply or verify migrations against Ano's dedicated database, set `SUPABASE_DB_URL` and `ANO_DATABASE_LABEL=ano` in `.env.local` and run:
+Schema migrations live in `supabase/migrations/` (`000001` through `000024`). The application's runtime never uses a service-role key for DDL. To apply or verify migrations against Ano's dedicated database, set `SUPABASE_DB_URL` and `ANO_DATABASE_LABEL=ano` in `.env.local` and run:
 
 ```bash
 npm run db:apply
 npm run db:status
+npm run usage:report -- --days=30
 ```
 
 ## CI/CD & Vercel deployment

@@ -10,6 +10,7 @@ import {
   TargetAccountDiscoveryServiceError,
 } from "@/server/domain/target-account-discovery-service";
 import { TargetAccountDiscoveryPersistenceError } from "@/server/persistence/target-account-discovery-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -66,36 +67,34 @@ export async function POST(
   try {
     const session = await requireWorkspaceSession();
     const { conversationId } = await context.params;
-    if (parsed.data.action === "prepare_preview") {
-      return NextResponse.json(
-        await prepareCompanySearchPreviewForConversation(session, conversationId, {
-          providerKey: parsed.data.providerKey,
-          resolveWebsites: parsed.data.resolveWebsites,
-          locationOverrides: parsed.data.locationOverrides,
-          keywordOverrides: parsed.data.keywordOverrides,
-          industryOverrides: parsed.data.industryOverrides,
-          excludedCategories: parsed.data.excludedCategories,
-        }),
-      );
-    }
-
-    if (parsed.data.action === "run_free_search") {
-      return NextResponse.json(
-        await runOpenStreetMapSearchForConversation(session, conversationId, {
-          resolveWebsites: parsed.data.resolveWebsites,
-          locationOverrides: parsed.data.locationOverrides,
-          keywordOverrides: parsed.data.keywordOverrides,
-          excludedCategories: parsed.data.excludedCategories,
-        }),
-      );
-    }
-
     return NextResponse.json(
-      await approveCompanySearchForConversation(
-        session,
-        conversationId,
-        parsed.data.searchId,
-      ),
+      await runWithInternalUsageContext({ session, conversationId }, async () => {
+        if (parsed.data.action === "prepare_preview") {
+          return await prepareCompanySearchPreviewForConversation(session, conversationId, {
+            providerKey: parsed.data.providerKey,
+            resolveWebsites: parsed.data.resolveWebsites,
+            locationOverrides: parsed.data.locationOverrides,
+            keywordOverrides: parsed.data.keywordOverrides,
+            industryOverrides: parsed.data.industryOverrides,
+            excludedCategories: parsed.data.excludedCategories,
+          });
+        }
+
+        if (parsed.data.action === "run_free_search") {
+          return await runOpenStreetMapSearchForConversation(session, conversationId, {
+            resolveWebsites: parsed.data.resolveWebsites,
+            locationOverrides: parsed.data.locationOverrides,
+            keywordOverrides: parsed.data.keywordOverrides,
+            excludedCategories: parsed.data.excludedCategories,
+          });
+        }
+
+        return await approveCompanySearchForConversation(
+          session,
+          conversationId,
+          parsed.data.searchId,
+        );
+      }),
     );
   } catch (error) {
     return errorResponse(error);

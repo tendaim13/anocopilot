@@ -7,6 +7,7 @@ import type {
   GeminiThinkingLevel,
   InvokableChatModel,
 } from "@/server/agents/bedrock-contracts";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const DEFAULT_GEMINI_TIMEOUT_MS = 60_000;
 const DEFAULT_GEMINI_503_RETRY_DELAY_MS = 600;
@@ -157,6 +158,9 @@ export function createGeminiChatModel(
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const startedAt = Date.now();
+      let attempts = 0;
+      let lastHttpStatus: number | undefined;
 
       try {
         const generationConfig: Record<string, unknown> = {
@@ -180,6 +184,7 @@ export function createGeminiChatModel(
         const serializedBody = JSON.stringify(bodyPayload);
 
         for (let attempt = 0; attempt < 2; attempt += 1) {
+          attempts = attempt + 1;
           const response = await fetcher(endpoint, {
             method: "POST",
             headers: {
@@ -189,6 +194,7 @@ export function createGeminiChatModel(
             signal: controller.signal,
             body: serializedBody,
           });
+          lastHttpStatus = response.status;
 
           const rawBody = await response.text().catch(() => "");
 
@@ -242,6 +248,12 @@ export function createGeminiChatModel(
               content?: { parts?: Array<{ text?: string; thought?: boolean }> };
             }>;
             promptFeedback?: { blockReason?: string };
+            usageMetadata?: {
+              promptTokenCount?: number;
+              candidatesTokenCount?: number;
+              thoughtsTokenCount?: number;
+              totalTokenCount?: number;
+            };
           };
 
           if (parsed.promptFeedback?.blockReason) {
@@ -265,6 +277,23 @@ export function createGeminiChatModel(
             );
           }
 
+          const inputTokens = parsed.usageMetadata?.promptTokenCount ?? 0;
+          const outputTokens =
+            (parsed.usageMetadata?.candidatesTokenCount ?? 0) +
+            (parsed.usageMetadata?.thoughtsTokenCount ?? 0);
+          recordInternalApiUsage({
+            provider: "gemini",
+            operation: "generate_content",
+            modelOrEndpoint: config.modelId,
+            status: "success",
+            httpStatus: response.status,
+            requestCount: attempts,
+            inputTokens,
+            outputTokens,
+            durationMs: Date.now() - startedAt,
+            metadata: { attempts },
+          });
+
           return { content: text };
         }
 
@@ -273,19 +302,36 @@ export function createGeminiChatModel(
           "UNAVAILABLE",
         );
       } catch (error) {
-        if (error instanceof GeminiApiError) {
-          throw error;
-        }
-        if (controller.signal.aborted) {
-          throw new GeminiApiError(
-            `Ano: Google AI Studio timed out after ${Math.round(timeoutMs / 1000)}s.`,
-            "TIMEOUT",
-          );
-        }
-        throw new GeminiApiError(
-          "Ano could not reach Google AI Studio. Check network connectivity and GEMINI_BASE_URL.",
-          "UNAVAILABLE",
-        );
+        const mappedError =
+          error instanceof GeminiApiError
+            ? error
+            : controller.signal.aborted
+              ? new GeminiApiError(
+                  `Ano: Google AI Studio timed out after ${Math.round(timeoutMs / 1000)}s.`,
+                  "TIMEOUT",
+                )
+              : new GeminiApiError(
+                  "Ano could not reach Google AI Studio. Check network connectivity and GEMINI_BASE_URL.",
+                  "UNAVAILABLE",
+                );
+
+        recordInternalApiUsage({
+          provider: "gemini",
+          operation: "generate_content",
+          modelOrEndpoint: config.modelId,
+          status:
+            mappedError.code === "RATE_LIMITED"
+              ? "rate_limited"
+              : mappedError.code === "TIMEOUT"
+                ? "timeout"
+                : "error",
+          httpStatus: lastHttpStatus ?? null,
+          requestCount: Math.max(1, attempts),
+          durationMs: Date.now() - startedAt,
+          metadata: { attempts, errorCode: mappedError.code },
+        });
+
+        throw mappedError;
       } finally {
         clearTimeout(timer);
       }

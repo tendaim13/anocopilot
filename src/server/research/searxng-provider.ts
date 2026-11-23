@@ -9,6 +9,7 @@ import {
   ResearchProviderError,
   type ProviderSearchResponse,
 } from "@/server/research/research-provider";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 512 * 1024;
@@ -175,32 +176,65 @@ export const searxngResearchProvider = {
     if (value.length < 3 || value.length > 380) {
       throw new ResearchProviderError("Ano rejected an invalid research query before contacting SearXNG.", "INVALID_RESPONSE");
     }
-    const payload = searxngResponseSchema.safeParse(await searchRequest(value));
-    if (!payload.success) {
-      throw new ResearchProviderError("SearXNG returned a search response Ano could not validate. No follow-up request was attempted.", "INVALID_RESPONSE", { issueCount: payload.error.issues.length });
-    }
-    const uniqueUrls = new Set<string>();
-    const results = payload.data.results.flatMap((result, index) => {
-      try {
-        const url = canonicalWebUrl(result.url);
-        if (uniqueUrls.has(url) || uniqueUrls.size >= MAX_RESULTS_PER_QUERY) return [];
-        uniqueUrls.add(url);
-        return [{
-          providerResultId: createHash("sha256").update(`${url}:${index}`).digest("hex"),
-          title: clipped(result.title, 500) ?? "Untitled source",
-          url,
-          snippet: clipped(result.content, 1_200),
-          score: typeof result.score === "number" && Number.isFinite(result.score) ? result.score : null,
-          publishedAt: asIsoDate(result.publishedDate),
-        }];
-      } catch {
-        return [];
+    const startedAt = Date.now();
+    try {
+      const payload = searxngResponseSchema.safeParse(await searchRequest(value));
+      if (!payload.success) {
+        throw new ResearchProviderError("SearXNG returned a search response Ano could not validate. No follow-up request was attempted.", "INVALID_RESPONSE", { issueCount: payload.error.issues.length });
       }
-    });
-    return {
-      requestId: createHash("sha256").update(`${value}:${results.map((result) => result.url).join("|")}`).digest("hex"),
-      credits: null,
-      results,
-    };
+      const uniqueUrls = new Set<string>();
+      const results = payload.data.results.flatMap((result, index) => {
+        try {
+          const url = canonicalWebUrl(result.url);
+          if (uniqueUrls.has(url) || uniqueUrls.size >= MAX_RESULTS_PER_QUERY) return [];
+          uniqueUrls.add(url);
+          return [{
+            providerResultId: createHash("sha256").update(`${url}:${index}`).digest("hex"),
+            title: clipped(result.title, 500) ?? "Untitled source",
+            url,
+            snippet: clipped(result.content, 1_200),
+            score: typeof result.score === "number" && Number.isFinite(result.score) ? result.score : null,
+            publishedAt: asIsoDate(result.publishedDate),
+          }];
+        } catch {
+          return [];
+        }
+      });
+      recordInternalApiUsage({
+        provider: "searxng",
+        operation: "search",
+        modelOrEndpoint: "/search",
+        status: "success",
+        httpStatus: 200,
+        durationMs: Date.now() - startedAt,
+        metadata: { resultCount: results.length },
+      });
+      return {
+        requestId: createHash("sha256").update(`${value}:${results.map((result) => result.url).join("|")}`).digest("hex"),
+        credits: null,
+        results,
+      };
+    } catch (error) {
+      const errCode = error instanceof ResearchProviderError ? error.code : "INVALID_RESPONSE";
+      const responseStatus =
+        error instanceof ResearchProviderError && typeof error.diagnostic.responseStatus === "number"
+          ? error.diagnostic.responseStatus
+          : null;
+      recordInternalApiUsage({
+        provider: "searxng",
+        operation: "search",
+        modelOrEndpoint: "/search",
+        status:
+          errCode === "RATE_LIMITED"
+            ? "rate_limited"
+            : errCode === "UNCERTAIN_OUTCOME"
+              ? "timeout"
+              : "error",
+        httpStatus: responseStatus,
+        durationMs: Date.now() - startedAt,
+        metadata: { errorCode: errCode },
+      });
+      throw error;
+    }
   },
 };

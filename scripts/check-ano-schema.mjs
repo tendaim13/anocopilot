@@ -44,6 +44,7 @@ const requiredMigrations = [
   "20261121_000021_phase_e_dual_source_buying_committee",
   "20261122_000022_phase_9a_multi_source_email_enrichment",
   "20261122_000023_phase_9b_outreach_template_packs",
+  "20261124_000024_internal_api_usage_ledger",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
@@ -151,8 +152,32 @@ try {
     present.has("outreach_drafts") &&
     phaseFColumns.rows.length === 2;
   const phase9bTemplatesReady = present.has("outreach_template_packs");
+  const internalLedgerResult = await client.query(`
+    select
+      to_regclass('ano_internal.api_usage_logs') is not null as has_table,
+      not has_table_privilege('authenticated', 'ano_internal.api_usage_logs', 'SELECT') as no_auth_select,
+      not has_table_privilege('anon', 'ano_internal.api_usage_logs', 'SELECT') as no_anon_select,
+      exists (
+        select 1 from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = 'record_internal_api_usage'
+      ) as has_record_rpc,
+      exists (
+        select 1 from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = 'check_internal_usage_budget'
+      ) as has_budget_rpc
+  `);
+  const internalRow = internalLedgerResult.rows[0] ?? {};
+  const internalUsageLedgerReady = Boolean(
+    internalRow.has_table &&
+      internalRow.no_auth_select &&
+      internalRow.no_anon_select &&
+      internalRow.has_record_rpc &&
+      internalRow.has_budget_rpc,
+  );
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -168,8 +193,9 @@ try {
     phaseEPeoplePlaybooksReady,
     phaseFOutreachProposalsReady,
     phase9bTemplatesReady,
+    internalUsageLedgerReady,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

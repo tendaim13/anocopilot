@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
 import { continueResearchConversation, ResearchConversationServiceError } from "@/server/domain/research-conversation-service";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,13 +18,11 @@ export async function POST(request: Request, context: { params: Promise<{ conver
   const message = body && typeof body === "object" && "message" in body && typeof body.message === "string" ? body.message.trim() : "";
   if (!message) return NextResponse.json({ error: "Add a message for Ano first." }, { status: 400 });
   try {
+    const session = await requireWorkspaceSession();
     const { conversationId } = await context.params;
     return NextResponse.json(
-      await continueResearchConversation(
-        await requireWorkspaceSession(),
-        conversationId,
-        message,
-        idempotencyKey(request),
+      await runWithInternalUsageContext({ session, conversationId }, () =>
+        continueResearchConversation(session, conversationId, message, idempotencyKey(request)),
       ),
     );
   } catch (error) {

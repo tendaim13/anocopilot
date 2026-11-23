@@ -1,9 +1,9 @@
 # Ano Copilot: Chat-First Material Web Action Plan
 
-**Status:** All Phases 0–8 implemented & verified (Domain Phases A–F unified with Material Design 3 Chat-First UI); Phase 9 (9A–9C: Multi-Source Email Acquisition, Blaster-Ready Email Templates, and 1-Click Leads CSV Export) mapped for execution  
-**Scope:** Replace Ano's tabbed research workbench with a durable, ChatGPT-style research-to-revenue workspace.  
+**Status:** Phases 0–9 (Domain Phases A–F + Multi-Source Emails, Human-Voice Templates & CSV Export) implemented & verified; **Phase 10 (10A–10E: Autonomous Autopilot, Multi-Format Product Ingestion, Internalized Credit Policy & Operator-Only API Usage Ledger)** mapped for execution  
+**Scope:** Replace Ano's tabbed research workbench with a durable, ChatGPT-style research-to-revenue workspace, and evolve the post-Phase 9 workflow from manual step-by-step gate approvals into an autonomous product-to-leads pipeline.  
 **UI standard:** Material Web (`@material/web@2.4.1`) implementing Material Design 3.  
-**Date:** 2026-11-21
+**Date:** 2026-11-23
 
 ## 1. Decision summary
 
@@ -13,7 +13,7 @@ The visual structure will combine:
 
 - **ChatGPT's interaction model:** persistent conversation history, a focused message thread, a sticky composer, and a clear active conversation.
 - **Sellbird's information architecture:** a calm persistent sidebar, visible work waiting on the user, compact status counts, and a contextual decision workspace.
-- **Ano's existing trust model:** external activity remains approval-gated; evidence and provider receipts remain inspectable; the model never gains direct tool authority.
+- **Ano's trust model (Phases 0–9 baseline -> Phase 10 evolution):** Through Phase 9, every discovery, enrichment, and synthesis step required explicit per-step UI approvals with user-facing credit disclosures. In **Phase 10**, research, company discovery, 3-way email acquisition, and outreach template generation run as an **autonomous, server-budgeted autopilot** immediately after product ingestion (URL/PDF/DOCX/TXT) + 2 intake answers (business location + target market), keeping credit/charge mechanics completely internal while preserving explicit human approval strictly for **outbound external email sends and Mercury CRM writes**.
 
 The only component library will be **Material Web** (`@material/web`). Do not add MUI, Tailwind UI, shadcn, Radix, a React Material wrapper, or another component library. Native React, Next.js, TypeScript, CSS, and the existing application dependencies remain in scope.
 
@@ -27,7 +27,7 @@ Therefore this is **not a Tailwind removal project**. It is a migration from cus
 
 ### Goal
 
-Let a seller work with Ano in one coherent conversation:
+**Historical rebuild baseline (Phases 0–9):**
 
 ```text
 Seller message
@@ -41,20 +41,28 @@ Seller message
   → Later phases add companies, people, and playbooks as linked artifacts
 ```
 
-### Non-goals for this rebuild
+**Phase 10 Autonomous Goal (replacing mechanical multi-click staging):**
 
-- Do not add autonomous email sending, campaign execution, calling, enrichment, or CRM writes.
-- Do not relax any existing graph interruption, provider-budget, idempotency, RLS, audit, or evidence-citation control.
-- Do not reimplement the research engine merely to change its appearance.
-- Do not copy Sellbird source code, HTML, CSS, icons, brand assets, or visual assets.
-- Do not add a second UI framework or a generic icon package.
+```text
+Seller provides product link or file (URL, PDF, DOCX, TXT)
+  → Ano confirms business location & target selling market (max 1 combined prompt)
+  → Ano automatically executes Market Research → Target Lock → Company Discovery → 3-Way Email Waterfall → Human-Voice Email Templates
+  → Seller jumps directly to any artifact drawer, downloads CSVs, or uses freeform chat to ask questions & trigger targeted re-runs
+```
+
+### Non-goals for this architecture
+
+- Do not add autonomous outbound email sending, live campaign blasting, calling, or CRM writes without explicit human approval.
+- Do not expose internal API usage, token counts, credit counters, or provider billing telemetry in user-facing UI, API responses, or LLM chat context (usage logs stay isolated for operator review only).
+- Do not relax server-side budget ceilings, SSRF checks, idempotency, RLS, audit trails, or evidence-citation controls.
+- Do not reimplement the research engine or copy external proprietary code, assets, or a second UI framework.
 
 ## 4. Design principles
 
 1. **Conversation first.** A seller should not need to decide which tab contains the next step.
-2. **Artifacts, not hidden state.** Plans, approvals, sources, evidence confidence, and decisions appear where the user made them.
+2. **Artifacts, not hidden state.** Plans, sources, evidence confidence, cohorts, and templates appear cleanly inside jumpable workspace artifacts, while operational API telemetry stays strictly internal.
 3. **Evidence before persuasion.** Every research-derived claim retains a path to its saved source and claim type.
-4. **Approval is an explicit message action.** A normal text reply can never silently approve a provider call or consequential action.
+4. **Autopilot for read/enrichment; explicit approval only for external action.** After Phases 0–9 validated per-step gates manually, Phase 10 automates read-only research, company/contact discovery, email enrichment, and template drafting under silent server-side budgets (`ano_internal`), while reserving explicit user confirmation strictly for outbound email sends and CRM writes.
 5. **A calm operational shell.** The left navigation groups work and knowledge without competing with the conversation.
 6. **One design language.** Material 3 tokens control color, type, shape, elevation, focus, and dark mode. App CSS only composes the layout and handles product-specific visual meaning.
 7. **Responsive by structure.** Desktop has a sidebar and optional context rail; mobile has a compact toolbar and a context drawer.
@@ -154,10 +162,15 @@ src/
       people/page.tsx               # Discovered & verified contacts (Phase 7 / E)
       playbook/page.tsx             # Account & buyer playbooks (Phase 7 / E)
     api/v1/
-      work-queue/route.ts           # Unified workspace review & active-run queue
+      work-queue/route.ts                 # Unified workspace review & active-run queue
       conversations/[conversationId]/
-        export/route.ts             # Audited CSV & template export (Phase 9C)
-    globals.css                     # Document reset and global defaults only
+        product-sources/route.ts          # Phase 10B: multi-format URL/PDF/DOCX/TXT ingestion
+        autopilot/
+          start/route.ts                  # Phase 10C: initialize autonomous run
+          step/route.ts                   # Phase 10C: execute next checkpointed pipeline stage
+          cancel/route.ts                 # Phase 10C: pause/cancel autonomous run
+        export/route.ts                   # Audited CSV & template export (Phase 9C)
+    globals.css                           # Document reset and global defaults only
   components/
     material/
       register.ts                   # Client-side Material Web registrations
@@ -195,11 +208,22 @@ src/
       contact-verification-card.tsx     # Phase 7 / Domain Phase E
       playbook-card.tsx                 # Phase 7 / Domain Phase E
       outreach-draft-card.tsx           # Phase 8 / Domain Phase F
-      outreach-template-pack-card.tsx   # Phase 9B (planned)
-      outreach-template-drawer.tsx      # Phase 9B (planned)
-      lead-export-card.tsx              # Phase 9C (planned)
+      outreach-template-pack-card.tsx   # Phase 9B
+      outreach-template-drawer.tsx      # Phase 9B
+      lead-export-card.tsx              # Phase 9C
+      autopilot-progress-card.tsx       # Phase 10D
+      results-jump-bar.tsx              # Phase 10D
     work/
       review-queue.tsx                  # Phase 5
+  server/
+    ingestion/
+      product-source-ingestor.ts        # Phase 10B: SSRF-safe URL + PDF/DOCX/TXT extractor
+    domain/
+      autopilot-orchestrator-service.ts # Phase 10C: checkpointed 6-stage state machine
+    telemetry/
+      internal-api-usage.ts             # Phase 10A: write-only RPC telemetry + budget check
+scripts/
+  report-api-usage.mjs                  # Phase 10A: operator-only CLI (never exposed via HTTP)
   styles/
     material-theme.css
     shell.css
@@ -309,7 +333,7 @@ Every artifact must show the difference between: **what the user told Ano**, **s
 | **Phase 7 (Domain Phase E)** | Migrations `000018` and `000021` (`provider_person_searches` supporting `website_team` \$0 and `prospeo` 1-credit dual-source discovery, re-anchored `contact_candidates`, `contact_verification_runs`, `account_playbooks`); product-aware Buying Committee selector (`local_smb`/`mid_market`/`enterprise`, Seniority & Department `<md-filter-chip>` groups, Title include/exclude); SSRF-safe `website_team` team/about page extractor + fixed Prospeo `/search-person` filters & free `/search-suggestions` `job_title_search`; two-way chat `peopleUpdate` execution; `createAccountToPeopleGraph`, selective Dropcontact `/batch` client; `GET`/`POST /api/v1/conversations/[conversationId]/people-discovery`, `GET /api/v1/people`, `GET /api/v1/playbooks`; `<PeopleCohortArtifactDrawer />`, upgraded `PeopleDiscoveryCard`, `ContactVerificationCard`, `PlaybookCard`; and active `/people` and `/playbook` directories. | `typecheck`, Turbopack `build`, `phase7-buying-committee-and-website-team.test.ts`, `phase7-people-verification-playbooks.test.ts`, `phase6-target-to-account-discovery.test.ts`, `prospeo-company-discovery.test.ts`, `work-queue-phase5.test.ts`, `chat-first-material-phase4.test.ts`, and `test:research-phase-a/b/c` passed. |
 | **Phase 8 (Domain Phase F)** | Migration `000019` (`outreach_drafts`, extended `proposals`, expanded `provider_action_requests`); `createOutreachExecutionGraph` (`src/server/langgraph/outreach-execution-graph.ts`), deterministic `evaluateContactEligibility` suppression/verified-email guard, `GET`/`POST /api/v1/conversations/[conversationId]/outreach`, `OutreachDraftCard` (`<ApprovalCard />` per-action confirmation, immutable `approval_decisions`, `audit_logs`, `MercuryReadConnector` proposal receipts, and `/work` pending proposal surfacing). | `typecheck`, Turbopack `build`, `phase8-outreach-mercury-proposals.test.ts`, `phase7-people-verification-playbooks.test.ts`, `phase6-target-to-account-discovery.test.ts`, `prospeo-company-discovery.test.ts`, `work-queue-phase5.test.ts`, `chat-first-material-phase4.test.ts`, and `test:research-phase-a/b/c` passed. |
 
-### Planned roadmap — Phase 9: Exportable Leads List & Blaster-Ready Email Templates (3 Phases)
+### Completed roadmap — Phase 9: Exportable Leads List & Blaster-Ready Email Templates (Implemented & Verified)
 
 > **Architecture sync rule:** Immediately after implementing and verifying **each** sub-phase (`9A`, `9B`, and `9C`), update [docs/ARCHITECTURE.md](file:///Users/tendaimidzi/Code/AnoCopilot/docs/ARCHITECTURE.md) with that phase's new tables/migrations, API routes, safety/provenance controls, and operational behavior before beginning the next phase.
 
@@ -367,6 +391,221 @@ Every artifact must show the difference between: **what the user told Ano**, **s
 4. **Phase 9C `docs/ARCHITECTURE.md` Update Gate:**
    - Document CSV/Markdown export routes, formula-injection sanitization, `audit_logs` export events, and end-to-end blaster-ready export workflow.
 
+### Planned roadmap — Phase 10: Autonomous Autopilot, Multi-Format Product Ingestion & Operator-Only API Usage Ledger (5 Sub-Phases)
+
+> **Execution & Architecture Sync Rule:** Implement Phase 10 in order (`10A` → `10B` → `10C` → `10D` → `10E`), starting with the operator-only usage telemetry & silent budget boundary (`10A`) before autonomous execution runs (`10C`). After verifying **each** sub-phase (`typecheck` + `npm test` + `next build`), sync [docs/ARCHITECTURE.md](file:///Users/tendaimidzi/Code/AnoCopilot/docs/ARCHITECTURE.md) with its tables, endpoints, and safety boundaries before advancing.
+
+| Sub-Phase | Goal | Key Scope & Migrations | Safety & Isolation Rules | Acceptance & `ARCHITECTURE.md` Gate |
+| --- | --- | --- | --- | --- |
+| **Phase 10A** | Operator-only internal API usage ledger & silent budget caps | Migration `20261124_000024` (`ano_internal.api_usage_logs` + write-only `record_internal_api_usage` + boolean `check_internal_usage_budget`); `src/server/telemetry/internal-api-usage.ts`; telemetry hooks in all LLM, search, discovery & enrichment clients; `scripts/report-api-usage.mjs` (`npm run usage:report`) | `ano_internal` schema revoked from `PUBLIC`/`anon`/`authenticated` & unexposed in PostgREST; zero HTTP read APIs; zero UI components; zero chat context exposure; boolean-only budget checks | **Implemented & verified** (migration `000024` registered, `phase10a` unit & isolation tests, `typecheck`, `check:migrations`, and `build` passed; `docs/ARCHITECTURE.md` synced). |
+| **Phase 10B** | Multi-format product ingestion (URL, PDF, DOCX, TXT) & 2-question intake | Migration `20261124_000025` (`conversation_product_sources` + `research_briefs` intake columns); `src/server/ingestion/product-source-ingestor.ts` (`unpdf` + `mammoth` + SSRF-safe HTML fetch); `POST .../product-sources`; composer uploader/URL chips; streamlined 2-question `research-graph` intake | SSRF private-IP/redirect/size caps on URLs; magic-byte (`%PDF-`, `PK`) + 5 MB / 25-page limits; extracts normalized text only into Postgres; asks max 1 combined turn only for missing `businessLocation` + `targetMarkets`; skips plan-approval pause | Unit tests for URL, PDF, DOCX, TXT extraction, invalid file rejection, and 2-question intake (`location + target market` triggers instant autopilot readiness); sync `docs/ARCHITECTURE.md` |
+| **Phase 10C** | Checkpointed autonomous 6-stage pipeline engine | Migration `20261124_000026` (`autopilot_runs`); `src/server/domain/autopilot-orchestrator-service.ts`; `POST .../autopilot/{start,step,cancel}` (`vercel.json` `maxDuration: 300`); 3-way email waterfall + partial-failure degradation | Step-by-step checkpointing (1 stage per HTTP request) prevents Vercel serverless timeouts and page-refresh double-spend; Prospeo & Dropcontact calls checked against silent `check_internal_usage_budget` (`10A`); partial failures degrade cleanly without halting | Resumable step tests verifying idempotent stage completion, 3-way waterfall fallback (`website_team` → `prospeo` → `dropcontact`), and graceful continuation if an external provider fails; sync `docs/ARCHITECTURE.md` |
+| **Phase 10D** | Calm chat-first UI & internalizing user-facing credit/charge copy | `<AutopilotProgressCard />`, `<ResultsJumpBar />`, client step driver in `research-conversation-workbench.tsx`; scrub credit/charge disclosures across 9 UI cards + chat prompt/notes; `Verified email` vs `Public website email` badges | Never surface `$0`, `1 cr/found`, `credit-bearing`, or API billing language to end users; keep manual confirmation buttons strictly for outbound external sends & Mercury CRM writes; jump bar opens Evidence/Company/People/Template drawers directly | Visual & UI contract tests confirming zero billing/credit copy in user surfaces, live progress stepping, working jump-to-drawer actions, and clean CSV export; sync `docs/ARCHITECTURE.md` |
+| **Phase 10E** | Post-autopilot freeform reference chat & targeted partial re-runs | Grounded chat context receives product source + autopilot stage summaries; natural-language reference Q&A + downstream partial re-runs (`Stages 4–6`, `4–5`, or `6` only) under silent budgets | Read-only Q&A never mutates state; targeted re-runs execute autonomously without multi-click approval chains unless triggering outbound external send/CRM sync | Chat routing tests for Q&A citations ("why this market?") and targeted downstream re-runs ("try Singapore", "make Email 1 shorter"); sync final `docs/ARCHITECTURE.md` |
+
+#### Phase 10A — Operator-Only Internal API Usage Ledger & Silent Budget Guard
+
+1. **Isolated Schema & Migration (`supabase/migrations/20261124_000024_internal_api_usage_ledger.sql`):**
+   - Register migration in `scripts/apply-ano-schema.mjs` and `scripts/check-ano-schema.mjs`.
+   - Create a private schema `ano_internal` and immediately lock down access:
+     ```sql
+     create schema if not exists ano_internal;
+     revoke all on schema ano_internal from public, anon, authenticated;
+     ```
+     Because `ano_internal` is outside Supabase's exposed API schemas (`public`), PostgREST never exposes any route to it, and authenticated workspace clients have zero `SELECT`, `INSERT`, `UPDATE`, or `DELETE` privileges on its tables.
+   - Create `ano_internal.api_usage_logs`:
+     - `id` (`uuid primary key default gen_random_uuid()`), `created_at` (`timestamptz`), `workspace_id` (`uuid`), `conversation_id` (`uuid null`), `autopilot_run_id` (`uuid null`), `actor_id` (`uuid null`), `provider` (`'gemini' | 'bedrock' | 'ollama' | 'searxng' | 'prospeo' | 'dropcontact' | 'openstreetmap' | 'website_team' | 'product_ingest'`), `operation` (`text`), `model_or_endpoint` (`text`), `status` (`'success' | 'error' | 'timeout' | 'skipped_budget'`), `http_status` (`int null`), `request_count` (`int default 1`), `credits_used` (`numeric(10,4) default 0`), `credits_remaining` (`numeric(10,4) null`), `input_tokens` (`int null`), `output_tokens` (`int null`), `estimated_cost_usd` (`numeric(12,6) default 0`), `duration_ms` (`int null`), `metadata_json` (`jsonb default '{}'::jsonb`).
+     - Indexes on `(created_at desc)` and `(provider, created_at desc)` plus `(workspace_id, provider, created_at desc)` for fast budget checks and operator queries.
+     - **Zero secret or PII logging:** `metadata_json` stores structural diagnostics only (e.g. `batchSize`, `matchedCount`, `pagesFetched`, `errorCode`) — never API tokens, raw page HTML, emails, or person names.
+2. **Write-Only & Boolean-Only `SECURITY DEFINER` RPCs (Minimal Trusted Surface):**
+   - `public.record_internal_api_usage(...) returns void` (`SECURITY DEFINER`, `SET search_path = ''`): verifies `auth.uid()` is a member of `p_workspace_id` in `public.workspace_members` before inserting into `ano_internal.api_usage_logs`, returning `void` (zero read/return path).
+   - `public.check_internal_usage_budget(p_workspace_id uuid, p_provider text, p_daily_limit numeric) returns boolean` (`SECURITY DEFINER`, `SET search_path = ''`): verifies workspace membership, checks whether today's cumulative `credits_used` / `request_count` is below `p_daily_limit`, and returns **only a `boolean`** — never returning counts, dollar figures, or remaining balances to runtime callers.
+   - Note why RPCs beat placing `SUPABASE_SERVICE_ROLE_KEY` in Vercel: Ano's Vercel runtime stays strictly scoped to user-session RLS credentials with zero service-role blast radius while still guaranteeing users can never query the internal usage ledger.
+3. **Unified Telemetry Helper & Provider Instrumentation (`src/server/telemetry/internal-api-usage.ts`):**
+   - Expose non-throwing `logInternalApiUsage(session, entry)` (which logs even in demo mode in-memory/noop without throwing) and `isWithinInternalBudget(session, provider)` backed by env-configured silent daily ceilings (`ANO_INTERNAL_DAILY_PROSPEO_LIMIT`, `ANO_INTERNAL_DAILY_DROPCONTACT_LIMIT`, `ANO_INTERNAL_DAILY_LLM_CALL_LIMIT`).
+   - Instrument every outbound provider module:
+     - `gemini-chat-model.ts` (capture `usageMetadata.promptTokenCount`, `candidatesTokenCount`, `thoughtsTokenCount`), `bedrock-runtime.ts`, and `ollama-chat-model.ts`.
+     - `searxng-provider.ts` and `evidence-source-retriever.ts`.
+     - `prospeo-client.ts` (`/search-company`, `/search-person`, `/bulk-enrich-person`, `/search-suggestions`), `dropcontact-client.ts` (`POST /batch` + `GET /batch/{id}` polling & `credits_left` snapshot), `osm-client.ts`, and `website-team-client.ts`.
+4. **Operator-Only Review CLI (`scripts/report-api-usage.mjs` + `npm run usage:report`):**
+   - Connects directly via local operator `SUPABASE_DB_URL` + `ANO_DATABASE_LABEL=ano` (already established as CLI-only DDL/admin credentials, never deployed in Vercel).
+   - Supports `--days=7`, `--provider=all|prospeo|dropcontact|gemini|searxng`, `--workspace=<id>`, and `--json`, printing a per-provider rollup (`requests`, `errors`, `credits_used`, `latest_credits_remaining`, `input_tokens`, `output_tokens`, `estimated_cost_usd`).
+   - **Hard Visibility Ban:** Never add a `/api/v1/usage` endpoint, never pass usage totals into client React props or `ConversationChatContext`, and never mention credit usage in assistant replies. Usage data is returned strictly when the operator invokes `npm run usage:report` or asks the operator-side coding agent to run it.
+
+#### Phase 10B — Multi-Format Product Ingestion (URL, PDF, DOCX, TXT) & 2-Question Intake
+
+1. **Migration (`supabase/migrations/20261124_000025_product_sources_and_intake.sql`):**
+   - Create RLS-protected `public.conversation_product_sources` storing `id`, `workspace_id`, `conversation_id`, `source_type` (`'website_url' | 'pdf' | 'docx' | 'txt'`), `label` (filename or host), `source_url` (nullable), `mime_type`, `byte_size`, `content_sha256`, `extracted_text` (normalized excerpt capped at 20,000 chars), `summary_text`, `extraction_status` (`'ready' | 'failed'`), `error_message`, `created_at`.
+   - Extend `public.research_briefs` with `business_location` (`text`), `target_markets_json` (`jsonb default '[]'::jsonb`), and `intake_complete` (`boolean default false`). Register migration in `scripts/apply-ano-schema.mjs` & `scripts/check-ano-schema.mjs`.
+2. **Unified Server Extractor (`src/server/ingestion/product-source-ingestor.ts`):**
+   - **Website URL (`website_url`):** Validates URL with existing SSRF protections (blocking localhost, RFC-1918/link-local/CGNAT IPs, non-80/443 ports, and unsafe redirects), fetches the main product page + up to 2 high-signal internal links (`/product`, `/features`, `/solutions`, `/about`, `/pricing`), extracts clean DOM-spaced visible text via Cheerio, and caps combined normalized text at 20,000 chars.
+   - **PDF (`.pdf`):** Uses `unpdf` (`extractText`, zero native canvas/DOM dependencies so Vercel Turbopack builds cleanly) with `%PDF-` magic-byte check, max 5 MB upload, max 25 pages, and 20,000-char cap.
+   - **Word (`.docx`):** Uses `mammoth` (`extractRawText`) with `PK` ZIP signature check and max 5 MB upload; cleanly rejects legacy binary `.doc` files with a clear message asking for `.docx` or `.pdf`.
+   - **Plain Text / Markdown (`.txt`, `.md`):** Decodes UTF-8 directly (max 2 MB, 20,000-char cap).
+   - Stores extracted text + SHA-256 directly in Postgres (no external Supabase Storage bucket setup required).
+3. **API & Material 3 Composer UX (`product-sources/route.ts`, `conversation-composer.tsx`):**
+   - `POST /api/v1/conversations/[conversationId]/product-sources` accepts either `multipart/form-data` (file upload) or JSON `{ url }`, runs extraction server-side, logs telemetry to `ano_internal`, and returns the saved `ProductSourceSummary` (never full raw dump if huge, plus preview snippet).
+   - Add an attach button (`<md-icon-button>` calling hidden `<input type="file" accept=".pdf,.docx,.txt,.md" />`) inside `<ConversationComposer />`, automatic URL detection when the seller pastes a `https://...` product link into the composer (with one-click attach/auto-ingest), removable uploaded-source `<md-assist-chip>` tags above the input, and a friendly empty-state landing prompt inviting product link/file + description.
+4. **Streamlined 2-Question Intake (`research-planning-model.ts`, `research-graph.ts`):**
+   - When starting or resuming a conversation, concatenate user message text with persisted `conversation_product_sources.extracted_text` before calling Phase A interpretation (`interpretBrief`).
+   - Summarize the product in 2–3 concise sentences and validate ONLY two intake fields:
+     1. **`businessLocation`**: *"Where is your business located?"*
+     2. **`targetMarkets`**: *"Where do you want to sell?"* (accepting named countries/regions OR *"recommend the best markets"*).
+   - Ask at most **one combined clarification message** for whichever of those two answers is still missing (with clickable Material quick-reply chips such as `Recommend the best markets`).
+   - Once both `businessLocation` and `targetMarkets` are populated (`intake_complete = true`), skip the manual `await_plan_approval` pause on `research-graph` when running in autopilot mode and immediately launch Phase 10C.
+
+#### Phase 10C — Checkpointed Autonomous Pipeline Engine (`autopilot_runs`)
+
+1. **Why Checkpointed Stepping Instead of One Monolithic Request:**
+   - Even with Vercel `maxDuration: 300`, running LLM brief/plan synthesis + SearXNG multi-wave research + Phase C synthesis + Prospeo/OSM discovery + website crawling + Prospeo enrichment + async Dropcontact polling + template LLM generation in one single HTTP call risks timeout spikes, blank spinners, and duplicate API charges on network drops.
+   - Instead, **one stage executes per `POST /api/v1/conversations/[conversationId]/autopilot/step` call** (~5–45s each, with `maxDuration: 300` headroom on `vercel.json`), persists atomic checkpoints in Postgres, updates `<AutopilotProgressCard />` live in the UI, and resumes cleanly after any refresh without re-running completed stages or double-charging credits.
+2. **Migration (`supabase/migrations/20261124_000026_autopilot_runs.sql`):**
+   - Create RLS-protected `public.autopilot_runs` with `id`, `workspace_id`, `conversation_id`, `status` (`'idle' | 'running' | 'paused' | 'completed' | 'completed_with_warnings' | 'failed' | 'cancelled'`), `current_stage` (`'brief_and_plan' | 'market_research' | 'synthesis_and_lock' | 'company_discovery' | 'people_and_emails' | 'outreach_templates' | 'done'`), `completed_stages_json`, `stage_summaries_json`, `last_error`, `heartbeat_at`, `started_at`, `completed_at`, `created_at`, `updated_at`. Register migration in `apply-ano-schema.mjs` & `check-ano-schema.mjs`.
+3. **Autonomous 6-Stage State Machine (`src/server/domain/autopilot-orchestrator-service.ts`):**
+   - **`Stage 1 — brief_and_plan`:** Combines ingested product source(s) + 2-question intake into a grounded `research_briefs` + auto-approved `research_plans` v1 (`plan_approval_mode = 'autopilot'`).
+   - **`Stage 2 — market_research`:** Runs bounded SearXNG evidence waves focused on buyer pain, segment demand, and competitor/adoption signals in the business location & target selling market(s) (autopilot budget: max 3 waves / 15 searches / 20 safe page fetches). If SearXNG is unconfigured or returns partial failures, records a safe warning and falls back to product-source + LLM synthesis instead of crashing.
+   - **`Stage 3 — synthesis_and_lock`:** Runs citation-bound Phase C synthesis over saved sources/product docs, scores candidate segments, and **deterministically auto-locks** the top market + industry (`target_decisions`): honoring the user's explicit target market when given, or selecting #1 ranked evidence market when `"recommend for me"` was chosen.
+   - **`Stage 4 — company_discovery`:** Selects Prospeo (`/search-company`) or OpenStreetMap (+ bounded website resolution) based on the locked industry's local vs. corporate B2B profile, executes discovery, and **auto-shortlists top 10 highest-ICP-fit companies** (giving priority boost to accounts with live websites/domains so email acquisition succeeds at high rates).
+   - **`Stage 5 — people_and_emails` (Deterministic 3-Way Email Waterfall under Silent Budget Guardrails):**
+     - Derives product-aware Buying Committee criteria from the locked segment and shortlisted company archetype.
+     - **Tier 1 (Company Websites):** Runs `website_team` + DOM-spaced `sanitizePublicEmail` across the 10 shortlisted accounts first to capture named leaders, direct personal emails (`direct_public`), shared clinic/office inboxes (`shared_inbox`), and phone numbers.
+     - **Tier 2 (Prospeo Discovery & Selective Enrich):** Checks `isWithinInternalBudget(session, "prospeo")`. If contacts with usable emails remain below target (or key accounts lack named decision-makers), runs 1-page Prospeo `/search-person` across shortlisted companies and verifies up to 10 unverified priority decision-makers via `/bulk-enrich-person` (strictly `1` batch, max `10` contacts).
+     - **Tier 3 (Dropcontact Async Fallback):** Checks `isWithinInternalBudget(session, "dropcontact")` & connector readiness. Submits remaining unverified high-priority contacts (max `10`) to async `POST /batch` → `GET /batch/{request_id}` (polling cleanly without ever re-POSTing `/batch`), followed by website contact backfill on any remaining misses.
+     - Records compact public counts per tier in `stage_summaries_json` (without exposing billing/credit counts) and detailed cost/credit rows in `ano_internal.api_usage_logs`.
+   - **`Stage 6 — outreach_templates`:** Runs Phase 9B template generation (`outreach_template_model`) enforcing anti-AI human-voice checks (60/50/30 word caps, lowercase subjects, zero dashes/exclamation marks/clichés, bounded 1 rewrite pass), readies the Phase 9C CSV export pack, posts a clean **Executive Summary** assistant message summarizing the locked market, shortlisted accounts, email yield (`verified` vs `public website`), and ready template sequence, and marks `autopilot_runs.status = 'completed'`.
+4. **Concurrency, Lease Guard & Recovery:**
+   - `POST .../autopilot/step` acquires an atomic DB lease (`heartbeat_at`, `running`) matching `src/server/jobs/recover-stale-runs.ts` so double-clicks or StrictMode effects never execute the same stage twice.
+   - Non-fatal failures inside Stages 2, 4, or 5 degrade gracefully to the next source/stage and transition cleanly to `completed_with_warnings` rather than dead-ending the user.
+
+#### Phase 10D — Calm Chat-First UI Overhaul & Internalizing Credit/Charge Copy
+
+1. **Unified Progress & Jump Navigation Components:**
+   - `<AutopilotProgressCard />`: Renders a single calm Material 3 stepper card in the thread while `status === 'running'` (`1. Analyzing product & location` → `2. Market research` → `3. Target market & segment` → `4. Matching companies` → `5. Finding decision-makers & emails` → `6. Drafting email templates`), showing real-time stage summaries, `<md-linear-progress>`, and a **Pause** / **Resume** control (`/autopilot/cancel` and `/autopilot/step`).
+   - `<ResultsJumpBar />`: Compact sticky/inline Material chip bar rendered cleanly after Stages 3–6 produce artifacts:
+     - **Market & Evidence** (opens Evidence Drawer / `ContextRail`)
+     - **Companies (N)** (opens `<CompanyCohortArtifactDrawer />`)
+     - **People & Emails (N)** (opens `<PeopleCohortArtifactDrawer />`)
+     - **Email Templates** (opens `<OutreachTemplateDrawer />`)
+     - **Download Leads CSV** (direct RFC-4180 formula-safe Phase 9C download)
+   - Wire a sequential client stepper loop inside `src/components/research-conversation-workbench.tsx`: as soon as `POST .../autopilot/start` returns `running`, the client loops `await fetch(.../autopilot/step)` sequentially until `status` leaves `running` (pausing cleanly if the user navigates away or clicks Pause, and auto-resuming cleanly if revisited while `running`).
+2. **De-Cluttering the Thread & Scrubbing Credit/Charge Copy:**
+   - Replace intermediate multi-button preview/approval cards during autopilot runs with `<AutopilotProgressCard />` + `<ResultsJumpBar />` + one concise Executive Summary message (keeping the full interactive Cohort, People, Playbook, and Template drawers 1 click away!).
+   - Clean up user-facing billing, credit, and charge language across **all 9 UI files** + backend chat/note strings:
+     - `src/components/artifacts/company-search-preview-card.tsx`
+     - `src/components/artifacts/people-discovery-card.tsx`
+     - `src/components/artifacts/contact-verification-card.tsx`
+     - `src/components/artifacts/outreach-template-pack-card.tsx`
+     - `src/components/artifacts/provider-scope-card.tsx`
+     - `src/components/artifacts/target-decision-card.tsx`
+     - `src/components/artifacts/people-cohort-artifact-drawer.tsx`
+     - `src/components/conversation/conversation-thread.tsx`
+     - `src/components/conversation/conversation-composer.tsx`
+     - Plus server chat prompt/note strings in `conversation-chat-model.ts` and `research-conversation-service.ts`.
+   - Replace copy like `1 cr/found`, `$0 credits`, `credit-bearing lookup`, `no auto-retry after credit spend`, and `Dropcontact vs Prospeo credit estimate` with clear capability and data-provenance labels (`Verified work email` vs `Public website email`, `Discover companies`, `Find & verify emails`, `Generate sequences`).
+   - Keep explicit human confirmation **only** on `<OutreachDraftCard />` (`Send email` / `Push proposal to Mercury`), where external side effects affect real recipients or external CRMs.
+
+#### Phase 10E — Post-Autopilot Freeform Reference Chat & Targeted Partial Re-Runs
+
+1. **Rich Grounded Context (`conversation-chat-model.ts`, `research-conversation-service.ts`):**
+   - Pass ingested product source summaries and completed `autopilot_runs.stage_summaries_json` (excluding all internal credit/token/cost telemetry!) into `ConversationChatContext` so once autopilot finishes, the user can jump into chat naturally:
+     - *"Why did you pick dental clinics in Malaysia?"* → cites saved Phase C claims & product source fit.
+     - *"Show me the emails and phone numbers for SmileBay Dental"* → pulls verified & public rows directly.
+     - *"Which 3 contacts should I prioritize first?"* → ranks `direct` / `verified` decision-makers by role & fit.
+2. **Autonomous Targeted Re-Runs via Chat:**
+   - Enable follow-up directives in chat to re-run **only the affected downstream autopilot stages** without forcing manual approval buttons:
+     - Geography or keyword change (*"also include Singapore"*, *"switch to Selangor clinics only"*) → updates scope and automatically executes Stages `4 → 5 → 6`.
+     - More leads or role shift (*"find 10 more companies"* or *"target Practice Managers instead"*) → updates shortlist/criteria and executes Stages `4 → 5` (or `5` only).
+     - Email enrichment boost (*"run another verification pass on the unverified contacts"*) → runs next waterfall tier under silent `check_internal_usage_budget`.
+     - Copy change (*"make Email 1 shorter and use a soft question CTA"*) → re-runs Stage `6` (`outreach_templates`) only.
+3. **Final Architecture Sync:**
+   - Update `docs/ARCHITECTURE.md` with migrations `000024`–`000026`, `ano_internal` operator isolation, multi-format product ingestion, checkpointed autopilot routes, and the 3-way waterfall policy.
+
+### Target end-state architecture (Post-Phase 10)
+
+#### Before vs. After User Experience
+
+| Dimension | Current (Phases 0–9) | Post-Phase 10 End State |
+| --- | --- | --- |
+| **Product Input** | Manual typed prompt only | Drop a **website URL, `.pdf`, `.docx`, or `.txt`/`.md`**, or type your offer |
+| **Intake Questions** | Clarifying Q&A + explicit Plan approval click + Market/Industry manual lock | Max **1 combined intake prompt** asking only **business location** & **where to sell** |
+| **Execution Flow** | ~7–9 separate manual approve/preview/run clicks across Phases A–9B | **1 autonomous checkpointed pipeline** runs Research → Market Lock → Top Companies → 3-Way Emails → Templates |
+| **Pricing & Credits** | Mentioned across 9 UI cards, composer helper text, and chat notes (`$0 credits`, `1 cr/found`) | **Hidden from end users**; server enforces silent daily budgets and logs telemetry strictly to `ano_internal` |
+| **Navigation & Review** | Scroll past sequential preview/approval cards | Unified `<AutopilotProgressCard />` + **Jump Bar** (`Evidence`, `Companies`, `People & Emails`, `Templates`, `CSV Export`) + freeform Q&A & partial re-runs |
+| **API Usage Audit** | Scattered in `provider_receipt_json` without token/LLM cost rollup | Unified private `ano_internal.api_usage_logs` queried strictly on demand via operator CLI (`npm run usage:report`) |
+
+#### End-to-End Architecture Diagram (Post-Phase 10)
+
+```text
++---------------------------------------------------------------------------------------------------+
+| BROWSER CLIENT (Next.js 16 + React 19 + Material Web 2.4.1 M3 — ZERO Credit/Usage UI)            |
+|  - ConversationComposer: URL auto-detect + .pdf / .docx / .txt uploader + location/market chips   |
+|  - AutopilotProgressCard: 6-stage stepper with live stage summaries + Pause / Resume              |
+|  - ResultsJumpBar: 1-click drawers (Evidence, Companies, People & Emails, Templates, CSV Export)  |
+|  - Freeform Reference & Steering Chat + ApprovalCard (ONLY for Outbound Sends / Mercury Writes)  |
++-------------------------------------------------+-------------------------------------------------+
+                                                  | Authenticated Cookie Session + Idempotency-Key
+                                                  v
++---------------------------------------------------------------------------------------------------+
+| NEXT.JS 16 SERVER & DOMAIN LAYER (Vercel Serverless, maxDuration up to 300s)                      |
+|                                                                                                   |
+|  1. Ingestion & Intake (/api/v1/conversations/:id/product-sources + research-graph)               |
+|     - product-source-ingestor.ts: SSRF-safe URL crawl | unpdf (.pdf) | mammoth (.docx) | UTF-8     |
+|     - Extracts normalized text -> public.conversation_product_sources (max 20k chars + SHA-256)   |
+|     - Captures 2 intake fields: business_location + target_markets -> auto-approves plan v1       |
+|                                                                                                   |
+|  2. Checkpointed Autopilot Engine (/api/v1/conversations/:id/autopilot/{start,step,cancel})       |
+|     - One durable stage per HTTP /step call (atomic lease lock on public.autopilot_runs):         |
+|       [Stage 1: brief_and_plan] -> [Stage 2: market_research (SearXNG)] ->                        |
+|       [Stage 3: synthesis_and_lock] -> [Stage 4: company_discovery (Prospeo / OSM)] ->            |
+|       [Stage 5: people_and_emails (3-Way Waterfall)] -> [Stage 6: outreach_templates (9B/9C)]     |
+|                                                                                                   |
+|  3. Post-Autopilot Chat & Partial Re-Run Router (/api/v1/conversations/:id/messages)              |
+|     - Grounded Q&A over product sources + stage summaries + targeted re-runs (4-6 / 4-5 / 6 only) |
++--------------------------+-----------------------------------------------+------------------------+
+                           | Provider Calls                                | Usage + Budget Guard
+                           v                                               v
++----------------------------------------------------+   +------------------------------------------+
+| EXTERNAL & CRAWLED PROVIDERS (Server-Only Secrets) |   | SILENT INTERNAL TELEMETRY & BUDGETS      |
+|  - LLMs: Gemini (Flash-Lite) / Bedrock / Ollama    |   |  - internal-api-usage.ts                 |
+|  - Research: Private SearXNG Gateway + Safe Fetch  |   |  - Checks boolean-only daily caps via    |
+|  - Company Discovery: Prospeo / OpenStreetMap      |   |    check_internal_usage_budget()         |
+|  - Stage 5 3-Way Email Waterfall:                  |   |  - Writes request/token/credit/USD row   |
+|     Tier 1: Company Websites (website_team +       |   |    via write-only SECURITY DEFINER RPC   |
+|             sanitizePublicEmail DOM-spaced parser) |   |    record_internal_api_usage()           |
+|     Tier 2: Prospeo (/search-person +              |   +--------------------+---------------------+
+|             /bulk-enrich-person, max 10)           |                        | Write-Only (No Select)
+|     Tier 3: Dropcontact (async POST /batch ->      |                        v
+|             poll GET /batch/:id, max 10)           |   +------------------------------------------+
++--------------------------+-------------------------+   | PRIVATE OPERATOR SCHEMA (`ano_internal`) |
+                           |                             |  - Table: ano_internal.api_usage_logs    |
+                           v                             |  - REVOKE ALL from anon & authenticated  |
++----------------------------------------------------+   |  - NOT exposed by Supabase PostgREST     |
+| WORKSPACE-SCOPED RLS DATA (`public.*` + LangGraph) |   |  - Zero HTTP APIs & zero UI routes       |
+|  - research_briefs, research_sources, syntheses    |   |                                          |
+|  - account_candidates, contact_candidates, playbks |   |  Read exclusively on operator demand:    |
+|  - outreach_template_packs, autopilot_runs         |   |  -> `scripts/report-api-usage.mjs`       |
+|  - product_sources, audit_logs (immutable exports) |   |     (`npm run usage:report`)             |
++----------------------------------------------------+   |     via local `SUPABASE_DB_URL` only     |
+                                                         +------------------------------------------+
+```
+
+#### Data & Security Trust-Boundary Matrix
+
+| Data / Capability | End User (`authenticated` / Browser UI / Chat LLM) | Operator CLI (`npm run usage:report` via local `SUPABASE_DB_URL`) |
+| --- | --- | --- |
+| Product links, PDFs, DOCX, TXT (`conversation_product_sources`) | Read/Write within own workspace (RLS) | Admin schema access only |
+| Market evidence, shortlisted companies, contacts, templates, CSVs | Full read/export + partial chat re-runs within own workspace | Inspectable for debugging |
+| Email provenance (`Verified work email` vs `Public website email`) | Visible honestly on leads and CSVs | Visible |
+| Internal API usage, tokens, credits left, USD costs (`ano_internal.api_usage_logs`) | **Strictly invisible** (schema revoked, no HTTP route, write-only RPC, absent from chat context) | **Full query access** on operator request by provider/date/workspace |
+| Daily spend limits (`check_internal_usage_budget`) | **Silent boolean guard** on server; gracefully skips or degrades tier without showing credit math | Configurable via server env limits |
+| Outbound email sending / Mercury CRM sync | **Requires explicit `ApprovalCard` confirmation** | Audited in `audit_logs` & `approval_decisions` |
+
+#### Phase 10 Verification & Security Acceptance Gate
+
+1. **Negative Leakage Verification:** Integration test proves an `authenticated` Supabase JWT receives `permission denied` if attempting to query `ano_internal.api_usage_logs`, zero `/api/v1/*` handlers return token/credit/USD usage fields, and grep/render checks confirm user-facing components contain zero internal credit/billing copy.
+2. **Format & Pipeline Resiliency Verification:** Offline unit tests validate PDF, DOCX, TXT, and SSRF-safe URL ingestion; 2-question intake; sequential 6-stage `autopilot/step` lease & idempotency; 3-way waterfall (`website_team` → `prospeo` → `dropcontact`); and graceful continuation on partial provider outages.
+3. **Full Build Gate:** After every Phase 10 sub-phase, run `npm run check:migrations && npm run typecheck && npm test && npm run build` cleanly before syncing `docs/ARCHITECTURE.md`.
+
 ## 11. Accessibility and responsiveness acceptance criteria
 
 - All Material controls have accessible names; icon-only controls have `aria-label`.
@@ -382,19 +621,21 @@ Every artifact must show the difference between: **what the user told Ano**, **s
 
 ### Automated
 
-- `npm run typecheck`
-- Existing Phase A, deep-research, and market-synthesis tests
+- `npm run check:migrations && npm run typecheck`
+- Existing Phase A–9C tests (deep research, market synthesis, company/people discovery, email verification waterfall, anti-AI templates, RFC-4180 export)
 - New tests for conversation-list pagination, selection, archive/rename authorization, typed action contracts, and artifact-reference workspace isolation
+- **Phase 10 tests:** multi-format ingestion (`url`, `.pdf`, `.docx`, `.txt`), 2-question intake, checkpointed `autopilot/step` leases & idempotent resume, post-autopilot reference chat / partial re-runs, and negative leakage assertions for `ano_internal.api_usage_logs`
 - Production Turbopack build
 
 ### Manual
 
-- New conversation → clarification → plan edit → approval → provider-scope approval → research progress → evidence report → target decision.
-- Refresh while each state is active; verify the same conversation and safe state reappear.
+- **Phases 0–9 baseline:** New conversation → clarification → plan edit → approval → provider-scope approval → research progress → evidence report → target decision.
+- **Phase 10 autopilot flow:** Attach product URL / PDF / DOCX / TXT → answer business location + target market → verify autonomous 6-stage run completes to ready leads & email templates with zero user-facing credit prompts, jump bar opens all drawers cleanly, and `npm run usage:report` prints internal provider counts/tokens/USD costs cleanly while browser sessions never see them.
+- Refresh while each state is active; verify the same conversation and safe state reappear without re-charging completed stages.
 - Open two conversations in separate tabs; confirm no workspace/cross-conversation state leaks.
 - Test keyboard-only and screen-reader labels for all Material elements.
 - Test desktop, tablet, and mobile layouts in light and dark themes.
-- Confirm a plain message cannot approve, restart, or expand a provider run.
+- Confirm outbound external sends and Mercury CRM proposals remain gated by explicit approval controls.
 
 ## 13. Risks and mitigations
 
@@ -409,11 +650,11 @@ Every artifact must show the difference between: **what the user told Ano**, **s
 
 ## 14. Implementation guardrails
 
-- No direct Bedrock, SearXNG, Prospeo, Dropcontact, Mercury, email, call, or database capability is introduced into the browser.
+- No direct Bedrock, Gemini, SearXNG, Prospeo, Dropcontact, Mercury, email, call, or database capability is introduced into the browser.
 - Browser-visible artifact data remains workspace-scoped and comes from existing validated routes.
-- All provider starts and resumes retain idempotency keys, receipts, budget checks, and manual-review behaviour.
-- A chat message is not a policy bypass. Typed approval/resume endpoints remain the sole route for consequential graph transitions.
-- Keep raw external page content out of messages; show only stored excerpts and safe source metadata.
+- All provider starts, checkpoints, and resumptions retain idempotency keys, atomic leases, silent server budget checks (`check_internal_usage_budget`), and graceful fallback/recovery without re-charging completed stages.
+- **Phase 10 trust boundary:** Internal server budgets replace user-facing per-step approval gates for read/discovery/enrichment calls, while external outbound sends and Mercury CRM writes remain strictly approval-gated (`ApprovalCard`), and `ano_internal.api_usage_logs` remains completely invisible outside operator CLI access (`npm run usage:report`).
+- Keep raw external page content out of messages; show only stored excerpts, normalized product summaries, and safe source metadata.
 - Preserve current RLS and audit requirements through every schema/API change.
 
 ## 15. Authoritative implementation references

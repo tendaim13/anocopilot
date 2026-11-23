@@ -18,6 +18,7 @@ import type { ResearchConversationView } from "@/lib/ano/research-conversation";
 import {
   applyDeterministicChatFailsafes,
   buildConversationChatPrompt,
+  userRequestedAction,
 } from "@/server/agents/conversation-chat-model";
 import {
   DropcontactClientError,
@@ -28,8 +29,10 @@ import {
   ProspeoClientError,
 } from "@/server/connectors/prospeo/prospeo-client";
 import {
+  classifyPublicEmailKind,
   discoverPeopleFromCompanyWebsites,
   extractPublicContactsFromHtml,
+  sanitizePublicEmail,
 } from "@/server/connectors/website-team/website-team-client";
 
 const convId = "00000000-0000-4000-8000-000000000901";
@@ -698,4 +701,45 @@ test("3-way email routing directs Dropcontact requests deterministically and exp
   assert.equal(routed.verificationUpdate?.providerKey, "dropcontact");
   assert.equal(routed.verificationUpdate?.allUnverified, true);
   assert.equal(routed.verificationUpdate?.executeIfApproved, false);
+});
+
+test("extractPublicContactsFromHtml separates adjacent DOM tags and sanitizePublicEmail repairs glued phone/word affixes", () => {
+  const gluedHtml = `
+    <html>
+      <body>
+        <section>
+          <p>+603-7728 8438</p><p>welcome.ardent@gmail.com</p><p>Saturday: 9am - 5pm</p>
+        </section>
+        <div>
+          <span>+60 3-5523 5857</span><span>info@1stdentalclinic.com</span><div>Our Clinic</div>
+        </div>
+        <p>Tel: 03-5523 5857<br/>hello@clinic.com.my<br/>Opening hours</p>
+        <p>Write to <span>care</span>@<span>smilebay.com</span> or skip fake@test.invalid</p>
+      </body>
+    </html>
+  `;
+
+  const extracted = extractPublicContactsFromHtml(gluedHtml);
+  const emailByAddr = new Map(extracted.emails.map((item) => [item.email, item]));
+
+  assert.equal(emailByAddr.get("welcome.ardent@gmail.com")?.kind, "direct_public");
+  assert.equal(emailByAddr.get("info@1stdentalclinic.com")?.kind, "shared_inbox");
+  assert.equal(emailByAddr.get("hello@clinic.com.my")?.kind, "shared_inbox");
+  assert.equal(emailByAddr.get("care@smilebay.com")?.kind, "shared_inbox");
+  assert.equal(emailByAddr.has("fake@test.invalid"), false);
+
+  assert.equal(sanitizePublicEmail("8438welcome.ardent@gmail.comsaturday"), "welcome.ardent@gmail.com");
+  assert.equal(sanitizePublicEmail("5857info@1stdentalclinic.comour"), "info@1stdentalclinic.com");
+  assert.equal(sanitizePublicEmail("hello@clinic.com.myopening"), "hello@clinic.com.my");
+  assert.equal(sanitizePublicEmail("1stdental@clinic.com"), "1stdental@clinic.com");
+  assert.equal(sanitizePublicEmail("247care@clinic.com"), "247care@clinic.com");
+  assert.equal(sanitizePublicEmail("hello@acme.company"), "hello@acme.company");
+  assert.equal(sanitizePublicEmail("dr.tan@melbournedental.example"), "dr.tan@melbournedental.example");
+  assert.equal(classifyPublicEmailKind("info@1stdentalclinic.com"), "shared_inbox");
+
+  assert.equal(
+    userRequestedAction("now can you go back and look for one email from the first 10 companies?"),
+    true,
+  );
+  assert.equal(userRequestedAction("what emails do we have?"), false);
 });

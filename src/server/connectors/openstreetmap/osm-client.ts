@@ -7,6 +7,7 @@ import {
   type OsmTagFilter,
 } from "@/lib/ano/company-discovery";
 import { searxngConfiguration, searxngResearchProvider } from "@/server/research/searxng-provider";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const NOMINATIM_API = "https://nominatim.openstreetmap.org/search";
 const DEFAULT_NOMINATIM_POI_TIMEOUT_MS = 15_000;
@@ -178,6 +179,8 @@ export async function resolveOsmLocation(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), NOMINATIM_TIMEOUT_MS);
+  const startedAt = Date.now();
+  let lastHttpStatus: number | undefined;
   try {
     const url = `${NOMINATIM_API}?q=${encodeURIComponent(clean)}&format=jsonv2&limit=5&addressdetails=1`;
     const response = await fetcher(url, {
@@ -189,6 +192,7 @@ export async function resolveOsmLocation(
       signal: controller.signal,
       cache: "no-store",
     });
+    lastHttpStatus = response.status;
 
     if (response.status === 429) {
       throw new OsmClientError(
@@ -228,6 +232,17 @@ export async function resolveOsmLocation(
     const osmType = String(best.osm_type);
     const osmId = Number(best.osm_id);
 
+    recordInternalApiUsage({
+      provider: "openstreetmap",
+      operation: "nominatim_geocode",
+      modelOrEndpoint: "nominatim",
+      status: "success",
+      httpStatus: response.status,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: { candidateCount: valid.length },
+    });
+
     return {
       requestedQuery: clean,
       displayName: String(best.display_name),
@@ -237,17 +252,34 @@ export async function resolveOsmLocation(
       boundingBox: parseBoundingBox(best.boundingbox),
     };
   } catch (error) {
-    if (error instanceof OsmClientError) throw error;
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new OsmClientError(
-        "TIMEOUT",
-        `OpenStreetMap Nominatim timed out while resolving "${clean}".`,
-      );
-    }
-    throw new OsmClientError(
-      "NETWORK_ERROR",
-      `Ano could not reach OpenStreetMap Nominatim to resolve "${clean}".`,
-    );
+    const mapped =
+      error instanceof OsmClientError
+        ? error
+        : error instanceof DOMException && error.name === "AbortError"
+          ? new OsmClientError(
+              "TIMEOUT",
+              `OpenStreetMap Nominatim timed out while resolving "${clean}".`,
+            )
+          : new OsmClientError(
+              "NETWORK_ERROR",
+              `Ano could not reach OpenStreetMap Nominatim to resolve "${clean}".`,
+            );
+    recordInternalApiUsage({
+      provider: "openstreetmap",
+      operation: "nominatim_geocode",
+      modelOrEndpoint: "nominatim",
+      status:
+        mapped.code === "RATE_LIMITED"
+          ? "rate_limited"
+          : mapped.code === "TIMEOUT"
+            ? "timeout"
+            : "error",
+      httpStatus: lastHttpStatus ?? null,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: { errorCode: mapped.code },
+    });
+    throw mapped;
   } finally {
     clearTimeout(timer);
   }
@@ -595,6 +627,9 @@ export async function searchOsmBusinesses(
 
   const deduped = new Map<string, { company: NormalizedProspeoCompanyInput; qualityRank: number }>();
   let totalMatchedRaw = 0;
+  const startedAt = Date.now();
+  const operation = customOverpassUrl ? "overpass_search" : "nominatim_poi_search";
+  const modelOrEndpoint = customOverpassUrl ? "overpass" : "nominatim";
 
   const recordCandidate = (entry: {
     company: NormalizedProspeoCompanyInput;
@@ -612,177 +647,212 @@ export async function searchOsmBusinesses(
     }
   };
 
-  if (customOverpassUrl) {
-    const perAreaFetchLimit = Math.max(
-      25,
-      Math.min(100, Math.ceil((limit * 3) / input.areas.length)),
-    );
-    for (const area of input.areas) {
-      const query = buildOverpassQuery(area, input.tags, perAreaFetchLimit);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
+  try {
+    if (customOverpassUrl) {
+      const perAreaFetchLimit = Math.max(
+        25,
+        Math.min(100, Math.ceil((limit * 3) / input.areas.length)),
+      );
+      for (const area of input.areas) {
+        const query = buildOverpassQuery(area, input.tags, perAreaFetchLimit);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
 
-      let payload: unknown;
-      try {
-        const response = await fetcher(customOverpassUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "User-Agent": OSM_USER_AGENT,
-            Accept: "application/json",
-          },
-          body: `data=${encodeURIComponent(query)}`,
-          signal: controller.signal,
-          cache: "no-store",
-        });
+        let payload: unknown;
+        try {
+          const response = await fetcher(customOverpassUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+              "User-Agent": OSM_USER_AGENT,
+              Accept: "application/json",
+            },
+            body: `data=${encodeURIComponent(query)}`,
+            signal: controller.signal,
+            cache: "no-store",
+          });
 
-        if (response.status === 429) {
+          if (response.status === 429) {
+            throw new OsmClientError(
+              "RATE_LIMITED",
+              "OpenStreetMap Overpass rate-limited this search. Ano did not retry automatically.",
+            );
+          }
+          if (response.status === 504 || response.status === 408) {
+            throw new OsmClientError(
+              "TIMEOUT",
+              `OpenStreetMap Overpass timed out querying "${area.displayName}". Try a narrower city or region.`,
+            );
+          }
+          if (!response.ok) {
+            throw new OsmClientError(
+              "SERVICE_UNAVAILABLE",
+              `OpenStreetMap Overpass returned HTTP ${response.status}. Ano did not retry automatically.`,
+            );
+          }
+          payload = await response.json().catch(() => null);
+        } catch (error) {
+          if (error instanceof OsmClientError) throw error;
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw new OsmClientError(
+              "TIMEOUT",
+              `OpenStreetMap Overpass timed out for "${area.displayName}". Try querying a specific city.`,
+            );
+          }
           throw new OsmClientError(
-            "RATE_LIMITED",
-            "OpenStreetMap Overpass rate-limited this search. Ano did not retry automatically.",
+            "NETWORK_ERROR",
+            "Ano could not reach OpenStreetMap Overpass. No automatic retry was attempted.",
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+
+        const elements =
+          payload &&
+          typeof payload === "object" &&
+          "elements" in payload &&
+          Array.isArray((payload as { elements?: unknown }).elements)
+            ? (payload as { elements: OverpassElement[] }).elements
+            : null;
+
+        if (!elements) {
+          throw new OsmClientError(
+            "INVALID_RESPONSE",
+            "OpenStreetMap Overpass returned a response Ano could not verify.",
           );
         }
-        if (response.status === 504 || response.status === 408) {
-          throw new OsmClientError(
-            "TIMEOUT",
-            `OpenStreetMap Overpass timed out querying "${area.displayName}". Try a narrower city or region.`,
-          );
+
+        totalMatchedRaw += elements.length;
+        for (const element of elements) {
+          recordCandidate(normaliseOverpassElement(element, area));
         }
-        if (!response.ok) {
-          throw new OsmClientError(
-            "SERVICE_UNAVAILABLE",
-            `OpenStreetMap Overpass returned HTTP ${response.status}. Ano did not retry automatically.`,
-          );
-        }
-        payload = await response.json().catch(() => null);
-      } catch (error) {
-        if (error instanceof OsmClientError) throw error;
-        if (error instanceof DOMException && error.name === "AbortError") {
-          throw new OsmClientError(
-            "TIMEOUT",
-            `OpenStreetMap Overpass timed out for "${area.displayName}". Try querying a specific city.`,
-          );
-        }
-        throw new OsmClientError(
-          "NETWORK_ERROR",
-          "Ano could not reach OpenStreetMap Overpass. No automatic retry was attempted.",
-        );
-      } finally {
-        clearTimeout(timer);
       }
+    } else {
+      const effectiveDelay = input.delayMs ?? (fetcher === fetch ? 1_050 : 0);
+      const primaryTag = input.tags[0];
 
-      const elements =
-        payload &&
-        typeof payload === "object" &&
-        "elements" in payload &&
-        Array.isArray((payload as { elements?: unknown }).elements)
-          ? (payload as { elements: OverpassElement[] }).elements
-          : null;
+      for (let index = 0; index < input.areas.length; index += 1) {
+        if (index > 0 && effectiveDelay > 0) {
+          await sleep(effectiveDelay);
+        }
+        const area = input.areas[index];
+        const url = buildNominatimPoiSearchUrl(area, primaryTag, 40);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), DEFAULT_NOMINATIM_POI_TIMEOUT_MS);
 
-      if (!elements) {
-        throw new OsmClientError(
-          "INVALID_RESPONSE",
-          "OpenStreetMap Overpass returned a response Ano could not verify.",
-        );
-      }
+        let payload: unknown;
+        try {
+          const response = await fetcher(url, {
+            method: "GET",
+            headers: {
+              "User-Agent": OSM_USER_AGENT,
+              Accept: "application/json",
+            },
+            signal: controller.signal,
+            cache: "no-store",
+          });
 
-      totalMatchedRaw += elements.length;
-      for (const element of elements) {
-        recordCandidate(normaliseOverpassElement(element, area));
+          if (response.status === 429) {
+            throw new OsmClientError(
+              "RATE_LIMITED",
+              "OpenStreetMap Nominatim rate-limited this search. Wait a moment before running again; Ano did not retry automatically.",
+            );
+          }
+          if (response.status === 504 || response.status === 408) {
+            throw new OsmClientError(
+              "TIMEOUT",
+              `OpenStreetMap Nominatim timed out querying "${area.displayName}".`,
+            );
+          }
+          if (!response.ok) {
+            throw new OsmClientError(
+              "SERVICE_UNAVAILABLE",
+              `OpenStreetMap Nominatim returned HTTP ${response.status}. Ano did not retry automatically.`,
+            );
+          }
+
+          payload = await response.json().catch(() => null);
+        } catch (error) {
+          if (error instanceof OsmClientError) throw error;
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw new OsmClientError(
+              "TIMEOUT",
+              `OpenStreetMap Nominatim timed out while searching "${area.displayName}".`,
+            );
+          }
+          throw new OsmClientError(
+            "NETWORK_ERROR",
+            "Ano could not reach OpenStreetMap Nominatim. No automatic retry was attempted.",
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+
+        if (!Array.isArray(payload)) {
+          throw new OsmClientError(
+            "INVALID_RESPONSE",
+            "OpenStreetMap Nominatim returned a response Ano could not verify.",
+          );
+        }
+
+        totalMatchedRaw += payload.length;
+        for (const item of payload as NominatimPoiItem[]) {
+          recordCandidate(normaliseNominatimPoi(item, area, primaryTag));
+        }
       }
     }
-  } else {
-    const effectiveDelay = input.delayMs ?? (fetcher === fetch ? 1_050 : 0);
-    const primaryTag = input.tags[0];
 
-    for (let index = 0; index < input.areas.length; index += 1) {
-      if (index > 0 && effectiveDelay > 0) {
-        await sleep(effectiveDelay);
-      }
-      const area = input.areas[index];
-      const url = buildNominatimPoiSearchUrl(area, primaryTag, 40);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), DEFAULT_NOMINATIM_POI_TIMEOUT_MS);
+    const ranked = Array.from(deduped.values())
+      .sort((a, b) => b.qualityRank - a.qualityRank)
+      .slice(0, limit)
+      .map((item) => item.company);
 
-      let payload: unknown;
-      try {
-        const response = await fetcher(url, {
-          method: "GET",
-          headers: {
-            "User-Agent": OSM_USER_AGENT,
-            Accept: "application/json",
-          },
-          signal: controller.signal,
-          cache: "no-store",
-        });
-
-        if (response.status === 429) {
-          throw new OsmClientError(
-            "RATE_LIMITED",
-            "OpenStreetMap Nominatim rate-limited this search. Wait a moment before running again; Ano did not retry automatically.",
-          );
-        }
-        if (response.status === 504 || response.status === 408) {
-          throw new OsmClientError(
-            "TIMEOUT",
-            `OpenStreetMap Nominatim timed out querying "${area.displayName}".`,
-          );
-        }
-        if (!response.ok) {
-          throw new OsmClientError(
-            "SERVICE_UNAVAILABLE",
-            `OpenStreetMap Nominatim returned HTTP ${response.status}. Ano did not retry automatically.`,
-          );
-        }
-
-        payload = await response.json().catch(() => null);
-      } catch (error) {
-        if (error instanceof OsmClientError) throw error;
-        if (error instanceof DOMException && error.name === "AbortError") {
-          throw new OsmClientError(
-            "TIMEOUT",
-            `OpenStreetMap Nominatim timed out while searching "${area.displayName}".`,
-          );
-        }
-        throw new OsmClientError(
-          "NETWORK_ERROR",
-          "Ano could not reach OpenStreetMap Nominatim. No automatic retry was attempted.",
-        );
-      } finally {
-        clearTimeout(timer);
-      }
-
-      if (!Array.isArray(payload)) {
-        throw new OsmClientError(
-          "INVALID_RESPONSE",
-          "OpenStreetMap Nominatim returned a response Ano could not verify.",
-        );
-      }
-
-      totalMatchedRaw += payload.length;
-      for (const item of payload as NominatimPoiItem[]) {
-        recordCandidate(normaliseNominatimPoi(item, area, primaryTag));
-      }
+    if (ranked.length === 0) {
+      throw new OsmClientError(
+        "NO_RESULTS",
+        "OpenStreetMap returned no matching businesses inside that area for the selected tags.",
+      );
     }
+
+    recordInternalApiUsage({
+      provider: "openstreetmap",
+      operation,
+      modelOrEndpoint,
+      status: "success",
+      httpStatus: 200,
+      requestCount: input.areas.length,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: {
+        queriedAreas: input.areas.length,
+        companyCount: ranked.length,
+      },
+    });
+
+    return {
+      companies: ranked,
+      totalMatchedRaw,
+      queriedAreas: input.areas.length,
+    };
+  } catch (error) {
+    const code = error instanceof OsmClientError ? error.code : "NETWORK_ERROR";
+    recordInternalApiUsage({
+      provider: "openstreetmap",
+      operation,
+      modelOrEndpoint,
+      status:
+        code === "RATE_LIMITED"
+          ? "rate_limited"
+          : code === "TIMEOUT"
+            ? "timeout"
+            : "error",
+      requestCount: input.areas.length,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: { queriedAreas: input.areas.length, errorCode: code },
+    });
+    throw error;
   }
-
-  const ranked = Array.from(deduped.values())
-    .sort((a, b) => b.qualityRank - a.qualityRank)
-    .slice(0, limit)
-    .map((item) => item.company);
-
-  if (ranked.length === 0) {
-    throw new OsmClientError(
-      "NO_RESULTS",
-      "OpenStreetMap returned no matching businesses inside that area for the selected tags.",
-    );
-  }
-
-  return {
-    companies: ranked,
-    totalMatchedRaw,
-    queriedAreas: input.areas.length,
-  };
 }
 
 function isAggregatorHostname(hostname: string) {

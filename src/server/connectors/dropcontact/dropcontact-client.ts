@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import type { DropcontactPreviewPair, DropcontactProviderState } from "@/lib/ano/people-playbooks";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const DROPCONTACT_API = "https://api.dropcontact.io";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -271,138 +272,187 @@ export async function verifyContactsWithDropcontact(
   const maxPollAttempts = options.maxPollAttempts ?? DEFAULT_MAX_POLL_ATTEMPTS;
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const apiKey = requireDropcontactKey();
+  const startedAt = Date.now();
+  let postSubmitted = false;
+  let pollCount = 0;
 
-  const postRes = await fetchDropcontactJson(
-    `${DROPCONTACT_API}/batch`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Access-Token": apiKey,
+  try {
+    const postRes = await fetchDropcontactJson(
+      `${DROPCONTACT_API}/batch`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Access-Token": apiKey,
+        },
+        body: JSON.stringify({
+          siren: false,
+          language: "en",
+          data: pairs.map((pair) => ({
+            ...(pair.firstName ? { first_name: pair.firstName } : {}),
+            ...(pair.lastName ? { last_name: pair.lastName } : {}),
+            full_name: pair.fullName,
+            company: pair.companyName,
+            ...(pair.website ? { website: pair.website } : {}),
+            ...(pair.linkedInUrl ? { linkedin: pair.linkedInUrl } : {}),
+            custom_fields: {
+              ano_contact_id: pair.contactId,
+            },
+          })),
+        }),
       },
-      body: JSON.stringify({
-        siren: false,
-        language: "en",
-        data: pairs.map((pair) => ({
-          ...(pair.firstName ? { first_name: pair.firstName } : {}),
-          ...(pair.lastName ? { last_name: pair.lastName } : {}),
-          full_name: pair.fullName,
-          company: pair.companyName,
-          ...(pair.website ? { website: pair.website } : {}),
-          ...(pair.linkedInUrl ? { linkedin: pair.linkedInUrl } : {}),
-          custom_fields: {
-            ano_contact_id: pair.contactId,
-          },
-        })),
-      }),
-    },
-    fetcher,
-    requestTimeoutMs,
-  );
-
-  if (!postRes.ok || postRes.parsed.error === true) {
-    throw new DropcontactClientError(
-      "INVALID_RESPONSE",
-      postRes.parsed.reason
-        ? `Dropcontact error: ${postRes.parsed.reason}`
-        : "Dropcontact returned an unusable response. Ano stopped safely without retrying.",
+      fetcher,
+      requestTimeoutMs,
     );
-  }
 
-  let finalPayload: DropcontactBatchPayload | null =
-    Array.isArray(postRes.parsed.data) &&
-    (postRes.parsed.data.length > 0 || !postRes.parsed.request_id)
-      ? postRes.parsed
-      : null;
-
-  const requestId = postRes.parsed.request_id?.trim() || null;
-
-  if (!finalPayload) {
-    if (!requestId) {
+    if (!postRes.ok || postRes.parsed.error === true) {
       throw new DropcontactClientError(
         "INVALID_RESPONSE",
-        "Dropcontact did not return batch data or a request_id for polling.",
+        postRes.parsed.reason
+          ? `Dropcontact error: ${postRes.parsed.reason}`
+          : "Dropcontact returned an unusable response. Ano stopped safely without retrying.",
       );
     }
 
-    for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
-      if (pollIntervalMs > 0) {
-        await delay(pollIntervalMs);
-      }
+    postSubmitted = true;
 
-      const pollRes = await fetchDropcontactJson(
-        `${DROPCONTACT_API}/batch/${encodeURIComponent(requestId)}`,
-        {
-          method: "GET",
-          headers: {
-            "X-Access-Token": apiKey,
-          },
-        },
-        fetcher,
-        requestTimeoutMs,
-      );
+    let finalPayload: DropcontactBatchPayload | null =
+      Array.isArray(postRes.parsed.data) &&
+      (postRes.parsed.data.length > 0 || !postRes.parsed.request_id)
+        ? postRes.parsed
+        : null;
 
-      if (isPendingDropcontactResponse(pollRes.status, pollRes.parsed)) {
-        continue;
-      }
+    const requestId = postRes.parsed.request_id?.trim() || null;
 
-      if (!pollRes.ok || pollRes.parsed.error === true) {
+    if (!finalPayload) {
+      if (!requestId) {
         throw new DropcontactClientError(
           "INVALID_RESPONSE",
-          pollRes.parsed.reason
-            ? `Dropcontact error: ${pollRes.parsed.reason}`
-            : "Dropcontact returned an unusable polling response. Ano stopped safely without retrying.",
+          "Dropcontact did not return batch data or a request_id for polling.",
         );
       }
 
-      if (Array.isArray(pollRes.parsed.data)) {
-        finalPayload = pollRes.parsed;
-        break;
+      for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+        if (pollIntervalMs > 0) {
+          await delay(pollIntervalMs);
+        }
+
+        pollCount += 1;
+        const pollRes = await fetchDropcontactJson(
+          `${DROPCONTACT_API}/batch/${encodeURIComponent(requestId)}`,
+          {
+            method: "GET",
+            headers: {
+              "X-Access-Token": apiKey,
+            },
+          },
+          fetcher,
+          requestTimeoutMs,
+        );
+
+        if (isPendingDropcontactResponse(pollRes.status, pollRes.parsed)) {
+          continue;
+        }
+
+        if (!pollRes.ok || pollRes.parsed.error === true) {
+          throw new DropcontactClientError(
+            "INVALID_RESPONSE",
+            pollRes.parsed.reason
+              ? `Dropcontact error: ${pollRes.parsed.reason}`
+              : "Dropcontact returned an unusable polling response. Ano stopped safely without retrying.",
+          );
+        }
+
+        if (Array.isArray(pollRes.parsed.data)) {
+          finalPayload = pollRes.parsed;
+          break;
+        }
+      }
+
+      if (!finalPayload) {
+        throw new DropcontactClientError(
+          "TIMEOUT_NO_RETRY",
+          `Dropcontact batch ${requestId} is still processing after polling. No extra credits were spent and Ano did not re-submit the batch.`,
+        );
       }
     }
 
-    if (!finalPayload) {
-      throw new DropcontactClientError(
-        "TIMEOUT_NO_RETRY",
-        `Dropcontact batch ${requestId} is still processing after polling. No extra credits were spent and Ano did not re-submit the batch.`,
-      );
-    }
-  }
+    const rows = finalPayload.data ?? [];
+    const results: DropcontactVerifiedContact[] = pairs.map((pair, index) => {
+      const matched =
+        rows.find((row) => row.custom_fields?.ano_contact_id === pair.contactId) ??
+        rows[index];
+      const { email, emailQualification } = extractBestDropcontactEmail(matched);
+      const phone =
+        typeof matched?.phone === "string" && matched.phone.trim()
+          ? matched.phone.trim()
+          : typeof matched?.mobile_phone === "string" && matched.mobile_phone.trim()
+            ? matched.mobile_phone.trim()
+            : null;
+      return {
+        contactId: pair.contactId,
+        verified: Boolean(email),
+        email,
+        emailQualification,
+        phone,
+        verifiedDomain:
+          typeof matched?.website === "string" && matched.website.trim()
+            ? matched.website.trim().replace(/^https?:\/\//i, "").split("/")[0] || null
+            : null,
+      };
+    });
 
-  const rows = finalPayload.data ?? [];
-  const results: DropcontactVerifiedContact[] = pairs.map((pair, index) => {
-    const matched =
-      rows.find((row) => row.custom_fields?.ano_contact_id === pair.contactId) ??
-      rows[index];
-    const { email, emailQualification } = extractBestDropcontactEmail(matched);
-    const phone =
-      typeof matched?.phone === "string" && matched.phone.trim()
-        ? matched.phone.trim()
-        : typeof matched?.mobile_phone === "string" && matched.mobile_phone.trim()
-          ? matched.mobile_phone.trim()
-          : null;
-    return {
-      contactId: pair.contactId,
-      verified: Boolean(email),
-      email,
-      emailQualification,
-      phone,
-      verifiedDomain:
-        typeof matched?.website === "string" && matched.website.trim()
-          ? matched.website.trim().replace(/^https?:\/\//i, "").split("/")[0] || null
-          : null,
-    };
-  });
-
-  const initialCreditsLeft =
-    typeof postRes.parsed.credits_left === "number" ? postRes.parsed.credits_left : null;
-
-  return {
-    requestId: finalPayload.request_id ?? requestId ?? `dc-${Date.now()}`,
-    creditsLeft:
+    const initialCreditsLeft =
+      typeof postRes.parsed.credits_left === "number" ? postRes.parsed.credits_left : null;
+    const creditsRemaining =
       typeof finalPayload.credits_left === "number"
         ? finalPayload.credits_left
-        : initialCreditsLeft,
-    results,
-  };
+        : initialCreditsLeft;
+    const verifiedCount = results.filter((item) => item.verified).length;
+
+    recordInternalApiUsage({
+      provider: "dropcontact",
+      operation: "verify_batch",
+      modelOrEndpoint: "/batch",
+      status: "success",
+      httpStatus: 200,
+      requestCount: 1 + pollCount,
+      creditsUsed: pairs.length,
+      creditsRemaining,
+      durationMs: Date.now() - startedAt,
+      metadata: {
+        batchSize: pairs.length,
+        verifiedCount,
+        pollCount,
+      },
+    });
+
+    return {
+      requestId: finalPayload.request_id ?? requestId ?? `dc-${Date.now()}`,
+      creditsLeft: creditsRemaining,
+      results,
+    };
+  } catch (error) {
+    const code = error instanceof DropcontactClientError ? error.code : "NETWORK_ERROR";
+    recordInternalApiUsage({
+      provider: "dropcontact",
+      operation: "verify_batch",
+      modelOrEndpoint: "/batch",
+      status:
+        code === "TIMEOUT_NO_RETRY"
+          ? "timeout"
+          : code === "RATE_LIMITED"
+            ? "rate_limited"
+            : "error",
+      requestCount: (postSubmitted ? 1 : 0) + pollCount,
+      creditsUsed: postSubmitted ? pairs.length : 0,
+      durationMs: Date.now() - startedAt,
+      metadata: {
+        batchSize: pairs.length,
+        pollCount,
+        errorCode: code,
+      },
+    });
+    throw error;
+  }
 }

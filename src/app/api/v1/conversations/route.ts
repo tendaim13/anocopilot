@@ -8,6 +8,7 @@ import {
   startResearchConversation,
 } from "@/server/domain/research-conversation-service";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -54,7 +55,15 @@ export async function POST(request: Request) {
   const message = body && typeof body === "object" && "message" in body && typeof body.message === "string" ? body.message.trim() : "";
   if (!message) return NextResponse.json({ error: "Tell Ano what you want to sell and what you want to achieve first." }, { status: 400 });
   try {
-    return NextResponse.json({ conversation: await startResearchConversation(await requireWorkspaceSession(), message, idempotencyKey(request)) }, { status: 201 });
+    const session = await requireWorkspaceSession();
+    return NextResponse.json(
+      {
+        conversation: await runWithInternalUsageContext({ session }, () =>
+          startResearchConversation(session, message, idempotencyKey(request)),
+        ),
+      },
+      { status: 201 },
+    );
   } catch (error) {
     return errorResponse(error);
   }

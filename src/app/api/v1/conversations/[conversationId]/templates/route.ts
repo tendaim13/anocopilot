@@ -12,6 +12,7 @@ import {
 import { MarketSynthesisPersistenceError } from "@/server/persistence/market-synthesis-store";
 import { OutreachTemplatePersistenceError } from "@/server/persistence/outreach-template-store";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
+import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -76,18 +77,16 @@ export async function POST(
     const { conversationId } = await context.params;
     const action = parsed.data;
 
-    if (action.action === "generate") {
-      return NextResponse.json(
-        await generateOutreachTemplatePackForConversation(session, conversationId, action),
-      );
-    }
-    if (action.action === "edit_step") {
-      return NextResponse.json(
-        await editOutreachTemplateStepForConversation(session, conversationId, action),
-      );
-    }
     return NextResponse.json(
-      await updateOutreachTemplateSettingsForConversation(session, conversationId, action),
+      await runWithInternalUsageContext({ session, conversationId }, async () => {
+        if (action.action === "generate") {
+          return await generateOutreachTemplatePackForConversation(session, conversationId, action);
+        }
+        if (action.action === "edit_step") {
+          return await editOutreachTemplateStepForConversation(session, conversationId, action);
+        }
+        return await updateOutreachTemplateSettingsForConversation(session, conversationId, action);
+      }),
     );
   } catch (error) {
     return errorResponse(error);

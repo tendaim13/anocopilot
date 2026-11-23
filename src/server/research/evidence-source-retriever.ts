@@ -10,6 +10,7 @@ import {
   ResearchProviderError,
   type ProviderExtractResponse,
 } from "@/server/research/research-provider";
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -140,11 +141,19 @@ export function createEvidenceSourceRetriever(
 
   return {
     async fetchSavedResult(savedResult: SavedSearchResultReference): Promise<ProviderExtractResponse> {
+      const startedAt = Date.now();
       const savedUrl = savedResult.canonicalUrl;
       let current: URL;
       try {
         current = canonicalRemoteUrl(savedUrl);
       } catch (error) {
+        recordInternalApiUsage({
+          provider: "searxng",
+          operation: "fetch_source",
+          status: "error",
+          durationMs: Date.now() - startedAt,
+          metadata: { outcome: "rejected_url" },
+        });
         return knownFailure(savedUrl, error instanceof Error ? error.message : "Ano rejected this source before retrieval.", "rejected");
       }
       const storedUrl = current.toString();
@@ -152,6 +161,14 @@ export function createEvidenceSourceRetriever(
         try {
           await assertPublicHost(current, lookup);
         } catch (error) {
+          recordInternalApiUsage({
+            provider: "searxng",
+            operation: "fetch_source",
+            modelOrEndpoint: current.hostname,
+            status: "error",
+            durationMs: Date.now() - startedAt,
+            metadata: { outcome: "rejected_host" },
+          });
           return knownFailure(storedUrl, error instanceof Error ? error.message : "Ano rejected this source before retrieval.", "rejected");
         }
         const controller = new AbortController();
@@ -165,7 +182,16 @@ export function createEvidenceSourceRetriever(
             signal: controller.signal,
           });
         } catch (error) {
-          if (controller.signal.aborted) {
+          const isTimeout = controller.signal.aborted;
+          recordInternalApiUsage({
+            provider: "searxng",
+            operation: "fetch_source",
+            modelOrEndpoint: current.hostname,
+            status: isTimeout ? "timeout" : "error",
+            durationMs: Date.now() - startedAt,
+            metadata: { outcome: isTimeout ? "timeout" : "network_error" },
+          });
+          if (isTimeout) {
             throw new ResearchProviderError("Ano could not confirm whether a source request completed. It stopped for manual review without retrying.", "UNCERTAIN_OUTCOME", { hostname: current.hostname });
           }
           throw new ResearchProviderError("Ano could not confirm the source retrieval outcome. It stopped for manual review without retrying.", "UNCERTAIN_OUTCOME", { hostname: current.hostname });
@@ -175,24 +201,106 @@ export function createEvidenceSourceRetriever(
 
         if (response.status >= 300 && response.status < 400) {
           const location = response.headers.get("location");
-          if (!location) return knownFailure(current.toString(), "The source returned a redirect without a destination.");
-          if (redirectCount === MAX_REDIRECTS) return knownFailure(current.toString(), "The source exceeded Ano’s safe redirect limit.");
+          if (!location) {
+            recordInternalApiUsage({
+              provider: "searxng",
+              operation: "fetch_source",
+              modelOrEndpoint: current.hostname,
+              status: "error",
+              httpStatus: response.status,
+              durationMs: Date.now() - startedAt,
+              metadata: { outcome: "empty_redirect" },
+            });
+            return knownFailure(current.toString(), "The source returned a redirect without a destination.");
+          }
+          if (redirectCount === MAX_REDIRECTS) {
+            recordInternalApiUsage({
+              provider: "searxng",
+              operation: "fetch_source",
+              modelOrEndpoint: current.hostname,
+              status: "error",
+              httpStatus: response.status,
+              durationMs: Date.now() - startedAt,
+              metadata: { outcome: "redirect_limit" },
+            });
+            return knownFailure(current.toString(), "The source exceeded Ano’s safe redirect limit.");
+          }
           try {
             current = canonicalRemoteUrl(new URL(location, current).toString());
           } catch (error) {
+            recordInternalApiUsage({
+              provider: "searxng",
+              operation: "fetch_source",
+              modelOrEndpoint: current.hostname,
+              status: "error",
+              httpStatus: response.status,
+              durationMs: Date.now() - startedAt,
+              metadata: { outcome: "rejected_redirect" },
+            });
             return knownFailure(storedUrl, error instanceof Error ? error.message : "Ano rejected this redirect before retrieval.", "rejected");
           }
           continue;
         }
-        if (!response.ok) return knownFailure(current.toString(), `The source returned HTTP ${response.status}.`);
+        if (!response.ok) {
+          recordInternalApiUsage({
+            provider: "searxng",
+            operation: "fetch_source",
+            modelOrEndpoint: current.hostname,
+            status: response.status === 429 ? "rate_limited" : "error",
+            httpStatus: response.status,
+            durationMs: Date.now() - startedAt,
+            metadata: { outcome: "http_error" },
+          });
+          return knownFailure(current.toString(), `The source returned HTTP ${response.status}.`);
+        }
         const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
         if (contentType !== "text/html" && contentType !== "text/plain") {
+          recordInternalApiUsage({
+            provider: "searxng",
+            operation: "fetch_source",
+            modelOrEndpoint: current.hostname,
+            status: "error",
+            httpStatus: response.status,
+            durationMs: Date.now() - startedAt,
+            metadata: { outcome: "unsupported_type" },
+          });
           return knownFailure(current.toString(), "Ano only keeps evidence from HTML or plain-text sources.", "rejected");
         }
         const body = await readTextWithinLimit(response, MAX_RESPONSE_BYTES);
-        if (body.overLimit) return knownFailure(current.toString(), "The source exceeded Ano’s safe 2 MB retrieval limit.");
+        if (body.overLimit) {
+          recordInternalApiUsage({
+            provider: "searxng",
+            operation: "fetch_source",
+            modelOrEndpoint: current.hostname,
+            status: "error",
+            httpStatus: response.status,
+            durationMs: Date.now() - startedAt,
+            metadata: { outcome: "size_limit" },
+          });
+          return knownFailure(current.toString(), "The source exceeded Ano’s safe 2 MB retrieval limit.");
+        }
         const content = extractText(contentType, body.text);
-        if (!content) return knownFailure(current.toString(), "Ano could not extract readable evidence from this source.");
+        if (!content) {
+          recordInternalApiUsage({
+            provider: "searxng",
+            operation: "fetch_source",
+            modelOrEndpoint: current.hostname,
+            status: "error",
+            httpStatus: response.status,
+            durationMs: Date.now() - startedAt,
+            metadata: { outcome: "empty_content" },
+          });
+          return knownFailure(current.toString(), "Ano could not extract readable evidence from this source.");
+        }
+        recordInternalApiUsage({
+          provider: "searxng",
+          operation: "fetch_source",
+          modelOrEndpoint: current.hostname,
+          status: "success",
+          httpStatus: response.status,
+          durationMs: Date.now() - startedAt,
+          metadata: { charCount: content.length },
+        });
         return {
           requestId: createHash("sha256").update(`${savedResult.id}:${current.toString()}`).digest("hex"),
           credits: null,

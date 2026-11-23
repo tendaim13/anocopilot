@@ -30,7 +30,9 @@
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
     "db:apply:ci": "node scripts/apply-ano-schema.mjs",
     "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs",
-    "db:status:ci": "node scripts/check-ano-schema.mjs"
+    "db:status:ci": "node scripts/check-ano-schema.mjs",
+    "usage:report": "node --env-file=.env.local scripts/report-api-usage.mjs",
+    "usage:report:ci": "node scripts/report-api-usage.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1154.0",

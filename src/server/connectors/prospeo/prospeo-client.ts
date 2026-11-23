@@ -2,6 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 
+import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
+
 const PROSPEO_API = "https://api.prospeo.io";
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -256,57 +258,162 @@ function normaliseCompany(value: unknown): ProspeoCompany | null {
   };
 }
 
+function recordProspeoCallError(
+  operation: string,
+  endpoint: string,
+  startedAt: number,
+  error: unknown,
+  metadata?: Record<string, unknown>,
+) {
+  const code = error instanceof ProspeoClientError ? error.code : "NETWORK_ERROR";
+  recordInternalApiUsage({
+    provider: "prospeo",
+    operation,
+    modelOrEndpoint: endpoint,
+    status: code === "RATE_LIMITED" ? "rate_limited" : "error",
+    creditsUsed: 0,
+    durationMs: Date.now() - startedAt,
+    metadata: { ...metadata, errorCode: code },
+  });
+}
+
 export async function checkProspeoAccount(fetcher?: ProspeoFetcher): Promise<{ account: ProspeoAccount; rateLimit: ProspeoRateLimit }> {
-  const response = await prospeoRequest("/account-information", { method: "GET" }, fetcher);
-  const parsed = accountPayloadSchema.safeParse(response.payload);
-  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned an account response Ano could not verify.");
-  return {
-    account: {
+  const startedAt = Date.now();
+  try {
+    const response = await prospeoRequest("/account-information", { method: "GET" }, fetcher);
+    const parsed = accountPayloadSchema.safeParse(response.payload);
+    if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned an account response Ano could not verify.");
+    const account: ProspeoAccount = {
       plan: parsed.data.response.current_plan,
       remainingCredits: parsed.data.response.remaining_credits,
       usedCredits: parsed.data.response.used_credits,
       renewalDays: parsed.data.response.next_quota_renewal_days,
       renewalDate: parsed.data.response.next_quota_renewal_date,
-    },
-    rateLimit: response.rateLimit,
-  };
+    };
+    recordInternalApiUsage({
+      provider: "prospeo",
+      operation: "account_information",
+      modelOrEndpoint: "/account-information",
+      status: "success",
+      httpStatus: 200,
+      creditsUsed: 0,
+      creditsRemaining: account.remainingCredits,
+      durationMs: Date.now() - startedAt,
+      metadata: { plan: account.plan },
+    });
+    return {
+      account,
+      rateLimit: response.rateLimit,
+    };
+  } catch (error) {
+    recordProspeoCallError("account_information", "/account-information", startedAt, error);
+    throw error;
+  }
 }
 
 /** Free canonicalization request. It never calls Prospeo's credit-bearing company search. */
 export async function suggestProspeoLocations(location: string, fetcher?: ProspeoFetcher): Promise<ProspeoLocationSuggestion[]> {
-  const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ location_search: location }) }, fetcher);
-  const parsed = locationPayloadSchema.safeParse(response.payload);
-  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned location suggestions Ano could not verify.");
-  return parsed.data.location_suggestions ?? [];
+  const startedAt = Date.now();
+  try {
+    const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ location_search: location }) }, fetcher);
+    const parsed = locationPayloadSchema.safeParse(response.payload);
+    if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned location suggestions Ano could not verify.");
+    const suggestions = parsed.data.location_suggestions ?? [];
+    recordInternalApiUsage({
+      provider: "prospeo",
+      operation: "suggest_locations",
+      modelOrEndpoint: "/search-suggestions",
+      status: "success",
+      httpStatus: 200,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: { suggestionCount: suggestions.length },
+    });
+    return suggestions;
+  } catch (error) {
+    recordProspeoCallError("suggest_locations", "/search-suggestions", startedAt, error);
+    throw error;
+  }
 }
 
 /** Free industry canonicalization request against Prospeo's controlled industry taxonomy. */
 export async function suggestProspeoIndustries(industry: string, fetcher?: ProspeoFetcher): Promise<string[]> {
-  const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ industry_search: industry }) }, fetcher);
-  const parsed = industryPayloadSchema.safeParse(response.payload);
-  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned industry suggestions Ano could not verify.");
-  return parsed.data.industry_suggestions ?? [];
+  const startedAt = Date.now();
+  try {
+    const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ industry_search: industry }) }, fetcher);
+    const parsed = industryPayloadSchema.safeParse(response.payload);
+    if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned industry suggestions Ano could not verify.");
+    const suggestions = parsed.data.industry_suggestions ?? [];
+    recordInternalApiUsage({
+      provider: "prospeo",
+      operation: "suggest_industries",
+      modelOrEndpoint: "/search-suggestions",
+      status: "success",
+      httpStatus: 200,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: { suggestionCount: suggestions.length },
+    });
+    return suggestions;
+  } catch (error) {
+    recordProspeoCallError("suggest_industries", "/search-suggestions", startedAt, error);
+    throw error;
+  }
 }
 
 /** Free job-title canonicalization request ($0 credits) via Prospeo Search Suggestions API. */
 export async function suggestProspeoJobTitles(query: string, fetcher?: ProspeoFetcher): Promise<string[]> {
-  const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ job_title_search: query }) }, fetcher);
-  const parsed = jobTitlePayloadSchema.safeParse(response.payload);
-  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned job-title suggestions Ano could not verify.");
-  return parsed.data.job_title_suggestions ?? [];
+  const startedAt = Date.now();
+  try {
+    const response = await prospeoRequest("/search-suggestions", { method: "POST", body: JSON.stringify({ job_title_search: query }) }, fetcher);
+    const parsed = jobTitlePayloadSchema.safeParse(response.payload);
+    if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned job-title suggestions Ano could not verify.");
+    const suggestions = parsed.data.job_title_suggestions ?? [];
+    recordInternalApiUsage({
+      provider: "prospeo",
+      operation: "suggest_job_titles",
+      modelOrEndpoint: "/search-suggestions",
+      status: "success",
+      httpStatus: 200,
+      creditsUsed: 0,
+      durationMs: Date.now() - startedAt,
+      metadata: { suggestionCount: suggestions.length },
+    });
+    return suggestions;
+  } catch (error) {
+    recordProspeoCallError("suggest_job_titles", "/search-suggestions", startedAt, error);
+    throw error;
+  }
 }
 
 /** This is intentionally bounded to page 1 (25 companies max). */
 export async function searchProspeoCompanies(filters: Record<string, unknown>, fetcher?: ProspeoFetcher): Promise<ProspeoCompanySearch> {
-  const response = await prospeoRequest("/search-company", { method: "POST", body: JSON.stringify({ page: 1, filters }) }, fetcher);
-  const parsed = companyPayloadSchema.safeParse(response.payload);
-  if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned company data Ano could not verify.");
-  return {
-    free: parsed.data.free,
-    companies: parsed.data.results.map((item) => normaliseCompany(item.company)).filter((item): item is ProspeoCompany => item !== null).slice(0, 25),
-    totalCount: parsed.data.pagination?.total_count,
-    rateLimit: response.rateLimit,
-  };
+  const startedAt = Date.now();
+  try {
+    const response = await prospeoRequest("/search-company", { method: "POST", body: JSON.stringify({ page: 1, filters }) }, fetcher);
+    const parsed = companyPayloadSchema.safeParse(response.payload);
+    if (!parsed.success) throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned company data Ano could not verify.");
+    const companies = parsed.data.results.map((item) => normaliseCompany(item.company)).filter((item): item is ProspeoCompany => item !== null).slice(0, 25);
+    recordInternalApiUsage({
+      provider: "prospeo",
+      operation: "search_company",
+      modelOrEndpoint: "/search-company",
+      status: "success",
+      httpStatus: 200,
+      creditsUsed: parsed.data.free ? 0 : 1,
+      durationMs: Date.now() - startedAt,
+      metadata: { companyCount: companies.length, free: parsed.data.free },
+    });
+    return {
+      free: parsed.data.free,
+      companies,
+      totalCount: parsed.data.pagination?.total_count,
+      rateLimit: response.rateLimit,
+    };
+  } catch (error) {
+    recordProspeoCallError("search_company", "/search-company", startedAt, error);
+    throw error;
+  }
 }
 
 function normalisePerson(entry: { person?: unknown; company?: unknown } & Record<string, unknown>): ProspeoPerson | null {
@@ -366,24 +473,41 @@ export async function searchProspeoPeople(
   filters: Record<string, unknown>,
   fetcher?: ProspeoFetcher,
 ): Promise<ProspeoPersonSearch> {
-  const response = await prospeoRequest(
-    "/search-person",
-    { method: "POST", body: JSON.stringify({ page: 1, filters }) },
-    fetcher,
-  );
-  const parsed = personPayloadSchema.safeParse(response.payload);
-  if (!parsed.success) {
-    throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned person data Ano could not verify.");
-  }
-  return {
-    free: parsed.data.free,
-    people: parsed.data.results
+  const startedAt = Date.now();
+  try {
+    const response = await prospeoRequest(
+      "/search-person",
+      { method: "POST", body: JSON.stringify({ page: 1, filters }) },
+      fetcher,
+    );
+    const parsed = personPayloadSchema.safeParse(response.payload);
+    if (!parsed.success) {
+      throw new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned person data Ano could not verify.");
+    }
+    const people = parsed.data.results
       .map((item) => normalisePerson(item))
       .filter((item): item is ProspeoPerson => item !== null)
-      .slice(0, 25),
-    totalCount: parsed.data.pagination?.total_count,
-    rateLimit: response.rateLimit,
-  };
+      .slice(0, 25);
+    recordInternalApiUsage({
+      provider: "prospeo",
+      operation: "search_person",
+      modelOrEndpoint: "/search-person",
+      status: "success",
+      httpStatus: 200,
+      creditsUsed: parsed.data.free ? 0 : 1,
+      durationMs: Date.now() - startedAt,
+      metadata: { peopleCount: people.length, free: parsed.data.free },
+    });
+    return {
+      free: parsed.data.free,
+      people,
+      totalCount: parsed.data.pagination?.total_count,
+      rateLimit: response.rateLimit,
+    };
+  } catch (error) {
+    recordProspeoCallError("search_person", "/search-person", startedAt, error);
+    throw error;
+  }
 }
 
 function cleanWebsiteHost(raw?: string | null): string | undefined {
@@ -426,6 +550,7 @@ export async function enrichProspeoPeople(
     };
   });
 
+  const startedAt = Date.now();
   let rawPayload: unknown;
   let headersRateLimit: ProspeoRateLimit = {};
   try {
@@ -445,6 +570,16 @@ export async function enrichProspeoPeople(
     headersRateLimit = response.rateLimit;
   } catch (error) {
     if (error instanceof ProspeoClientError && error.code === "NO_RESULTS") {
+      recordInternalApiUsage({
+        provider: "prospeo",
+        operation: "bulk_enrich_person",
+        modelOrEndpoint: "/bulk-enrich-person",
+        status: "success",
+        httpStatus: 200,
+        creditsUsed: 0,
+        durationMs: Date.now() - startedAt,
+        metadata: { batchSize: pairs.length, matchedCount: 0, noResults: true },
+      });
       return {
         creditsCharged: 0,
         rateLimit: headersRateLimit,
@@ -460,6 +595,9 @@ export async function enrichProspeoPeople(
         })),
       };
     }
+    recordProspeoCallError("bulk_enrich_person", "/bulk-enrich-person", startedAt, error, {
+      batchSize: pairs.length,
+    });
     throw error;
   }
 
@@ -532,21 +670,34 @@ export async function enrichProspeoPeople(
     });
   }
 
+  const results = pairs.map(
+    (pair) =>
+      matchedById.get(pair.contactId) ?? {
+        contactId: pair.contactId,
+        verified: false,
+        email: null,
+        emailStatus: "NOT_MATCHED",
+        emailQualification: null,
+        phone: null,
+        verifiedDomain: null,
+        freeEnrichment: true,
+      },
+  );
+  const matchedCount = results.filter((item) => item.verified).length;
+  recordInternalApiUsage({
+    provider: "prospeo",
+    operation: "bulk_enrich_person",
+    modelOrEndpoint: "/bulk-enrich-person",
+    status: "success",
+    httpStatus: 200,
+    creditsUsed: creditsCharged,
+    durationMs: Date.now() - startedAt,
+    metadata: { batchSize: pairs.length, matchedCount },
+  });
+
   return {
     creditsCharged,
     rateLimit: headersRateLimit,
-    results: pairs.map(
-      (pair) =>
-        matchedById.get(pair.contactId) ?? {
-          contactId: pair.contactId,
-          verified: false,
-          email: null,
-          emailStatus: "NOT_MATCHED",
-          emailQualification: null,
-          phone: null,
-          verifiedDomain: null,
-          freeEnrichment: true,
-        },
-    ),
+    results,
   };
 }
