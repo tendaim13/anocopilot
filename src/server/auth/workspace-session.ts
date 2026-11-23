@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 import type { WorkspaceIdentity, WorkspaceRole, WorkspaceRuntime, WorkspaceSession } from "@/contracts/ano";
+import { ACTIVE_WORKSPACE_COOKIE, selectActiveWorkspace } from "@/lib/ano/workspace-auth";
 import { getSupabasePublicConfig } from "@/lib/supabase/config";
 
 const demoWorkspace: WorkspaceIdentity = {
@@ -50,6 +51,7 @@ export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
         actorId: "demo-user",
         actorEmail: "demo@local.ano",
         workspace: demoWorkspace,
+        workspaces: [demoWorkspace],
       };
     }
 
@@ -87,48 +89,94 @@ export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
     .from("workspace_members")
     .select("workspace_id, role")
     .eq("user_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1);
+    .order("created_at", { ascending: true });
 
-  if (membershipError || !memberships?.[0]) {
-    throw new WorkspaceSessionError(403, "WORKSPACE_REQUIRED", "Your account does not have access to an Ano workspace.");
+  if (membershipError || !memberships || memberships.length === 0) {
+    throw new WorkspaceSessionError(
+      403,
+      "WORKSPACE_REQUIRED",
+      "Your account does not have access to an Ano workspace.",
+    );
   }
 
-  const membership = memberships[0] as { workspace_id: string; role: unknown };
-  const { data: workspace, error: workspaceError } = await client
-    .from("workspaces")
-    .select("id, name, slug")
-    .eq("id", membership.workspace_id)
-    .maybeSingle();
+  const membershipRows = memberships as Array<{ workspace_id: string; role: unknown }>;
+  const workspaceIds = Array.from(new Set(membershipRows.map((row) => String(row.workspace_id))));
 
-  if (workspaceError || !workspace) {
+  const [workspacesResult, domainsResult] = await Promise.all([
+    client.from("workspaces").select("id, name, slug").in("id", workspaceIds),
+    client.from("workspace_domains").select("workspace_id, domain").in("workspace_id", workspaceIds),
+  ]);
+
+  if (workspacesResult.error) {
     throw new WorkspaceSessionError(403, "WORKSPACE_REQUIRED", "Ano could not resolve your workspace.");
   }
-
-  const { data: domains, error: domainError } = await client
-    .from("workspace_domains")
-    .select("domain")
-    .eq("workspace_id", membership.workspace_id);
-
-  if (domainError) {
+  if (domainsResult.error) {
     throw new WorkspaceSessionError(403, "DOMAIN_NOT_ALLOWED", "Ano could not verify the workspace domain policy.");
   }
 
-  const allowedDomains = (domains ?? []).map((domain) => String(domain.domain).toLowerCase());
-  if (allowedDomains.length > 0 && !allowedDomains.includes(emailDomain(user.email))) {
-    throw new WorkspaceSessionError(403, "DOMAIN_NOT_ALLOWED", "Your email domain is not allowed for this Ano workspace.");
+  const workspacesById = new Map<string, { id: string; name: string; slug: string }>();
+  for (const row of workspacesResult.data ?? []) {
+    workspacesById.set(String(row.id), {
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+    });
+  }
+
+  const domainsByWorkspaceId = new Map<string, string[]>();
+  for (const row of domainsResult.data ?? []) {
+    const wsId = String(row.workspace_id);
+    const list = domainsByWorkspaceId.get(wsId) ?? [];
+    list.push(String(row.domain).toLowerCase());
+    domainsByWorkspaceId.set(wsId, list);
+  }
+
+  const userDomain = emailDomain(user.email);
+  let domainRejected = false;
+  const allowedWorkspaces: WorkspaceIdentity[] = [];
+  const seenWorkspaceIds = new Set<string>();
+
+  for (const membership of membershipRows) {
+    const wsId = String(membership.workspace_id);
+    if (seenWorkspaceIds.has(wsId)) continue;
+    const workspaceRow = workspacesById.get(wsId);
+    if (!workspaceRow) continue;
+
+    const allowedDomains = domainsByWorkspaceId.get(wsId) ?? [];
+    if (allowedDomains.length > 0 && !allowedDomains.includes(userDomain)) {
+      domainRejected = true;
+      continue;
+    }
+
+    seenWorkspaceIds.add(wsId);
+    allowedWorkspaces.push({
+      id: workspaceRow.id,
+      name: workspaceRow.name,
+      slug: workspaceRow.slug,
+      role: safeRole(membership.role),
+    });
+  }
+
+  const preferredWorkspaceId = cookieStore.get(ACTIVE_WORKSPACE_COOKIE)?.value ?? null;
+  const activeWorkspace = selectActiveWorkspace(allowedWorkspaces, preferredWorkspaceId);
+
+  if (!activeWorkspace) {
+    if (domainRejected) {
+      throw new WorkspaceSessionError(
+        403,
+        "DOMAIN_NOT_ALLOWED",
+        "Your email domain is not allowed for this Ano workspace.",
+      );
+    }
+    throw new WorkspaceSessionError(403, "WORKSPACE_REQUIRED", "Ano could not resolve your workspace.");
   }
 
   return {
     kind: "supabase",
     actorId: user.id,
     actorEmail: user.email,
-    workspace: {
-      id: String(workspace.id),
-      name: String(workspace.name),
-      slug: String(workspace.slug),
-      role: safeRole(membership.role),
-    },
+    workspace: activeWorkspace,
+    workspaces: allowedWorkspaces,
     client,
   };
 }
@@ -137,7 +185,31 @@ export function toWorkspaceRuntime(session: WorkspaceSession): WorkspaceRuntime 
   return {
     mode: session.kind,
     workspace: session.workspace,
+    workspaces: session.workspaces && session.workspaces.length > 0
+      ? session.workspaces
+      : [session.workspace],
     actor: { id: session.actorId, email: session.actorEmail },
     persistence: session.kind === "supabase" ? "supabase" : "browser-demo",
+  };
+}
+
+export async function switchWorkspaceForCurrentUser(
+  targetWorkspaceId: string,
+): Promise<WorkspaceRuntime> {
+  const session = await requireWorkspaceSession();
+  const available = session.workspaces && session.workspaces.length > 0
+    ? session.workspaces
+    : [session.workspace];
+  const matched = available.find((item) => item.id === targetWorkspaceId);
+  if (!matched) {
+    throw new WorkspaceSessionError(
+      403,
+      "WORKSPACE_REQUIRED",
+      "You do not have access to that workspace.",
+    );
+  }
+  return {
+    ...toWorkspaceRuntime(session),
+    workspace: matched,
   };
 }

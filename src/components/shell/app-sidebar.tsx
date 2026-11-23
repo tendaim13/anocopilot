@@ -13,6 +13,8 @@ import { AddIcon, CloseIcon } from "./ano-icons";
 export interface AppSidebarProps {
   workspaceName: string;
   mode: "supabase" | "demo" | "unauthenticated";
+  actorEmail?: string | null;
+  onSignOut?: () => void;
   conversations: ResearchConversationSummary[];
   activeConversationId: string | null;
   needsReviewCount?: number;
@@ -34,6 +36,8 @@ const NEEDS_REVIEW_STATUSES = new Set<GraphRunStatus>([
 export function AppSidebar({
   workspaceName,
   mode,
+  actorEmail = null,
+  onSignOut,
   conversations,
   activeConversationId,
   needsReviewCount,
@@ -205,13 +209,23 @@ export function AppSidebar({
           <span className="ano-safe-dot" aria-hidden="true" />
           <div>
             <strong>{workspaceName}</strong>
-            <small>Approval-gated workspace</small>
+            <small>{actorEmail ?? "Approval-gated workspace"}</small>
           </div>
         </div>
+        {mode === "supabase" && onSignOut && (
+          <button type="button" className="ano-sidebar-signout" onClick={onSignOut}>
+            Sign out
+          </button>
+        )}
         {mode !== "supabase" && (
-          <Link href="/login" className="ano-sidebar-signin" onClick={onNavigate}>
-            Sign in
-          </Link>
+          <div className="ano-sidebar-auth-links">
+            <Link href="/login" className="ano-sidebar-signin" onClick={onNavigate}>
+              Sign in
+            </Link>
+            <Link href="/signup" className="ano-sidebar-signin" onClick={onNavigate}>
+              Create account
+            </Link>
+          </div>
         )}
       </div>
     </aside>

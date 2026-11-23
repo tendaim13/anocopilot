@@ -26,9 +26,11 @@ import { MaterialButton } from "@/components/material/material-button";
 import { MaterialIconButton } from "@/components/material/material-icon-button";
 import { MaterialTextField } from "@/components/material/material-text-field";
 import { useMaterialWeb } from "@/components/material/register";
+import { getBrowserSupabaseClient } from "@/client/services/supabase-browser";
 import { AppSidebar } from "./app-sidebar";
 import { ContextRail, type ShellProviderState } from "./context-rail";
 import { MobileToolbar } from "./mobile-toolbar";
+import { WorkspaceSwitcher } from "./workspace-switcher";
 import { MoonIcon, PanelRightIcon, SunIcon } from "./ano-icons";
 
 export type AnoThemeMode = "light" | "dark";
@@ -50,14 +52,19 @@ export type ShellActiveContext = {
 
 export type AppShellContextValue = {
   workspace: WorkspaceIdentity | null;
+  workspaces: WorkspaceIdentity[];
+  actorEmail: string | null;
   mode: "supabase" | "demo" | "unauthenticated";
   conversations: ResearchConversationSummary[];
   workQueue: WorkQueueSummary;
   nextCursor: string | null;
   loadingMore: boolean;
   loading: boolean;
+  switchingWorkspace: boolean;
   refreshConversations: () => Promise<void>;
   loadMoreConversations: () => Promise<void>;
+  switchWorkspace: (workspaceId: string) => Promise<void>;
+  signOut: () => Promise<void>;
   activeContext: ShellActiveContext;
   setActiveContext: (context: ShellActiveContext) => void;
   contextRailOpen: boolean;
@@ -152,7 +159,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const renameDialogRef = useRef<HTMLElement>(null);
 
   const [workspace, setWorkspace] = useState<WorkspaceIdentity | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceIdentity[]>([]);
+  const [actorEmail, setActorEmail] = useState<string | null>(null);
   const [mode, setMode] = useState<"supabase" | "demo" | "unauthenticated">("demo");
+  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
   const [conversations, setConversations] = useState<ResearchConversationSummary[]>([]);
   const [workQueue, setWorkQueue] = useState<WorkQueueSummary>(EMPTY_WORK_QUEUE);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -196,11 +206,38 @@ export function AppShell({ children }: { children: ReactNode }) {
         typeof workspacePayload === "object" &&
         "workspace" in workspacePayload
       ) {
-        setWorkspace(workspacePayload.workspace as WorkspaceIdentity);
+        const active = workspacePayload.workspace as WorkspaceIdentity;
+        const list =
+          "workspaces" in workspacePayload && Array.isArray(workspacePayload.workspaces)
+            ? (workspacePayload.workspaces as WorkspaceIdentity[])
+            : [active];
+        const email =
+          "actor" in workspacePayload &&
+          workspacePayload.actor &&
+          typeof workspacePayload.actor === "object" &&
+          "email" in workspacePayload.actor &&
+          typeof workspacePayload.actor.email === "string"
+            ? workspacePayload.actor.email
+            : null;
+        setWorkspace(active);
+        setWorkspaces(list);
+        setActorEmail(email);
         setMode(workspacePayload.mode === "supabase" ? "supabase" : "demo");
       } else {
         setWorkspace(null);
+        setWorkspaces([]);
+        setActorEmail(null);
         setMode("unauthenticated");
+        const errorCode =
+          workspacePayload &&
+          typeof workspacePayload === "object" &&
+          "code" in workspacePayload &&
+          typeof workspacePayload.code === "string"
+            ? workspacePayload.code
+            : null;
+        if (errorCode === "WORKSPACE_REQUIRED") {
+          router.replace("/onboarding");
+        }
       }
 
       if (
@@ -265,6 +302,57 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshConversations();
   }, [refreshConversations]);
+
+  const switchWorkspace = useCallback(
+    async (targetWorkspaceId: string) => {
+      if (switchingWorkspace) return;
+      setSwitchingWorkspace(true);
+      try {
+        const response = await fetch("/api/v1/workspace/switch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspaceId: targetWorkspaceId }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload || typeof payload !== "object" || !("workspace" in payload)) {
+          return;
+        }
+        const nextWorkspace = payload.workspace as WorkspaceIdentity;
+        const nextWorkspaces =
+          "workspaces" in payload && Array.isArray(payload.workspaces)
+            ? (payload.workspaces as WorkspaceIdentity[])
+            : [nextWorkspace];
+        setWorkspace(nextWorkspace);
+        setWorkspaces(nextWorkspaces);
+        setActiveContext(EMPTY_CONTEXT);
+        await refreshConversations();
+        if (pathname.startsWith("/research/")) {
+          router.push("/research");
+        } else {
+          router.refresh();
+        }
+      } finally {
+        setSwitchingWorkspace(false);
+      }
+    },
+    [switchingWorkspace, refreshConversations, pathname, router],
+  );
+
+  const signOut = useCallback(async () => {
+    const client = getBrowserSupabaseClient();
+    if (client) {
+      await client.auth.signOut().catch(() => undefined);
+    }
+    setWorkspace(null);
+    setWorkspaces([]);
+    setActorEmail(null);
+    setMode("unauthenticated");
+    setConversations([]);
+    setWorkQueue(EMPTY_WORK_QUEUE);
+    setActiveContext(EMPTY_CONTEXT);
+    router.replace("/login");
+    router.refresh();
+  }, [router]);
 
   useEffect(() => {
     const stored =
@@ -392,14 +480,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   const value = useMemo<AppShellContextValue>(
     () => ({
       workspace,
+      workspaces,
+      actorEmail,
       mode,
       conversations,
       workQueue,
       nextCursor,
       loadingMore,
       loading,
+      switchingWorkspace,
       refreshConversations,
       loadMoreConversations,
+      switchWorkspace,
+      signOut,
       activeContext,
       setActiveContext,
       contextRailOpen,
@@ -410,14 +503,19 @@ export function AppShell({ children }: { children: ReactNode }) {
     }),
     [
       workspace,
+      workspaces,
+      actorEmail,
       mode,
       conversations,
       workQueue,
       nextCursor,
       loadingMore,
       loading,
+      switchingWorkspace,
       refreshConversations,
       loadMoreConversations,
+      switchWorkspace,
+      signOut,
       activeContext,
       contextRailOpen,
       theme,
@@ -440,6 +538,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <AppSidebar
           workspaceName={workspace?.name ?? "Ano workspace"}
           mode={mode}
+          actorEmail={actorEmail}
+          onSignOut={() => void signOut()}
           conversations={conversations}
           activeConversationId={activeConversationId}
           needsReviewCount={workQueue.needsReviewCount}
@@ -482,11 +582,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </MaterialButton>
                 </>
               )}
-              {mode !== "supabase" && (
-                <MaterialButton variant="outlined" onClick={() => router.push("/login")}>
-                  Sign in
-                </MaterialButton>
-              )}
               <MaterialButton
                 variant="outlined"
                 ariaLabel={
@@ -507,6 +602,25 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <PanelRightIcon />
               </MaterialIconButton>
+              {mode === "supabase" && workspace ? (
+                <WorkspaceSwitcher
+                  activeWorkspace={workspace}
+                  workspaces={workspaces}
+                  actorEmail={actorEmail}
+                  isSwitching={switchingWorkspace}
+                  onSwitchWorkspace={switchWorkspace}
+                  onSignOut={signOut}
+                />
+              ) : (
+                <>
+                  <MaterialButton variant="outlined" onClick={() => router.push("/login")}>
+                    Sign in
+                  </MaterialButton>
+                  <MaterialButton variant="filled" onClick={() => router.push("/signup")}>
+                    Create account
+                  </MaterialButton>
+                </>
+              )}
             </div>
           </header>
 

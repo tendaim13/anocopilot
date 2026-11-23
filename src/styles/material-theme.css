@@ -427,6 +427,49 @@ md-outlined-text-field {
   text-decoration: underline;
 }
 
+.auth-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -8px;
+}
+
+.auth-inline-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  font-size: var(--md-sys-typescale-body-small-font-size, 13px);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-inline-link:hover {
+  text-decoration: underline;
+}
+
+.auth-secondary-section {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  display: grid;
+  gap: 10px;
+}
+
+.auth-secondary-label {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.auth-invite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
 @media (max-width: 580px) {
   .auth-page {
     padding: 16px;

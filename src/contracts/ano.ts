@@ -14,6 +14,7 @@ export type DemoWorkspaceSession = {
   actorId: "demo-user";
   actorEmail: "demo@local.ano";
   workspace: WorkspaceIdentity;
+  workspaces?: WorkspaceIdentity[];
 };
 
 export type SupabaseWorkspaceSession = {
@@ -21,6 +22,7 @@ export type SupabaseWorkspaceSession = {
   actorId: string;
   actorEmail: string;
   workspace: WorkspaceIdentity;
+  workspaces?: WorkspaceIdentity[];
   client: SupabaseClient;
 };
 
@@ -29,6 +31,7 @@ export type WorkspaceSession = DemoWorkspaceSession | SupabaseWorkspaceSession;
 export type WorkspaceRuntime = {
   mode: WorkspaceSession["kind"];
   workspace: WorkspaceIdentity;
+  workspaces: WorkspaceIdentity[];
   actor: {
     id: string;
     email: string;
