@@ -40,6 +40,8 @@ export const conversationMessageMetadataSchema = z.object({
   templatePackUpdated: z.boolean().optional(),
   templatePackVersion: z.number().int().positive().optional(),
   lintPassedCount: z.number().int().min(0).optional(),
+  autopilotRerunTriggered: z.boolean().optional(),
+  autopilotRerunStages: z.array(z.string().max(40)).max(6).optional(),
   actionSummary: z.string().max(400).optional(),
 });
 export type ConversationMessageMetadata = z.infer<typeof conversationMessageMetadataSchema>;

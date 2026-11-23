@@ -64,6 +64,11 @@ export function AutopilotProgressCard({
   const completedCount = autopilotRun.completedStages.length;
   const totalCount = AUTOPILOT_STAGES.length;
   const progressValue = completedCount / totalCount;
+  const activeStageMeta = AUTOPILOT_STAGE_METADATA.find(
+    (item) => item.stage === autopilotRun.currentStage,
+  );
+  const displayStepNumber =
+    activeStageMeta?.stepNumber ?? Math.min(completedCount + 1, totalCount);
   const isRunning = autopilotRun.status === "running";
   const canResume =
     autopilotRun.status === "paused" ||
@@ -80,9 +85,9 @@ export function AutopilotProgressCard({
             {autopilotRun.status === "completed" || autopilotRun.status === "completed_with_warnings"
               ? `Pipeline complete (${totalCount}/${totalCount} stages)`
               : autopilotRun.status === "running"
-                ? `Running stage ${Math.min(completedCount + 1, totalCount)} of ${totalCount}`
+                ? `Running stage ${displayStepNumber} of ${totalCount}`
                 : autopilotRun.status === "paused"
-                  ? `Paused at stage ${Math.min(completedCount + 1, totalCount)} of ${totalCount}`
+                  ? `Paused at stage ${displayStepNumber} of ${totalCount}`
                   : autopilotRun.status === "failed"
                     ? "Pipeline stopped safely"
                     : "Autopilot ready"}

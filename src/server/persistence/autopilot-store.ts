@@ -6,6 +6,7 @@ import {
   autopilotExecutableStageSchema,
   autopilotRunViewSchema,
   autopilotStageSummarySchema,
+  computePartialRerunState,
   nextPendingAutopilotStage,
   stagesBefore,
   type AutopilotExecutableStage,
@@ -528,6 +529,135 @@ export async function cancelAutopilotRun(
       current_stage: String(existing.current_stage),
     },
   });
+
+  return mapAutopilotRow(data as Row);
+}
+
+export async function scheduleAutopilotPartialRerun(
+  session: WorkspaceSession,
+  conversationId: string,
+  input: {
+    stagesToRerun: AutopilotExecutableStage[];
+    completedStageSummary?: AutopilotStageSummary;
+    reason?: string;
+  },
+): Promise<AutopilotRunView | null> {
+  if (session.kind === "demo") {
+    return null;
+  }
+  const existing = await fetchAutopilotRow(session, conversationId);
+  if (!existing) {
+    return null;
+  }
+
+  const parsedExisting = mapAutopilotRow(existing);
+  const next = computePartialRerunState(
+    parsedExisting,
+    input.stagesToRerun,
+    input.completedStageSummary,
+  );
+  const now = new Date().toISOString();
+
+  const { data, error } = await session.client
+    .from("autopilot_runs")
+    .update({
+      status: next.nextStatus,
+      current_stage: next.nextStage,
+      completed_stages_json: next.completedStages,
+      stage_summaries_json: next.stageSummaries,
+      warnings_json: next.warnings,
+      stage_lease_token: null,
+      stage_started_at: null,
+      last_error: null,
+      heartbeat_at: now,
+      started_at: next.nextStatus === "running" ? now : existing.started_at ?? now,
+      completed_at: next.nextStage === "done" ? now : null,
+      updated_at: now,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", parsedExisting.id)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    throw new AutopilotPersistenceError(
+      "Ano could not schedule the requested downstream update.",
+    );
+  }
+
+  await session.client.from("audit_logs").insert({
+    workspace_id: session.workspace.id,
+    actor_id: session.actorId,
+    event_type: "autopilot.partial_rerun",
+    outcome: next.nextStatus,
+    details_json: {
+      conversation_id: conversationId,
+      stages_to_rerun: input.stagesToRerun,
+      next_stage: next.nextStage,
+      reason: input.reason?.slice(0, 200) ?? null,
+    },
+  });
+
+  return mapAutopilotRow(data as Row);
+}
+
+export async function recordAutopilotStageSummary(
+  session: WorkspaceSession,
+  conversationId: string,
+  summary: AutopilotStageSummary,
+): Promise<AutopilotRunView | null> {
+  if (session.kind === "demo") {
+    return null;
+  }
+  const existing = await fetchAutopilotRow(session, conversationId);
+  if (!existing) {
+    return null;
+  }
+
+  const parsedExisting = mapAutopilotRow(existing);
+  const completedSet = new Set<AutopilotExecutableStage>(parsedExisting.completedStages);
+  completedSet.add(summary.stage);
+  const completedStages = AUTOPILOT_STAGES.filter((stage) => completedSet.has(stage));
+  const stageSummaries: Partial<Record<AutopilotExecutableStage, AutopilotStageSummary>> = {
+    ...parsedExisting.stageSummaries,
+    [summary.stage]: summary,
+  };
+  const warnings = parseWarnings(
+    completedStages.flatMap((stage) => stageSummaries[stage]?.warnings ?? []),
+  );
+  const nextStage = nextPendingAutopilotStage(completedStages);
+  const nextStatus =
+    parsedExisting.status === "running" && nextStage !== "done"
+      ? "running"
+      : nextStage === "done"
+        ? warnings.length > 0
+          ? "completed_with_warnings"
+          : "completed"
+        : parsedExisting.status;
+  const now = new Date().toISOString();
+
+  const { data, error } = await session.client
+    .from("autopilot_runs")
+    .update({
+      status: nextStatus,
+      current_stage: nextStage,
+      completed_stages_json: completedStages,
+      stage_summaries_json: stageSummaries,
+      warnings_json: warnings,
+      heartbeat_at: now,
+      completed_at: nextStage === "done" ? now : existing.completed_at ?? null,
+      updated_at: now,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", parsedExisting.id)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    throw new AutopilotPersistenceError(
+      "Ano could not update the autopilot stage summary.",
+    );
+  }
 
   return mapAutopilotRow(data as Row);
 }

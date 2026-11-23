@@ -711,6 +711,9 @@ export function ResearchConversationWorkbench({
       if ("templatePack" in payload) {
         setTemplatePack((payload.templatePack ?? null) as OutreachTemplatePackView | null);
       }
+      if ("autopilotRun" in payload) {
+        setAutopilotRun((payload.autopilotRun ?? null) as AutopilotRunView | null);
+      }
       if (embeddedInShell) void refreshShellConversations?.();
     } catch (requestError) {
       setPendingUserMessage(null);

@@ -80,6 +80,152 @@ export const autopilotCancelRequestSchema = z.object({
 });
 export type AutopilotCancelRequest = z.infer<typeof autopilotCancelRequestSchema>;
 
+export const AUTOPILOT_RERUN_SCOPES = [
+  "companies_people_templates",
+  "companies_and_people",
+  "people_and_emails",
+  "email_enrichment",
+  "templates_only",
+] as const;
+
+export const autopilotRerunScopeSchema = z.enum(AUTOPILOT_RERUN_SCOPES);
+export type AutopilotRerunScope = z.infer<typeof autopilotRerunScopeSchema>;
+
+const RERUN_SCOPE_STAGES: Record<AutopilotRerunScope, AutopilotExecutableStage[]> = {
+  companies_people_templates: ["company_discovery", "people_and_emails", "outreach_templates"],
+  companies_and_people: ["company_discovery", "people_and_emails"],
+  people_and_emails: ["people_and_emails"],
+  email_enrichment: ["people_and_emails"],
+  templates_only: ["outreach_templates"],
+};
+
+export function stagesForAutopilotRerunScope(
+  scope: AutopilotRerunScope,
+): AutopilotExecutableStage[] {
+  return [...RERUN_SCOPE_STAGES[scope]];
+}
+
+export function computePartialRerunState(
+  existing: Pick<AutopilotRunView, "completedStages" | "stageSummaries">,
+  stagesToRerun: readonly AutopilotExecutableStage[],
+  completedStageSummary?: AutopilotStageSummary,
+): {
+  completedStages: AutopilotExecutableStage[];
+  stageSummaries: Partial<Record<AutopilotExecutableStage, AutopilotStageSummary>>;
+  warnings: string[];
+  nextStage: AutopilotStage;
+  nextStatus: Extract<AutopilotStatus, "running" | "completed" | "completed_with_warnings">;
+} {
+  const rerunSet = new Set<AutopilotExecutableStage>(stagesToRerun);
+  const completedSet = new Set<AutopilotExecutableStage>(
+    existing.completedStages.filter((stage) => !rerunSet.has(stage)),
+  );
+  const nextSummaries: Partial<Record<AutopilotExecutableStage, AutopilotStageSummary>> = {};
+
+  for (const stage of AUTOPILOT_STAGES) {
+    if (completedSet.has(stage) && existing.stageSummaries[stage]) {
+      nextSummaries[stage] = existing.stageSummaries[stage];
+    }
+  }
+
+  if (completedStageSummary) {
+    completedSet.add(completedStageSummary.stage);
+    nextSummaries[completedStageSummary.stage] = completedStageSummary;
+  }
+
+  const completedStages = AUTOPILOT_STAGES.filter((stage) => completedSet.has(stage));
+  const warningSeen = new Set<string>();
+  const warnings: string[] = [];
+  for (const stage of completedStages) {
+    const stageWarnings = nextSummaries[stage]?.warnings ?? [];
+    for (const warning of stageWarnings) {
+      const clean = warning.trim();
+      if (!clean || warningSeen.has(clean)) continue;
+      warningSeen.add(clean);
+      warnings.push(clean);
+    }
+  }
+
+  const nextStage = nextPendingAutopilotStage(completedStages);
+  const nextStatus =
+    nextStage === "done"
+      ? warnings.length > 0
+        ? "completed_with_warnings"
+        : "completed"
+      : "running";
+
+  return {
+    completedStages,
+    stageSummaries: nextSummaries,
+    warnings,
+    nextStage,
+    nextStatus,
+  };
+}
+
+const INTERNAL_METRIC_KEY_PATTERN = /credit|cost|usd|token|price|billing|spend|budget/i;
+const INTERNAL_CREDIT_VALUE_PATTERN =
+  /\$[0-9]+(?:\.[0-9]+)?|\b\d+(?:\.\d+)?\s*(?:credits?|cr\/found|tokens?)\b/gi;
+
+function scrubInternalTelemetryText(value: string): string {
+  return value.replace(INTERNAL_CREDIT_VALUE_PATTERN, "").replace(/\s{2,}/g, " ").trim();
+}
+
+export function sanitizeAutopilotStageSummariesForChat(run: AutopilotRunView): string {
+  const lines: string[] = [
+    `Autopilot status: ${run.status} (currentStage=${run.currentStage}, completed=${run.completedStages.join(", ") || "none"})`,
+  ];
+
+  for (const meta of AUTOPILOT_STAGE_METADATA) {
+    const summary = run.stageSummaries[meta.stage];
+    if (!summary) continue;
+
+    const safeMetricParts: string[] = [];
+    for (const [key, val] of Object.entries(summary.metrics ?? {})) {
+      if (INTERNAL_METRIC_KEY_PATTERN.test(key)) continue;
+      const safeVal =
+        typeof val === "string" ? scrubInternalTelemetryText(val) : String(val);
+      if (safeVal) {
+        safeMetricParts.push(`${key}=${safeVal}`);
+      }
+    }
+
+    const headline = scrubInternalTelemetryText(summary.headline);
+    const detail = scrubInternalTelemetryText(summary.detail);
+    const metricsSuffix =
+      safeMetricParts.length > 0 ? ` [${safeMetricParts.join(", ")}]` : "";
+    lines.push(
+      `${meta.stepNumber}. ${meta.title} (${summary.status}): ${headline} — ${detail}${metricsSuffix}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+export function selectNextVerificationProvider(input: {
+  requestedProvider?: "prospeo" | "dropcontact";
+  lastRunProvider?: "prospeo" | "dropcontact" | null;
+  prospeoAvailable: boolean;
+  dropcontactAvailable: boolean;
+}): "prospeo" | "dropcontact" | null {
+  if (input.requestedProvider === "prospeo") {
+    return input.prospeoAvailable ? "prospeo" : input.dropcontactAvailable ? "dropcontact" : null;
+  }
+  if (input.requestedProvider === "dropcontact") {
+    return input.dropcontactAvailable ? "dropcontact" : input.prospeoAvailable ? "prospeo" : null;
+  }
+  if (input.lastRunProvider === "prospeo" && input.dropcontactAvailable) {
+    return "dropcontact";
+  }
+  if (input.prospeoAvailable) {
+    return "prospeo";
+  }
+  if (input.dropcontactAvailable) {
+    return "dropcontact";
+  }
+  return null;
+}
+
 export function nextPendingAutopilotStage(
   completedStages: AutopilotExecutableStage[],
 ): AutopilotStage {
