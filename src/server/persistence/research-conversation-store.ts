@@ -1091,6 +1091,7 @@ export async function syncResearchGraphSnapshot(session: WorkspaceSession, conve
     current_node: currentNode,
     checkpoint_ref: ref,
     state_snapshot: state,
+    failure_message: null,
     completed_at: state.status === "complete_without_research" ? now : null,
     updated_at: now,
   }).eq("workspace_id", session.workspace.id).eq("id", run.id);

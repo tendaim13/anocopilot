@@ -4,11 +4,17 @@ import { ChatBedrockConverse } from "@langchain/aws";
 import type { BaseMessage } from "@langchain/core/messages";
 
 import type {
+  BedrockPlannerConfig,
   InvokableChatModel,
   LlmPlannerConfig,
   OllamaPlannerConfig,
 } from "@/server/agents/bedrock-contracts";
-import { createGeminiChatModel } from "@/server/agents/gemini-chat-model";
+import { getFallbackBedrockPlannerConfig } from "@/server/agents/bedrock";
+import {
+  createGeminiChatModel,
+  GeminiApiError,
+  isTransientLlmError,
+} from "@/server/agents/gemini-chat-model";
 import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const DEFAULT_OLLAMA_TIMEOUT_MS = 120_000;
@@ -187,26 +193,15 @@ export function createOllamaChatModel(
   };
 }
 
-/**
- * Builds the active reasoning adapter (local free Ollama or Amazon Bedrock)
- * strictly from server configuration. Zero provider or database tools attached.
- */
-export function createPlannerChatModel(
-  config: LlmPlannerConfig,
-  options: { maxTokens: number },
+function createBedrockPlannerModel(
+  config: BedrockPlannerConfig,
+  maxTokens: number,
 ): InvokableChatModel {
-  if (config.provider === "gemini") {
-    return createGeminiChatModel(config, { maxTokens: options.maxTokens });
-  }
-  if (config.provider === "ollama") {
-    return createOllamaChatModel(config, { maxTokens: options.maxTokens });
-  }
-
   const bedrockModel = new ChatBedrockConverse({
     model: config.modelId,
     region: config.region,
     temperature: 0,
-    maxTokens: options.maxTokens,
+    maxTokens,
     maxRetries: 0,
     guardrailConfig: {
       guardrailIdentifier: config.guardrailIdentifier,
@@ -258,4 +253,43 @@ export function createPlannerChatModel(
       }
     },
   };
+}
+
+/**
+ * Builds the active reasoning adapter (Gemini with optional cross-provider
+ * Bedrock fallback, local Ollama, or Amazon Bedrock) strictly from server configuration.
+ */
+export function createPlannerChatModel(
+  config: LlmPlannerConfig,
+  options: { maxTokens: number },
+): InvokableChatModel {
+  if (config.provider === "gemini") {
+    const primary = createGeminiChatModel(config, { maxTokens: options.maxTokens });
+    const bedrockFallback = getFallbackBedrockPlannerConfig();
+    if (!bedrockFallback) {
+      return primary;
+    }
+    const fallbackModel = createBedrockPlannerModel(bedrockFallback, options.maxTokens);
+    return {
+      async invoke(messages: BaseMessage[]) {
+        try {
+          return await primary.invoke(messages);
+        } catch (error) {
+          if (error instanceof GeminiApiError && isTransientLlmError(error)) {
+            console.warn(
+              "[ano:llm] Gemini candidate chain exhausted; failing over to configured Bedrock fallback.",
+              { primaryModel: config.modelId, code: error.code },
+            );
+            return fallbackModel.invoke(messages);
+          }
+          throw error;
+        }
+      },
+    };
+  }
+  if (config.provider === "ollama") {
+    return createOllamaChatModel(config, { maxTokens: options.maxTokens });
+  }
+
+  return createBedrockPlannerModel(config, options.maxTokens);
 }

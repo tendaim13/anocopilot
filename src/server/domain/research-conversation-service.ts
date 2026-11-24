@@ -26,6 +26,7 @@ import {
 import {
   buildFriendlyConversationTitle,
   conversationPatchSchema,
+  formatDisplayErrorMessage,
   graphResumeSchema,
   needsFriendlyTitleRefresh,
   type ConversationMessageMetadata,
@@ -41,7 +42,7 @@ import {
   type ChatShortlistUpdate,
   type ChatVerificationUpdate,
 } from "@/server/agents/conversation-chat-model";
-import { GeminiApiError } from "@/server/agents/gemini-chat-model";
+import { GeminiApiError, sanitizeLlmErrorForUser } from "@/server/agents/gemini-chat-model";
 import {
   OllamaConnectionError,
   OllamaModelNotFoundError,
@@ -127,21 +128,25 @@ export class ResearchConversationServiceError extends Error {
 
 export function formatConversationChatError(error: unknown): string {
   if (
-    error instanceof ResearchConversationServiceError ||
     error instanceof GeminiApiError ||
     error instanceof OllamaConnectionError ||
     error instanceof OllamaModelNotFoundError
   ) {
-    return error.message;
+    return sanitizeLlmErrorForUser(error);
   }
-  return "Ano's conversational model could not respond right now. Check your configured model and try again.";
+  if (error instanceof ResearchConversationServiceError) {
+    return formatDisplayErrorMessage(error.message);
+  }
+  return "Ano could not respond right now. Please try again in a moment.";
 }
 
 function requirePlannerConfig() {
   try {
     return getActivePlannerConfig();
   } catch (error) {
-    if (error instanceof BedrockConfigurationError) throw new ResearchConversationServiceError(error.message);
+    if (error instanceof BedrockConfigurationError) {
+      throw new ResearchConversationServiceError(sanitizeLlmErrorForUser(error));
+    }
     throw error;
   }
 }
@@ -187,9 +192,10 @@ async function advance(
     if (error instanceof ResearchPlanningModelError && error.reason) {
       console.error("[ano:phase-a]", error.message, error.reason);
     }
-    const message = error instanceof ResearchPlanningModelError || error instanceof ResearchConversationServiceError || error instanceof ResearchConversationPersistenceError
+    const rawMessage = error instanceof ResearchPlanningModelError || error instanceof ResearchConversationServiceError || error instanceof ResearchConversationPersistenceError
       ? error.message
-      : "Ano stopped safely while preparing this research conversation. No research, provider, contact, email, schedule, or call action was attempted.";
+      : "Ano could not continue right now. Please try again in a moment.";
+    const message = formatDisplayErrorMessage(rawMessage);
     await failResearchConversation(session, view.conversation.id, message).catch(() => undefined);
     throw new ResearchConversationServiceError(message);
   }
@@ -1914,7 +1920,7 @@ async function resumePhaseAFromStoredState(
     let currentNode = view.run.currentNode;
     let nextNodes: string[] = [];
 
-    if (resume.kind === "clarification") {
+    if (resume.kind === "clarification" || resume.kind === "retry") {
       const interpretation = await model.interpret(contextMessages);
       nextBrief = {
         ...interpretation.brief,
@@ -2017,12 +2023,13 @@ async function resumePhaseAFromStoredState(
     if (error instanceof ResearchPlanningModelError && error.reason) {
       console.error("[ano:phase-a]", error.message, error.reason);
     }
-    const errMessage =
+    const rawErrMessage =
       error instanceof ResearchPlanningModelError ||
       error instanceof ResearchConversationServiceError ||
       error instanceof ResearchConversationPersistenceError
         ? error.message
-        : "Ano stopped safely while updating this research plan. No research or provider action was attempted.";
+        : "Ano could not update this research plan right now. Please try again.";
+    const errMessage = formatDisplayErrorMessage(rawErrMessage);
     await failResearchConversation(session, view.conversation.id, errMessage).catch(
       () => undefined,
     );
@@ -2034,7 +2041,12 @@ export async function resumeResearchConversation(session: WorkspaceSession, conv
   const response = graphResumeSchema.safeParse(input);
   if (!response.success) throw new ResearchConversationServiceError("Ano could not understand that response. Please answer the current question or choose a plan decision.");
   const view = await readResearchConversation(session, conversationId);
-  if (view.run.status !== "awaiting_context" && view.run.status !== "awaiting_plan_approval") {
+  const canRetryFailedRun = response.data.kind === "retry" && view.run.status === "failed_safe";
+  if (
+    view.run.status !== "awaiting_context" &&
+    view.run.status !== "awaiting_plan_approval" &&
+    !canRetryFailedRun
+  ) {
     throw new ResearchConversationServiceError("Ano is not currently waiting for a response in this conversation.");
   }
   let resume = response.data;
@@ -2054,7 +2066,7 @@ export async function resumeResearchConversation(session: WorkspaceSession, conv
     productContextText: formatProductSourcesForPrompt(fullSources),
     productSummary: fullSources[0]?.summaryText ?? null,
   };
-  if (!hasPostgresCheckpointerConfig()) {
+  if (resume.kind === "retry" || !hasPostgresCheckpointerConfig()) {
     return resumePhaseAFromStoredState(session, view, resume, intakeOptions);
   }
   return advance(session, view, new Command({ resume }), intakeOptions);

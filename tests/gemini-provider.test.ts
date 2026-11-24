@@ -5,6 +5,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 import {
   DEFAULT_GEMINI_BASE_URL,
+  DEFAULT_GEMINI_FALLBACK_MODELS,
   DEFAULT_GEMINI_MODEL,
   getActivePlannerConfig,
   getAnoAgentMode,
@@ -33,6 +34,7 @@ test("ANO_AGENT_MODE=gemini resolves token-conserving defaults and rejects missi
     process.env.ANO_AGENT_MODE = "gemini";
     delete process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_FALLBACK_MODELS;
     delete process.env.GEMINI_BASE_URL;
     delete process.env.GEMINI_THINKING_LEVEL;
     delete process.env.GEMINI_THINKING_BUDGET;
@@ -47,6 +49,7 @@ test("ANO_AGENT_MODE=gemini resolves token-conserving defaults and rejects missi
       provider: "gemini",
       apiKey: "test-gemini-key",
       modelId: DEFAULT_GEMINI_MODEL,
+      fallbackModelIds: [...DEFAULT_GEMINI_FALLBACK_MODELS],
       baseUrl: DEFAULT_GEMINI_BASE_URL,
     });
 
@@ -219,11 +222,12 @@ test("createGeminiChatModel uses header auth, skips thought parts, and drives Ph
   assert.equal(plan.plannedScope.markets[0], "Australia");
 });
 
-test("createGeminiChatModel surfaces 429, 401, and 404 errors immediately with zero retries and redacts API key", async () => {
+test("createGeminiChatModel surfaces sanitized 429, 401, and 404 errors immediately with zero retries and redacts API key", async () => {
   const geminiConfig = {
     provider: "gemini" as const,
     apiKey: "super-secret-gemini-key",
     modelId: "gemini-2.5-flash-lite",
+    fallbackModelIds: [] as string[],
     baseUrl: DEFAULT_GEMINI_BASE_URL,
   };
 
@@ -237,7 +241,11 @@ test("createGeminiChatModel surfaces 429, 401, and 404 errors immediately with z
 
   await assert.rejects(
     () => rateLimitModel.invoke([new SystemMessage("json"), new HumanMessage("hi")]),
-    (err: unknown) => err instanceof GeminiApiError && err.code === "RATE_LIMITED",
+    (err: unknown) =>
+      err instanceof GeminiApiError &&
+      err.code === "RATE_LIMITED" &&
+      !/google ai studio|gemini-|429/i.test(err.message) &&
+      (err.technicalDetail ?? "").includes("429"),
   );
   assert.equal(rateCalls, 1);
 
@@ -263,7 +271,8 @@ test("createGeminiChatModel surfaces 429, 401, and 404 errors immediately with z
     (err: unknown) =>
       err instanceof ResearchPlanningModelError &&
       err.fatal === true &&
-      !err.message.includes("super-secret-gemini-key"),
+      !err.message.includes("super-secret-gemini-key") &&
+      !/google ai studio|gemini-|401/i.test(err.message),
   );
 
   let notFoundCalls = 0;
@@ -286,17 +295,20 @@ test("createGeminiChatModel surfaces 429, 401, and 404 errors immediately with z
     (err: unknown) =>
       err instanceof GeminiApiError &&
       err.code === "MODEL_NOT_FOUND" &&
-      err.message.includes("no longer available to new users") &&
+      !/google ai studio|gemini-|404/i.test(err.message) &&
+      (err.technicalDetail ?? "").includes("no longer available to new users") &&
+      !(err.technicalDetail ?? "").includes("super-secret-gemini-key") &&
       !err.message.includes("super-secret-gemini-key"),
   );
   assert.equal(notFoundCalls, 1);
 });
 
-test("createGeminiChatModel retries once on transient HTTP 503 spikes and surfaces clear 503 error if persistent", async () => {
+test("createGeminiChatModel retries once on transient HTTP 503 spikes and surfaces sanitized error if persistent", async () => {
   const geminiConfig = {
     provider: "gemini" as const,
     apiKey: "test-503-key",
     modelId: "gemini-3.5-flash-lite",
+    fallbackModelIds: [] as string[],
     baseUrl: DEFAULT_GEMINI_BASE_URL,
   };
 
@@ -330,6 +342,7 @@ test("createGeminiChatModel retries once on transient HTTP 503 spikes and surfac
   let persistentCalls = 0;
   const persistent503Model = createGeminiChatModel(geminiConfig, {
     retryDelayMs: 0,
+    cooldownMs: 0,
     fetcher: async () => {
       persistentCalls += 1;
       return new Response(
@@ -344,29 +357,31 @@ test("createGeminiChatModel retries once on transient HTTP 503 spikes and surfac
     (err: unknown) =>
       err instanceof GeminiApiError &&
       err.code === "UNAVAILABLE" &&
-      err.message.includes("503"),
+      !/google ai studio|gemini-|503/i.test(err.message) &&
+      (err.technicalDetail ?? "").includes("503"),
   );
   assert.equal(persistentCalls, 2);
 });
 
-test("formatConversationChatError preserves safe LLM provider messages and hides unknown internal errors", () => {
+test("formatConversationChatError masks internal LLM vendor messages and preserves safe product errors", () => {
   const geminiErr = new GeminiApiError(
-    "Ano: Google AI Studio model \"gemini-2.5-flash-lite\" is unavailable: deprecated. Check GEMINI_MODEL.",
+    "Ano is experiencing brief high demand right now. Please try again in a moment.",
     "MODEL_NOT_FOUND",
+    "Google AI Studio model unavailable",
   );
   assert.equal(formatConversationChatError(geminiErr), geminiErr.message);
 
   const ollamaConnErr = new OllamaConnectionError("Ano could not reach Ollama at http://127.0.0.1:11434.");
-  assert.equal(formatConversationChatError(ollamaConnErr), ollamaConnErr.message);
+  assert.ok(!/ollama/i.test(formatConversationChatError(ollamaConnErr)));
 
   const ollamaModelErr = new OllamaModelNotFoundError("Ano: Ollama model \"foo\" is not installed.");
-  assert.equal(formatConversationChatError(ollamaModelErr), ollamaModelErr.message);
+  assert.ok(!/ollama/i.test(formatConversationChatError(ollamaModelErr)));
 
-  const serviceErr = new ResearchConversationServiceError("Missing planner configuration.");
+  const serviceErr = new ResearchConversationServiceError("Add more detail about what you sell.");
   assert.equal(formatConversationChatError(serviceErr), serviceErr.message);
 
   assert.equal(
     formatConversationChatError(new Error("raw stack or internal db message")),
-    "Ano's conversational model could not respond right now. Check your configured model and try again.",
+    "Ano could not respond right now. Please try again in a moment.",
   );
 });

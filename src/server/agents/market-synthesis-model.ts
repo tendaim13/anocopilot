@@ -13,7 +13,7 @@ import {
   OllamaConnectionError,
   OllamaModelNotFoundError,
 } from "@/server/agents/ollama-chat-model";
-import { GeminiApiError } from "@/server/agents/gemini-chat-model";
+import { GeminiApiError, sanitizeLlmErrorForUser } from "@/server/agents/gemini-chat-model";
 import { extractJsonCandidate, invokeBedrockPrompt } from "@/server/agents/research-planning-model";
 
 export type SynthesisSource = {
@@ -255,14 +255,28 @@ export function normaliseSynthesisDraft(value: unknown, sources: SynthesisSource
 
 function modelError(error: unknown) {
   const name = error instanceof Error ? error.name : "";
-  const reason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : "Unknown LLM response error";
-  if (name === "OllamaConnectionError" || name === "OllamaModelNotFoundError") {
-    return new MarketSynthesisModelError(error instanceof Error ? error.message : reason, reason);
+  const rawReason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : "Unknown LLM response error";
+  if (
+    error instanceof GeminiApiError ||
+    name === "OllamaConnectionError" ||
+    name === "OllamaModelNotFoundError"
+  ) {
+    const technicalReason =
+      error instanceof GeminiApiError && error.technicalDetail
+        ? `${error.name}: ${error.technicalDetail}`.slice(0, 600)
+        : rawReason;
+    return new MarketSynthesisModelError(sanitizeLlmErrorForUser(error), technicalReason);
   }
-  if (name === "CredentialsProviderError") return new MarketSynthesisModelError("Ano’s server cannot access Bedrock with the configured AWS credentials.", reason);
-  if (name === "AccessDeniedException" || name === "UnauthorizedException") return new MarketSynthesisModelError("Ano’s AWS identity cannot invoke the configured Bedrock model or guardrail.", reason);
-  if (name === "ResourceNotFoundException" || name === "ValidationException") return new MarketSynthesisModelError("Ano’s configured Bedrock model or guardrail is unavailable in this AWS region.", reason);
-  return new MarketSynthesisModelError("Ano could not create a citation-bound market synthesis. No provider or sales action was attempted.", reason);
+  if (
+    name === "CredentialsProviderError" ||
+    name === "AccessDeniedException" ||
+    name === "UnauthorizedException" ||
+    name === "ResourceNotFoundException" ||
+    name === "ValidationException"
+  ) {
+    return new MarketSynthesisModelError(sanitizeLlmErrorForUser(error), rawReason);
+  }
+  return new MarketSynthesisModelError("Ano could not finish analyzing the market evidence. Please try again.", rawReason);
 }
 
 function prompt(brief: ResearchBrief, plan: ResearchPlan, sources: SynthesisSource[], compactAliases: boolean) {

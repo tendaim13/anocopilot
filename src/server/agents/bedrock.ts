@@ -17,6 +17,11 @@ import {
 
 export type AnoAgentMode = "disabled" | "bedrock" | "ollama" | "gemini";
 export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
+export const DEFAULT_GEMINI_FALLBACK_MODELS = [
+  "gemini-3.1-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-2.5-flash-lite",
+] as const;
 export const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 export { BedrockAdapterError } from "@/server/agents/bedrock-contracts";
@@ -84,6 +89,37 @@ export function getOllamaPlannerConfig(): OllamaPlannerConfig {
   };
 }
 
+export function resolveGeminiFallbackModels(
+  primaryModelId: string,
+  rawFallbackEnv: string | undefined = process.env.GEMINI_FALLBACK_MODELS,
+): string[] {
+  const trimmed = rawFallbackEnv?.trim();
+  if (trimmed && /^(?:none|off|false)$/i.test(trimmed)) {
+    return [];
+  }
+
+  const candidates = trimmed
+    ? trimmed
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [...DEFAULT_GEMINI_FALLBACK_MODELS];
+
+  const primaryLower = primaryModelId.trim().toLowerCase();
+  const seen = new Set<string>([primaryLower]);
+  const resolved: string[] = [];
+
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      resolved.push(candidate);
+    }
+  }
+
+  return resolved;
+}
+
 export function getGeminiPlannerConfig(): GeminiPlannerConfig {
   const apiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
   if (!apiKey) {
@@ -93,6 +129,7 @@ export function getGeminiPlannerConfig(): GeminiPlannerConfig {
   }
 
   const modelId = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+  const fallbackModelIds = resolveGeminiFallbackModels(modelId);
   const rawBaseUrl = process.env.GEMINI_BASE_URL?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = rawBaseUrl.replace(/\/+$/, "");
 
@@ -115,10 +152,23 @@ export function getGeminiPlannerConfig(): GeminiPlannerConfig {
     provider: "gemini",
     apiKey,
     modelId,
+    fallbackModelIds,
     baseUrl,
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(parsedBudget !== undefined ? { thinkingBudget: parsedBudget } : {}),
   };
+}
+
+export function getFallbackBedrockPlannerConfig(): BedrockPlannerConfig | null {
+  const fallbackMode = process.env.ANO_FALLBACK_AGENT_MODE?.trim().toLowerCase();
+  if (fallbackMode !== "bedrock") {
+    return null;
+  }
+  try {
+    return getBedrockPlannerConfig();
+  } catch {
+    return null;
+  }
 }
 
 export function getActivePlannerConfig(): LlmPlannerConfig {

@@ -5,6 +5,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { ResearchBrief, ResearchInterpretation, ResearchPlanDraft } from "@/lib/ano/research-conversation";
 import { interpretationSchema, researchPlanDraftSchema } from "@/lib/ano/research-conversation";
 import type { InvokableChatModel, LlmPlannerConfig } from "@/server/agents/bedrock-contracts";
+import { sanitizeLlmErrorForUser } from "@/server/agents/gemini-chat-model";
 import { createPlannerChatModel } from "@/server/agents/ollama-chat-model";
 
 export type ResearchPlanningMessage = {
@@ -59,12 +60,20 @@ function isUnsupportedSystemMessageError(error: unknown): boolean {
 
 function modelError(error: unknown, fallback: string): ResearchPlanningModelError {
   const name = error instanceof Error ? error.name : "";
-  const reason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : "Unknown model adapter error";
-  if (
-    name === "OllamaConnectionError" ||
-    name === "OllamaModelNotFoundError" ||
-    name === "GeminiApiError"
-  ) {
+  const technicalDetail =
+    error instanceof Error &&
+    "technicalDetail" in error &&
+    typeof error.technicalDetail === "string" &&
+    error.technicalDetail
+      ? `${error.name}: ${error.technicalDetail}`.slice(0, 600)
+      : undefined;
+  const reason =
+    technicalDetail ??
+    (error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : "Unknown model adapter error");
+  if (name === "GeminiApiError") {
+    return new ResearchPlanningModelError(sanitizeLlmErrorForUser(error), reason, true);
+  }
+  if (name === "OllamaConnectionError" || name === "OllamaModelNotFoundError") {
     return new ResearchPlanningModelError(error instanceof Error ? error.message : fallback, reason, true);
   }
   if (name === "CredentialsProviderError") {

@@ -198,7 +198,15 @@ export const planResumeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("edit"), instruction: z.string().trim().min(1).max(2_000), messageId: z.string().uuid() }),
 ]);
 
-export const graphResumeSchema = z.union([clarificationResumeSchema, planResumeSchema]);
+export const retryResumeSchema = z.object({
+  kind: z.literal("retry"),
+});
+
+export const graphResumeSchema = z.union([
+  clarificationResumeSchema,
+  planResumeSchema,
+  retryResumeSchema,
+]);
 export type GraphResume = z.infer<typeof graphResumeSchema>;
 
 export const researchConversationSummarySchema = z.object({
@@ -464,4 +472,33 @@ export {
 
 export function conversationTitle(message: string) {
   return buildFriendlyConversationTitle({ openingMessage: message });
+}
+
+/**
+ * Normalizes backend/persisted error text into clean, branded product copy so
+ * upstream LLM vendor names, model IDs, API keys, or raw HTTP codes never
+ * surface in browser banners (including legacy persisted `failed_safe` rows).
+ */
+export function formatDisplayErrorMessage(
+  raw: string | null | undefined,
+  fallback = "Ano could not complete that step right now. Please try again.",
+): string {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) return fallback;
+
+  if (
+    /google ai studio|gemini-|bedrock|ollama|http\s*(?:503|429|404|401|403)|gemini_api_key|ano_agent_mode|aws identity|aws credentials|high demand|quota exceeded|rate limit|free-tier quota/i.test(
+      trimmed,
+    )
+  ) {
+    if (/\btimed?\s*out\b/i.test(trimmed)) {
+      return "Ano took longer than expected to respond. Please try again.";
+    }
+    if (/\b(?:503|429|high demand|rate limit|quota)\b/i.test(trimmed)) {
+      return "Ano is experiencing brief high demand right now. Please try again in a moment.";
+    }
+    return "Ano's research service is temporarily unavailable. Please try again shortly.";
+  }
+
+  return trimmed;
 }

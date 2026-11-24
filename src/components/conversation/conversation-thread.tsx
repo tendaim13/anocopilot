@@ -30,6 +30,7 @@ import type {
   PersonDiscoveryProvider,
 } from "@/lib/ano/people-playbooks";
 import {
+  formatDisplayErrorMessage,
   sortChronologicalThreadEntries,
   type ResearchConversationView,
 } from "@/lib/ano/research-conversation";
@@ -168,6 +169,8 @@ export interface ConversationThreadProps {
   onStartNewResearch: () => void;
   onPauseAutopilot?: () => void;
   onResumeAutopilot?: () => void;
+  onRetry?: () => void;
+  onDismissError?: () => void;
 }
 
 type TimelineRenderEntry = {
@@ -227,6 +230,8 @@ export function ConversationThread({
   onStartNewResearch,
   onPauseAutopilot,
   onResumeAutopilot,
+  onRetry,
+  onDismissError,
 }: ConversationThreadProps) {
   useMaterialWeb();
   const [confirmDeclineOpen, setConfirmDeclineOpen] = useState(false);
@@ -1024,18 +1029,6 @@ export function ConversationThread({
         </section>
       )}
 
-      {conversation?.run.status === "failed_safe" && (
-        <div className="m3-alert-banner is-warning" role="status">
-          <div>
-            <strong>Ano paused safely</strong>
-            <p>
-              {conversation.run.failureMessage ??
-                "No external research, provider, or sales action was attempted."}
-            </p>
-          </div>
-        </div>
-      )}
-
       {pendingUserMessage && (
         <ConversationMessage role="user" text={pendingUserMessage} optimistic />
       )}
@@ -1048,13 +1041,44 @@ export function ConversationThread({
         />
       )}
 
-      {error && (
+      {error ? (
         <div ref={errorBannerRef} className="m3-alert-banner is-error" role="alert">
           <div>
             <strong>Action could not continue</strong>
-            <p>{error}</p>
+            <p>{formatDisplayErrorMessage(error)}</p>
+          </div>
+          <div className="m3-action-row">
+            {onRetry && (
+              <MaterialButton variant="filled" disabled={isWorking} onClick={onRetry}>
+                {isWorking ? "Retrying…" : "Retry"}
+              </MaterialButton>
+            )}
+            {onDismissError && (
+              <MaterialButton variant="text" disabled={isWorking} onClick={onDismissError}>
+                Dismiss
+              </MaterialButton>
+            )}
           </div>
         </div>
+      ) : (
+        conversation?.run.status === "failed_safe" && (
+          <div className="m3-alert-banner is-warning" role="status">
+            <div>
+              <strong>Ano paused</strong>
+              <p>
+                {formatDisplayErrorMessage(
+                  conversation.run.failureMessage,
+                  "Ano could not complete this step right now. Please try again.",
+                )}
+              </p>
+            </div>
+            {onRetry && (
+              <MaterialButton variant="filled" disabled={isWorking} onClick={onRetry}>
+                {isWorking ? "Retrying…" : "Retry"}
+              </MaterialButton>
+            )}
+          </div>
+        )
       )}
 
       <div ref={bottomAnchorRef} />

@@ -18,6 +18,7 @@ export type GeminiPlannerConfig = {
   provider: "gemini";
   apiKey: string;
   modelId: string;
+  fallbackModelIds?: string[];
   baseUrl: string;
   thinkingBudget?: number;
   thinkingLevel?: GeminiThinkingLevel;

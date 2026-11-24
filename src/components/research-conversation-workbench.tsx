@@ -80,6 +80,7 @@ export function ResearchConversationWorkbench({
   const [marketChoice, setMarketChoice] = useState("");
   const [industryChoice, setIndustryChoice] = useState("");
   const autoStartedConversationRef = useRef<string | null>(null);
+  const lastRetryActionRef = useRef<(() => Promise<void>) | null>(null);
 
   async function loadResearch(targetConversationId: string) {
     try {
@@ -183,6 +184,7 @@ export function ResearchConversationWorkbench({
     setTemplatePack(null);
     setAutopilotRun(null);
     autoStartedConversationRef.current = null;
+    lastRetryActionRef.current = null;
     setPendingUserMessage(null);
     setError(null);
     setDraft("");
@@ -447,6 +449,7 @@ export function ResearchConversationWorkbench({
           const payload = await response.json().catch(() => ({}));
           if (cancelled) return;
           if (!response.ok) {
+            lastRetryActionRef.current = () => resumeAutopilot();
             setError(errorText(payload, "Ano paused the autonomous pipeline cleanly."));
             return;
           }
@@ -582,6 +585,7 @@ export function ResearchConversationWorkbench({
       }
       setPendingUserMessage(null);
       setConversation(created);
+      lastRetryActionRef.current = null;
       if (created.brief?.intakeComplete && created.plan?.approvalStatus === "approved") {
         autoStartedConversationRef.current = created.conversation.id;
         await startAutopilot(created.conversation.id);
@@ -595,6 +599,7 @@ export function ResearchConversationWorkbench({
       setDraft(input.message);
       setPendingFiles(input.files);
       setPendingUrls(input.urls);
+      lastRetryActionRef.current = () => start(input);
       setError(
         requestError instanceof Error
           ? requestError.message
@@ -714,10 +719,12 @@ export function ResearchConversationWorkbench({
       if ("autopilotRun" in payload) {
         setAutopilotRun((payload.autopilotRun ?? null) as AutopilotRunView | null);
       }
+      lastRetryActionRef.current = null;
       if (embeddedInShell) void refreshShellConversations?.();
     } catch (requestError) {
       setPendingUserMessage(null);
       setDraft(messageText);
+      lastRetryActionRef.current = () => sendFollowUp(messageText);
       setError(
         requestError instanceof Error
           ? requestError.message
@@ -743,6 +750,7 @@ export function ResearchConversationWorkbench({
       );
       setPendingUserMessage(null);
       setConversation(next);
+      lastRetryActionRef.current = null;
       if (
         next.brief?.intakeComplete &&
         next.plan?.approvalStatus === "approved" &&
@@ -755,6 +763,7 @@ export function ResearchConversationWorkbench({
     } catch (requestError) {
       setPendingUserMessage(null);
       if (optimisticText) setDraft(optimisticText);
+      lastRetryActionRef.current = () => resume(body, optimisticText);
       setError(
         requestError instanceof Error
           ? requestError.message
@@ -762,6 +771,22 @@ export function ResearchConversationWorkbench({
       );
     } finally {
       setIsWorking(false);
+    }
+  }
+
+  async function handleRetry() {
+    setError(null);
+    const pendingRetry = lastRetryActionRef.current;
+    if (pendingRetry) {
+      await pendingRetry();
+      return;
+    }
+    if (autopilotRun?.status === "failed" || autopilotRun?.status === "paused") {
+      await resumeAutopilot();
+      return;
+    }
+    if (conversation?.run.status === "failed_safe") {
+      await resume({ kind: "retry" });
     }
   }
 
@@ -1266,6 +1291,7 @@ export function ResearchConversationWorkbench({
     setTemplatePack(null);
     setAutopilotRun(null);
     autoStartedConversationRef.current = null;
+    lastRetryActionRef.current = null;
     setPendingUserMessage(null);
     setDraft("");
     setPendingFiles([]);
@@ -1300,6 +1326,8 @@ export function ResearchConversationWorkbench({
           isWorking={isWorking}
           onPauseAutopilot={() => void pauseAutopilot()}
           onResumeAutopilot={() => void resumeAutopilot()}
+          onRetry={() => void handleRetry()}
+          onDismissError={() => setError(null)}
           selectedMarketId={activeMarketId}
           selectedIndustryId={activeIndustryId}
           onSelectStarterPrompt={(prompt) => setDraft(prompt)}

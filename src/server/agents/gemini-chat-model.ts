@@ -10,7 +10,15 @@ import type {
 import { recordInternalApiUsage } from "@/server/telemetry/internal-api-usage";
 
 const DEFAULT_GEMINI_TIMEOUT_MS = 60_000;
-const DEFAULT_GEMINI_503_RETRY_DELAY_MS = 600;
+const DEFAULT_GEMINI_503_RETRY_DELAY_MS = 900;
+const DEFAULT_GEMINI_COOLDOWN_MS = 60_000;
+
+export const USER_HIGH_DEMAND_LLM_MESSAGE =
+  "Ano is experiencing brief high demand right now. Please try again in a moment.";
+export const USER_TIMEOUT_LLM_MESSAGE =
+  "Ano took longer than expected to respond. Please try again.";
+export const USER_UNAVAILABLE_LLM_MESSAGE =
+  "Ano's research service is temporarily unavailable. Please try again shortly.";
 
 export type GeminiApiErrorCode =
   | "AUTH_FAILED"
@@ -23,10 +31,106 @@ export class GeminiApiError extends Error {
   constructor(
     message: string,
     readonly code: GeminiApiErrorCode = "UNAVAILABLE",
+    readonly technicalDetail?: string,
   ) {
     super(message);
     this.name = "GeminiApiError";
   }
+}
+
+const modelCooldownUntil = new Map<string, number>();
+
+export function resetGeminiModelCooldowns(): void {
+  modelCooldownUntil.clear();
+}
+
+export function isGeminiModelCoolingDown(
+  modelId: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const until = modelCooldownUntil.get(modelId);
+  if (until === undefined) return false;
+  if (nowMs >= until) {
+    modelCooldownUntil.delete(modelId);
+    return false;
+  }
+  return true;
+}
+
+function markModelCoolingDown(
+  modelId: string,
+  cooldownMs: number,
+  nowMs: number,
+): void {
+  if (cooldownMs <= 0) return;
+  modelCooldownUntil.set(modelId, nowMs + cooldownMs);
+}
+
+function clearModelCooldown(modelId: string): void {
+  modelCooldownUntil.delete(modelId);
+}
+
+export function userMessageForGeminiCode(code: GeminiApiErrorCode): string {
+  switch (code) {
+    case "TIMEOUT":
+      return USER_TIMEOUT_LLM_MESSAGE;
+    case "RATE_LIMITED":
+    case "UNAVAILABLE":
+      return USER_HIGH_DEMAND_LLM_MESSAGE;
+    case "AUTH_FAILED":
+    case "MODEL_NOT_FOUND":
+      return USER_UNAVAILABLE_LLM_MESSAGE;
+  }
+}
+
+export function isTransientLlmError(error: unknown): boolean {
+  if (error instanceof GeminiApiError) {
+    return (
+      error.code === "UNAVAILABLE" ||
+      error.code === "RATE_LIMITED" ||
+      error.code === "TIMEOUT" ||
+      error.code === "MODEL_NOT_FOUND"
+    );
+  }
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  return /\b(?:503|429|timeout|timed out|high demand|temporarily unavailable|rate limit)\b/i.test(
+    msg,
+  );
+}
+
+export function sanitizeLlmErrorForUser(error: unknown): string {
+  if (error instanceof GeminiApiError) {
+    return error.message;
+  }
+  const name = error instanceof Error ? error.name : "";
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+
+  if (
+    name === "OllamaConnectionError" ||
+    name === "OllamaModelNotFoundError" ||
+    name === "BedrockAdapterError" ||
+    name === "BedrockConfigurationError"
+  ) {
+    return /\b(?:timeout|timed out)\b/i.test(msg)
+      ? USER_TIMEOUT_LLM_MESSAGE
+      : USER_UNAVAILABLE_LLM_MESSAGE;
+  }
+
+  if (
+    /google ai studio|gemini-|bedrock|ollama|http\s*(?:503|429|404|401|403)|gemini_api_key|ano_agent_mode|aws credentials|high demand|quota exceeded|rate limit/i.test(
+      msg,
+    )
+  ) {
+    if (/\btimed?\s*out\b/i.test(msg)) {
+      return USER_TIMEOUT_LLM_MESSAGE;
+    }
+    if (/\b(?:503|429|high demand|rate limit|quota)\b/i.test(msg)) {
+      return USER_HIGH_DEMAND_LLM_MESSAGE;
+    }
+    return USER_UNAVAILABLE_LLM_MESSAGE;
+  }
+
+  return msg.trim() || USER_UNAVAILABLE_LLM_MESSAGE;
 }
 
 export function resolveGeminiThinkingConfig(
@@ -112,10 +216,81 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function computeJitteredBackoff(baseDelayMs: number, retryIndex: number): number {
+  if (baseDelayMs <= 0) return 0;
+  const raw = baseDelayMs * Math.pow(2, retryIndex);
+  const jittered = Math.round(raw * (0.85 + Math.random() * 0.3));
+  return Math.min(jittered, 4_000);
+}
+
+function buildOrderedCandidateModels(
+  primaryModelId: string,
+  fallbackModelIds: readonly string[],
+  nowMs: number,
+): string[] {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const id of [primaryModelId, ...fallbackModelIds]) {
+    const trimmed = id.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(trimmed);
+    }
+  }
+
+  const healthy: string[] = [];
+  const cooling: Array<{ modelId: string; until: number }> = [];
+  for (const modelId of unique) {
+    if (isGeminiModelCoolingDown(modelId, nowMs)) {
+      cooling.push({ modelId, until: modelCooldownUntil.get(modelId) ?? nowMs });
+    } else {
+      healthy.push(modelId);
+    }
+  }
+  cooling.sort((left, right) => left.until - right.until);
+  return [...healthy, ...cooling.map((item) => item.modelId)];
+}
+
+function buildPayloadForModel(
+  modelId: string,
+  config: GeminiPlannerConfig,
+  contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>,
+  systemTexts: string[],
+  maxOutputTokens: number,
+): string {
+  const isPrimary = modelId.toLowerCase() === config.modelId.toLowerCase();
+  const thinkingConfig = isPrimary
+    ? resolveGeminiThinkingConfig(config)
+    : resolveGeminiThinkingConfig({ modelId });
+
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0,
+    maxOutputTokens,
+    responseMimeType: "application/json",
+  };
+  if (thinkingConfig) {
+    generationConfig.thinkingConfig = thinkingConfig;
+  }
+
+  const bodyPayload: Record<string, unknown> = {
+    contents,
+    generationConfig,
+  };
+  if (systemTexts.length > 0 && contents.some((c) => c.role === "user")) {
+    bodyPayload.systemInstruction = {
+      parts: [{ text: systemTexts.join("\n\n") }],
+    };
+  }
+  return JSON.stringify(bodyPayload);
+}
+
 /**
- * Lightweight, token-conserving Google AI Studio REST adapter implementing Ano's
+ * Lightweight, resilient Google AI Studio REST adapter implementing Ano's
  * `InvokableChatModel` contract via header authentication (`x-goog-api-key`),
- * zero retries on quota/auth/404 errors, and at most one bounded retry on transient 503 spikes.
+ * jittered exponential backoff, multi-model failover, and congestion cooldown
+ * while masking internal model/status errors from public responses.
  */
 export function createGeminiChatModel(
   config: GeminiPlannerConfig,
@@ -123,15 +298,18 @@ export function createGeminiChatModel(
     maxTokens?: number;
     timeoutMs?: number;
     retryDelayMs?: number;
+    cooldownMs?: number;
+    now?: () => number;
     fetcher?: typeof fetch;
   } = {},
 ): InvokableChatModel {
   const maxOutputTokens = Math.min(Math.max(options.maxTokens ?? 1_200, 128), 4_096);
   const timeoutMs = options.timeoutMs ?? DEFAULT_GEMINI_TIMEOUT_MS;
   const retryDelayMs = Math.max(0, options.retryDelayMs ?? DEFAULT_GEMINI_503_RETRY_DELAY_MS);
+  const cooldownMs = Math.max(0, options.cooldownMs ?? DEFAULT_GEMINI_COOLDOWN_MS);
+  const now = options.now ?? (() => Date.now());
   const fetcher = options.fetcher ?? fetch;
-  const endpoint = `${config.baseUrl.replace(/\/+$/, "")}/models/${encodeURIComponent(config.modelId)}:generateContent`;
-  const thinkingConfig = resolveGeminiThinkingConfig(config);
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
 
   return {
     async invoke(messages: BaseMessage[]) {
@@ -156,150 +334,215 @@ export function createGeminiChatModel(
         });
       }
 
+      const candidateModels = buildOrderedCandidateModels(
+        config.modelId,
+        config.fallbackModelIds ?? [],
+        now(),
+      );
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const startedAt = Date.now();
-      let attempts = 0;
+      let totalAttempts = 0;
       let lastHttpStatus: number | undefined;
+      let lastError: GeminiApiError | null = null;
+      const modelsAttempted: string[] = [];
 
       try {
-        const generationConfig: Record<string, unknown> = {
-          temperature: 0,
-          maxOutputTokens,
-          responseMimeType: "application/json",
-        };
-        if (thinkingConfig) {
-          generationConfig.thinkingConfig = thinkingConfig;
-        }
+        for (const modelId of candidateModels) {
+          if (controller.signal.aborted) {
+            lastError = new GeminiApiError(
+              USER_TIMEOUT_LLM_MESSAGE,
+              "TIMEOUT",
+              `Gemini request timed out before trying ${modelId} (${Math.round(timeoutMs / 1000)}s).`,
+            );
+            break;
+          }
 
-        const bodyPayload: Record<string, unknown> = {
-          contents,
-          generationConfig,
-        };
-        if (systemTexts.length > 0 && contents.some((c) => c.role === "user")) {
-          bodyPayload.systemInstruction = {
-            parts: [{ text: systemTexts.join("\n\n") }],
-          };
-        }
-        const serializedBody = JSON.stringify(bodyPayload);
+          modelsAttempted.push(modelId);
+          const endpoint = `${baseUrl}/models/${encodeURIComponent(modelId)}:generateContent`;
+          const serializedBody = buildPayloadForModel(
+            modelId,
+            config,
+            contents,
+            systemTexts,
+            maxOutputTokens,
+          );
 
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          attempts = attempt + 1;
-          const response = await fetcher(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": config.apiKey,
-            },
-            signal: controller.signal,
-            body: serializedBody,
-          });
-          lastHttpStatus = response.status;
-
-          const rawBody = await response.text().catch(() => "");
-
-          if (!response.ok) {
-            if (response.status === 503 && attempt === 0) {
-              await sleepWithAbort(retryDelayMs, controller.signal);
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            totalAttempts += 1;
+            let response: Response;
+            try {
+              response = await fetcher(endpoint, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "x-goog-api-key": config.apiKey,
+                },
+                signal: controller.signal,
+                body: serializedBody,
+              });
+            } catch {
               if (controller.signal.aborted) {
-                throw new GeminiApiError(
-                  `Ano: Google AI Studio timed out after ${Math.round(timeoutMs / 1000)}s.`,
+                lastError = new GeminiApiError(
+                  USER_TIMEOUT_LLM_MESSAGE,
                   "TIMEOUT",
+                  `Gemini request to "${modelId}" timed out after ${Math.round(timeoutMs / 1000)}s.`,
+                );
+              } else {
+                markModelCoolingDown(modelId, cooldownMs, now());
+                lastError = new GeminiApiError(
+                  USER_UNAVAILABLE_LLM_MESSAGE,
+                  "UNAVAILABLE",
+                  `Network error reaching Google AI Studio model "${modelId}".`,
                 );
               }
-              continue;
+              break;
             }
-            if (response.status === 401 || response.status === 403) {
-              throw new GeminiApiError(
-                "Ano: Google AI Studio rejected GEMINI_API_KEY. Verify the server key in .env.local or Vercel.",
-                "AUTH_FAILED",
-              );
-            }
-            if (response.status === 429) {
-              throw new GeminiApiError(
-                "Ano: Google AI Studio rate limit or free-tier quota reached (HTTP 429). Wait briefly before retrying.",
-                "RATE_LIMITED",
-              );
-            }
-            if (response.status === 404) {
+
+            lastHttpStatus = response.status;
+            const rawBody = await response.text().catch(() => "");
+
+            if (!response.ok) {
               const detail = extractGeminiErrorDetail(rawBody, config.apiKey);
-              throw new GeminiApiError(
-                detail
-                  ? `Ano: Google AI Studio model "${config.modelId}" is unavailable: ${detail} Check GEMINI_MODEL.`
-                  : `Ano: Google AI Studio model "${config.modelId}" was not found. Check GEMINI_MODEL.`,
-                "MODEL_NOT_FOUND",
-              );
-            }
-            if (response.status === 503) {
-              throw new GeminiApiError(
-                `Ano: Google AI Studio model "${config.modelId}" is temporarily experiencing high demand (HTTP 503). Wait a moment and try again.`,
+
+              if (response.status === 401 || response.status === 403) {
+                throw new GeminiApiError(
+                  USER_UNAVAILABLE_LLM_MESSAGE,
+                  "AUTH_FAILED",
+                  `Google AI Studio rejected API key for "${modelId}" (HTTP ${response.status})${detail ? `: ${detail}` : ""}`,
+                );
+              }
+
+              if (response.status === 429) {
+                markModelCoolingDown(modelId, cooldownMs, now());
+                lastError = new GeminiApiError(
+                  USER_HIGH_DEMAND_LLM_MESSAGE,
+                  "RATE_LIMITED",
+                  `Google AI Studio rate limit / quota reached on "${modelId}" (HTTP 429)${detail ? `: ${detail}` : ""}`,
+                );
+                break;
+              }
+
+              if (response.status === 404) {
+                markModelCoolingDown(modelId, cooldownMs, now());
+                lastError = new GeminiApiError(
+                  USER_UNAVAILABLE_LLM_MESSAGE,
+                  "MODEL_NOT_FOUND",
+                  `Google AI Studio model "${modelId}" unavailable (HTTP 404)${detail ? `: ${detail}` : ""}`,
+                );
+                break;
+              }
+
+              if (
+                response.status === 503 ||
+                response.status === 500 ||
+                response.status === 502 ||
+                response.status === 504
+              ) {
+                lastError = new GeminiApiError(
+                  USER_HIGH_DEMAND_LLM_MESSAGE,
+                  "UNAVAILABLE",
+                  `Google AI Studio model "${modelId}" returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
+                );
+                if (attempt === 0) {
+                  const delayMs = computeJitteredBackoff(retryDelayMs, attempt);
+                  await sleepWithAbort(delayMs, controller.signal);
+                  if (controller.signal.aborted) {
+                    lastError = new GeminiApiError(
+                      USER_TIMEOUT_LLM_MESSAGE,
+                      "TIMEOUT",
+                      `Google AI Studio timed out while waiting to retry "${modelId}".`,
+                    );
+                    break;
+                  }
+                  continue;
+                }
+                markModelCoolingDown(modelId, cooldownMs, now());
+                break;
+              }
+
+              markModelCoolingDown(modelId, cooldownMs, now());
+              lastError = new GeminiApiError(
+                USER_UNAVAILABLE_LLM_MESSAGE,
                 "UNAVAILABLE",
+                `Google AI Studio model "${modelId}" returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
               );
+              break;
             }
-            const sanitizedBody = extractGeminiErrorDetail(rawBody, config.apiKey);
-            throw new GeminiApiError(
-              `Ano: Google AI Studio returned HTTP ${response.status}${sanitizedBody ? `: ${sanitizedBody}` : "."}`,
-              "UNAVAILABLE",
-            );
-          }
 
-          const parsed = JSON.parse(rawBody) as {
-            candidates?: Array<{
-              content?: { parts?: Array<{ text?: string; thought?: boolean }> };
-            }>;
-            promptFeedback?: { blockReason?: string };
-            usageMetadata?: {
-              promptTokenCount?: number;
-              candidatesTokenCount?: number;
-              thoughtsTokenCount?: number;
-              totalTokenCount?: number;
+            const parsed = JSON.parse(rawBody) as {
+              candidates?: Array<{
+                content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+              }>;
+              promptFeedback?: { blockReason?: string };
+              usageMetadata?: {
+                promptTokenCount?: number;
+                candidatesTokenCount?: number;
+                thoughtsTokenCount?: number;
+                totalTokenCount?: number;
+              };
             };
-          };
 
-          if (parsed.promptFeedback?.blockReason) {
-            throw new GeminiApiError(
-              `Ano: Google AI Studio blocked the prompt (${parsed.promptFeedback.blockReason}).`,
-              "UNAVAILABLE",
-            );
+            if (parsed.promptFeedback?.blockReason) {
+              lastError = new GeminiApiError(
+                USER_UNAVAILABLE_LLM_MESSAGE,
+                "UNAVAILABLE",
+                `Google AI Studio model "${modelId}" blocked prompt (${parsed.promptFeedback.blockReason}).`,
+              );
+              break;
+            }
+
+            const parts = parsed.candidates?.[0]?.content?.parts ?? [];
+            const text = parts
+              .filter((part) => part.thought !== true && typeof part.text === "string")
+              .map((part) => part.text ?? "")
+              .join("\n")
+              .trim();
+
+            if (!text) {
+              markModelCoolingDown(modelId, cooldownMs, now());
+              lastError = new GeminiApiError(
+                USER_UNAVAILABLE_LLM_MESSAGE,
+                "UNAVAILABLE",
+                `Google AI Studio model "${modelId}" returned empty output.`,
+              );
+              break;
+            }
+
+            clearModelCooldown(modelId);
+            const inputTokens = parsed.usageMetadata?.promptTokenCount ?? 0;
+            const outputTokens =
+              (parsed.usageMetadata?.candidatesTokenCount ?? 0) +
+              (parsed.usageMetadata?.thoughtsTokenCount ?? 0);
+            recordInternalApiUsage({
+              provider: "gemini",
+              operation: "generate_content",
+              modelOrEndpoint: modelId,
+              status: "success",
+              httpStatus: response.status,
+              requestCount: totalAttempts,
+              inputTokens,
+              outputTokens,
+              durationMs: Date.now() - startedAt,
+              metadata: {
+                attempts: totalAttempts,
+                primaryModel: config.modelId,
+                fallbackUsed: modelId.toLowerCase() !== config.modelId.toLowerCase(),
+                modelsAttempted,
+              },
+            });
+
+            return { content: text };
           }
-
-          const parts = parsed.candidates?.[0]?.content?.parts ?? [];
-          const text = parts
-            .filter((part) => part.thought !== true && typeof part.text === "string")
-            .map((part) => part.text ?? "")
-            .join("\n")
-            .trim();
-
-          if (!text) {
-            throw new GeminiApiError(
-              "Ano: Google AI Studio returned no output tokens.",
-              "UNAVAILABLE",
-            );
-          }
-
-          const inputTokens = parsed.usageMetadata?.promptTokenCount ?? 0;
-          const outputTokens =
-            (parsed.usageMetadata?.candidatesTokenCount ?? 0) +
-            (parsed.usageMetadata?.thoughtsTokenCount ?? 0);
-          recordInternalApiUsage({
-            provider: "gemini",
-            operation: "generate_content",
-            modelOrEndpoint: config.modelId,
-            status: "success",
-            httpStatus: response.status,
-            requestCount: attempts,
-            inputTokens,
-            outputTokens,
-            durationMs: Date.now() - startedAt,
-            metadata: { attempts },
-          });
-
-          return { content: text };
         }
 
-        throw new GeminiApiError(
-          `Ano: Google AI Studio model "${config.modelId}" could not respond.`,
-          "UNAVAILABLE",
+        throw (
+          lastError ??
+          new GeminiApiError(
+            USER_HIGH_DEMAND_LLM_MESSAGE,
+            "UNAVAILABLE",
+            `Google AI Studio exhausted candidate models: ${modelsAttempted.join(", ")}`,
+          )
         );
       } catch (error) {
         const mappedError =
@@ -307,18 +550,29 @@ export function createGeminiChatModel(
             ? error
             : controller.signal.aborted
               ? new GeminiApiError(
-                  `Ano: Google AI Studio timed out after ${Math.round(timeoutMs / 1000)}s.`,
+                  USER_TIMEOUT_LLM_MESSAGE,
                   "TIMEOUT",
+                  `Google AI Studio timed out after ${Math.round(timeoutMs / 1000)}s.`,
                 )
               : new GeminiApiError(
-                  "Ano could not reach Google AI Studio. Check network connectivity and GEMINI_BASE_URL.",
+                  USER_UNAVAILABLE_LLM_MESSAGE,
                   "UNAVAILABLE",
+                  "Could not reach Google AI Studio. Check network connectivity and GEMINI_BASE_URL.",
                 );
+
+        console.error("[ano:llm] Gemini request failed", {
+          code: mappedError.code,
+          primaryModel: config.modelId,
+          modelsAttempted,
+          attempts: Math.max(1, totalAttempts),
+          httpStatus: lastHttpStatus ?? null,
+          detail: mappedError.technicalDetail ?? mappedError.message,
+        });
 
         recordInternalApiUsage({
           provider: "gemini",
           operation: "generate_content",
-          modelOrEndpoint: config.modelId,
+          modelOrEndpoint: modelsAttempted.at(-1) ?? config.modelId,
           status:
             mappedError.code === "RATE_LIMITED"
               ? "rate_limited"
@@ -326,9 +580,14 @@ export function createGeminiChatModel(
                 ? "timeout"
                 : "error",
           httpStatus: lastHttpStatus ?? null,
-          requestCount: Math.max(1, attempts),
+          requestCount: Math.max(1, totalAttempts),
           durationMs: Date.now() - startedAt,
-          metadata: { attempts, errorCode: mappedError.code },
+          metadata: {
+            attempts: Math.max(1, totalAttempts),
+            errorCode: mappedError.code,
+            primaryModel: config.modelId,
+            modelsAttempted,
+          },
         });
 
         throw mappedError;

@@ -9,7 +9,7 @@ import {
   OllamaConnectionError,
   OllamaModelNotFoundError,
 } from "@/server/agents/ollama-chat-model";
-import { GeminiApiError } from "@/server/agents/gemini-chat-model";
+import { GeminiApiError, sanitizeLlmErrorForUser } from "@/server/agents/gemini-chat-model";
 import {
   extractJsonCandidate,
   invokeBedrockPrompt,
@@ -282,7 +282,11 @@ export function createIterativeResearchPlanner(config: LlmPlannerConfig) {
           error instanceof OllamaModelNotFoundError ||
           error instanceof GeminiApiError
         ) {
-          throw new IterativeResearchPlannerError(error.message, `${error.name}: ${error.message}`.slice(0, 600));
+          const detail =
+            error instanceof GeminiApiError && error.technicalDetail
+              ? `${error.name}: ${error.technicalDetail}`.slice(0, 600)
+              : `${error.name}: ${error.message}`.slice(0, 600);
+          throw new IterativeResearchPlannerError(sanitizeLlmErrorForUser(error), detail);
         }
         reason = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 600) : reason;
       }
