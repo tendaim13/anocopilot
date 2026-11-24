@@ -3,6 +3,7 @@ import "server-only";
 import type { StateSnapshot } from "@langchain/langgraph";
 
 import type { WorkspaceSession } from "@/contracts/ano";
+import { isOpenMarketRecommendationIntent } from "@/lib/ano/autopilot";
 import type {
   Clarification,
   ConversationMessage,
@@ -1059,13 +1060,16 @@ function assistantMessage(state: ResearchGraphStateValue, graphRunId: string) {
   if (state.plan?.approvalStatus === "approved") {
     if (state.brief?.intakeComplete) {
       const loc = state.brief.businessLocation ?? "your business location";
-      const markets = state.brief.targetMarkets?.length
-        ? state.brief.targetMarkets.join(", ")
-        : "recommended best target markets";
+      const rawMarkets = state.brief.targetMarkets ?? [];
+      const openRecommendation =
+        rawMarkets.length === 0 ||
+        rawMarkets.every((item) => isOpenMarketRecommendationIntent(item));
       return {
         dedupeKey: `plan-approved:${graphRunId}:${state.plan.version}`,
         type: "decision",
-        text: `Understood — your business is in ${loc}, selling to ${markets}. Your product brief is ready.`,
+        text: openRecommendation
+          ? `Understood — your business is in ${loc}, and I'll recommend the best target market based on research. Your product brief is ready.`
+          : `Understood — your business is in ${loc}, selling to ${rawMarkets.join(", ")}. Your product brief is ready.`,
       };
     }
     return { dedupeKey: `plan-approved:${graphRunId}:${state.plan.version}`, type: "decision", text: "Research plan approved. Research itself remains locked until Phase B." };

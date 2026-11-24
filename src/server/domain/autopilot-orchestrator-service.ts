@@ -3,6 +3,7 @@ import "server-only";
 import type { WorkspaceSession } from "@/contracts/ano";
 import {
   buildAutopilotExecutiveSummaryMarkdown,
+  isOpenMarketRecommendationIntent,
   rankAccountsForAutopilotShortlist,
   selectAutopilotTargetRoute,
   selectPriorityContactsForWaterfall,
@@ -11,6 +12,7 @@ import {
   type AutopilotStageSummary,
 } from "@/lib/ano/autopilot";
 import {
+  deriveOsmTagFilters,
   deriveSearchKeywords,
   recommendDiscoveryProvider,
   type CompanySearchView,
@@ -425,7 +427,12 @@ async function runStageBriefAndPlan(
   }
 
   const businessLocation = updated.brief?.businessLocation ?? "Unspecified";
-  const targets = updated.brief?.targetMarkets?.join(", ") || "Recommended best market";
+  const rawTargets = updated.brief?.targetMarkets ?? [];
+  const targets =
+    rawTargets.length === 0 ||
+    rawTargets.every((item) => isOpenMarketRecommendationIntent(item))
+      ? "the strongest recommended market"
+      : rawTargets.join(", ");
 
   return {
     stage: "brief_and_plan",
@@ -666,6 +673,9 @@ async function runStageCompanyDiscovery(
     const keywords = lockedIndustry
       ? deriveSearchKeywords(lockedIndustry, conversation.brief)
       : [];
+    const osmTags = lockedIndustry
+      ? deriveOsmTagFilters(lockedIndustry.name, keywords)
+      : [];
     const primaryProvider = recommendDiscoveryProvider(
       lockedIndustry?.name ?? "",
       keywords,
@@ -673,7 +683,9 @@ async function runStageCompanyDiscovery(
     const providerOrder: Array<"openstreetmap" | "prospeo"> =
       primaryProvider === "openstreetmap"
         ? ["openstreetmap", "prospeo"]
-        : ["prospeo", "openstreetmap"];
+        : osmTags.length > 0
+          ? ["prospeo", "openstreetmap"]
+          : ["prospeo"];
 
     for (const provider of providerOrder) {
       if (companySearch && companySearch.accounts.length > 0) break;

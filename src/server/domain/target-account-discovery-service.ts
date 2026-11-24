@@ -22,6 +22,7 @@ import {
   suggestProspeoLocations,
 } from "@/server/connectors/prospeo/prospeo-client";
 import {
+  buildLocationQueryCandidates,
   CompanyDiscoveryBoundaryError,
   normalizeLocationQuery,
   selectCanonicalLocation,
@@ -125,9 +126,15 @@ export async function prepareCompanySearchPreviewForConversation(
         try {
           return await Promise.all(
             locations.map(async (location) => {
-              const normalizedLocation = normalizeLocationQuery(location);
-              const suggestions = await suggestProspeoLocations(normalizedLocation);
-              const canonical = selectCanonicalLocation(normalizedLocation, suggestions);
+              const candidates = buildLocationQueryCandidates(location);
+              let canonical: string | undefined;
+
+              for (const candidate of candidates) {
+                const suggestions = await suggestProspeoLocations(candidate);
+                canonical = selectCanonicalLocation(candidate, suggestions);
+                if (canonical) break;
+              }
+
               if (!canonical) {
                 throw new CompanyDiscoveryBoundaryError(
                   `Could not verify "${location}" as a geographic location. Enter a country, state, or city (for example, Australia, United Kingdom, or United States).`,

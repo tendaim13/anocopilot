@@ -15,6 +15,7 @@ import {
 } from "@/server/agents/ollama-chat-model";
 import { GeminiApiError, sanitizeLlmErrorForUser } from "@/server/agents/gemini-chat-model";
 import { extractJsonCandidate, invokeBedrockPrompt } from "@/server/agents/research-planning-model";
+import { normalizeLocationQuery } from "@/server/domain/prospeo-company-discovery";
 
 export type SynthesisSource = {
   id: string;
@@ -157,9 +158,11 @@ function preNormalizeSynthesisShape(value: unknown, sources: SynthesisSource[]) 
     }),
     markets: rawMarkets.map((item, idx) => {
       const m = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      const rawName = typeof m.name === "string" ? m.name.trim().slice(0, 140) : "";
+      const cleanedName = rawName ? normalizeLocationQuery(rawName).slice(0, 140) || rawName : "";
       return {
         id: typeof m.id === "string" && m.id.trim() ? m.id.trim() : `market-${idx + 1}`,
-        name: typeof m.name === "string" ? m.name.trim().slice(0, 140) : "",
+        name: cleanedName,
         summary: typeof m.summary === "string" ? m.summary.trim().slice(0, 700) : "",
         evidenceStrength: mapEnum(m.evidenceStrength, ["strong", "moderate", "limited", "insufficient"] as const, "limited"),
         claimIds: trimStringList(m.claimIds, 8, 120),
@@ -296,6 +299,7 @@ function prompt(brief: ResearchBrief, plan: ResearchPlan, sources: SynthesisSour
     "An observation describes only what a cited source says about the target. A comparable claim uses evidence from a similar industry, market, country, sales motion, operating model, buyer role, or problem mechanism; it must state that comparisonBasis and must never be written as direct evidence about the target. An inference connects cited observations or comparable evidence. A hypothesis must be clearly testable.",
     "When sources are incomplete, still produce the strongest useful, uncertainty-aware report the saved evidence supports. Prefer a qualified candidate route over an empty answer when sources justify it. Do not invent statistics, company facts, direct market facts, or a false precision. Use empty market or industry arrays only when the saved evidence cannot justify even an exploratory route.",
     "Every claim's sourceIds must contain one or more exact IDs copied from sourceLedger. Every market and industry profile must cite claimIds from your own claims. industry.marketProfileId must match a supplied market profile id (e.g. market-1) or null.",
+    "Every markets[].name MUST be a clean geographic country, state, or city name (for example, 'United States', 'United Kingdom', 'Singapore', or 'Austin, Texas') — never append descriptors such as 'National Market', 'B2B Market', 'Sector', or 'Region'.",
     "Return JSON only with exactly this object shape: {claims:[{id:string local label,kind:'observation'|'comparable'|'inference'|'hypothesis'|'uncertainty',statement:string,sourceIds:string[],comparisonBasis:string|null,evidenceStrength:'strong'|'moderate'|'limited'|'insufficient',citationStatus:'supported'|'limited'|'needs_review'}],markets:[{id:string local label,name:string,summary:string,evidenceStrength:'strong'|'moderate'|'limited'|'insufficient',claimIds:string[],unknowns:string[],nextResearchActions:string[]}],industries:[{id:string local label,marketProfileId:string|null,name:string,summary:string,operationalProblems:string[],solutionFit:string[],buyerRoleHypotheses:string[],evidenceStrength:'strong'|'moderate'|'limited'|'insufficient',claimIds:string[],unknowns:string[]}],contradictions:string[],gaps:string[],summary:string}.",
     compactAliases
       ? "Use 2–5 claims, at most 2 markets, and at most 3 industries. Keep text concise. Use short local labels such as claim-1, market-1, industry-1. sourceIds MUST use exact ledger IDs such as S1, S2."

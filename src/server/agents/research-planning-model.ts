@@ -630,7 +630,12 @@ export function evaluateTwoQuestionIntake(input: {
     purpose =
       "These two answers let Ano automatically run market research, pick the right companies, find decision-maker emails, and draft your outreach templates.";
   } else if (!hasLocation) {
-    question = `Got it on where you want to sell (${targetMarkets.join(", ")}). One quick detail before I start: where is your business located?`;
+    const onlyOpenRecommendation =
+      targetMarkets.length === 0 ||
+      targetMarkets.every((item) => WANTS_MARKET_RECOMMENDATION_REGEX.test(item));
+    question = onlyOpenRecommendation
+      ? "Got it — I'll recommend the best target market based on research. One quick detail before I start: where is your business located?"
+      : `Got it on where you want to sell (${targetMarkets.join(", ")}). One quick detail before I start: where is your business located?`;
     purpose =
       "Your operating base helps Ano tailor compliance, timezone, and positioning in research and outreach.";
   } else {

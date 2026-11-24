@@ -27,11 +27,107 @@ const COUNTRY_ALIASES: Record<string, string> = {
   fr: "France",
 };
 
-/** Expands common 2-3 letter country codes into full country names for Prospeo search suggestions. */
+const MARKET_DESCRIPTOR_SUFFIX_REGEX =
+  /\s+(?:(?:national|domestic|regional|local|global|international|enterprise|mid[- ]market|smb|b2b|b2c|commercial|consumer|services|tech|technology|saas|ai|digital)\s+)*(?:market|markets|sector|economy|territory|territories|region|area|hub|ecosystem|landscape|corridor|zone)s?$/i;
+
+const TRAILING_NATIONAL_REGEX = /\s+national$/i;
+
+/**
+ * Expands common country aliases and strips non-geographic market/sector suffixes
+ * (for example "United States National Market" -> "United States").
+ */
 export function normalizeLocationQuery(raw: string): string {
-  const cleaned = raw.trim().replace(/\s+/g, " ");
-  if (!cleaned) return cleaned;
+  const collapsed = raw.trim().replace(/\s+/g, " ");
+  if (!collapsed) return collapsed;
+
+  const aliasFirst = COUNTRY_ALIASES[collapsed.toLowerCase()];
+  if (aliasFirst) return aliasFirst;
+
+  let cleaned = collapsed.replace(/^the\s+/i, "").trim();
+  const aliasWithoutThe = COUNTRY_ALIASES[cleaned.toLowerCase()];
+  if (aliasWithoutThe) return aliasWithoutThe;
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const withoutMarket = cleaned.replace(MARKET_DESCRIPTOR_SUFFIX_REGEX, "").trim();
+    const next =
+      withoutMarket && withoutMarket !== cleaned
+        ? withoutMarket
+        : cleaned.replace(TRAILING_NATIONAL_REGEX, "").trim();
+    if (!next || next === cleaned) break;
+    cleaned = next;
+  }
+
+  cleaned = cleaned.replace(/[,;:\-—–]+$/, "").trim();
+  if (!cleaned) return collapsed;
+
   return COUNTRY_ALIASES[cleaned.toLowerCase()] ?? cleaned;
+}
+
+/**
+ * Produces an ordered, deduplicated list of progressively simpler geographic query
+ * candidates for a location string.
+ */
+export function buildLocationQueryCandidates(raw: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const pushCandidate = (value: string | undefined) => {
+    if (!value) return;
+    const normalized = normalizeLocationQuery(value);
+    if (!normalized) return;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    candidates.push(normalized);
+  };
+
+  pushCandidate(raw);
+
+  const rawNormalized = normalizeLocationQuery(raw);
+  const parenMatch = rawNormalized.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (parenMatch) {
+    pushCandidate(parenMatch[1]);
+    pushCandidate(parenMatch[2]);
+  }
+
+  const splitQualifiers = rawNormalized.split(/\s+[—–-]\s+|[:/]/);
+  if (splitQualifiers.length > 1) {
+    for (const part of splitQualifiers) {
+      pushCandidate(part);
+    }
+  }
+
+  const expandedBases = [...candidates];
+  for (const base of expandedBases) {
+    const metroMatch = base.match(/^(?:Greater|Metro(?:politan)?)\s+(.+)$/i);
+    if (metroMatch?.[1]) {
+      pushCandidate(metroMatch[1]);
+    }
+
+    if (base.includes(",")) {
+      const commaParts = base
+        .split(",")
+        .map((part) => normalizeLocationQuery(part))
+        .filter(Boolean);
+
+      if (commaParts.length > 1) {
+        pushCandidate(commaParts.join(", "));
+        if (commaParts.length >= 3) {
+          pushCandidate(commaParts.slice(0, commaParts.length - 1).join(", "));
+        }
+        for (let i = 1; i < commaParts.length; i += 1) {
+          pushCandidate(commaParts.slice(i).join(", "));
+        }
+        if (commaParts.length >= 3) {
+          for (let i = 1; i < commaParts.length - 1; i += 1) {
+            pushCandidate(commaParts[i]);
+          }
+        }
+      }
+    }
+  }
+
+  return candidates;
 }
 
 export function selectCanonicalLocation(requested: string, suggestions: Array<{ name: string; type: string }>) {
