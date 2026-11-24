@@ -71,43 +71,85 @@ function recommendationModeFor(assessment: EvidenceAssessment, draft: MarketSynt
 }
 
 export function assessSourceLedger(sources: SynthesisSource[], missionCoverage?: ResearchCoverage | null): EvidenceAssessment {
-  const sourceClasses = new Set(sources.map((source) => source.sourceClass));
+  const nonWorkspacePublic = sources.filter(
+    (source) => (source.sourceProvenance ?? "public_web") !== "workspace_supplied",
+  );
+  const nonVendorPublic = nonWorkspacePublic.filter((source) => source.sourceClass !== "vendor");
+  const sourceClasses = new Set(nonVendorPublic.map((source) => source.sourceClass));
   const sourceCount = sources.length;
+  const publicSourceCount = nonWorkspacePublic.length;
+  const qualifyingCount = nonVendorPublic.length;
   const sourceClassCount = sourceClasses.size;
-  const coverageStrength = strengthFor(sourceCount, sourceClassCount);
+  const coverageStrength = strengthFor(qualifyingCount, sourceClassCount);
   const gaps: string[] = [];
-  if (sourceCount < 3) gaps.push("Direct comparison coverage is limited because fewer than three retrievable sources are available.");
-  if (sourceClassCount < 2) gaps.push("The current evidence comes from one source class, so Ano will label any route as exploratory unless comparable evidence supports it.");
-  const noPublishedDate = sources.filter((source) => !source.publishedAt).length;
-  if (noPublishedDate) gaps.push(`${noPublishedDate} saved source${noPublishedDate === 1 ? " has" : "s have"} no published date, so freshness is limited.`);
+  if (sourceCount > 0 && publicSourceCount === 0) {
+    gaps.push(
+      "Saved items come from workspace uploads rather than external public research; conclusions remain exploratory.",
+    );
+  } else if (qualifyingCount < 3) {
+    gaps.push(
+      "Direct comparison coverage is limited because fewer than three non-vendor public sources are available.",
+    );
+  }
+  if (sourceClassCount < 2) {
+    gaps.push(
+      "The current evidence comes from one source class, so Ano will label any route as exploratory unless comparable evidence supports it.",
+    );
+  }
+  const noPublishedDate = nonWorkspacePublic.filter((source) => !source.publishedAt).length;
+  if (noPublishedDate) {
+    gaps.push(`${noPublishedDate} saved source${noPublishedDate === 1 ? " has" : "s have"} no published date, so freshness is limited.`);
+  }
   if (missionCoverage) gaps.push(...missionCoverage.gaps);
   return evidenceAssessmentSchema.parse({
     fetchedSourceCount: sourceCount,
     sourceClassCount,
     coverageStrength,
-    comparisonReady: missionCoverage ? missionCoverage.comparisonReady : sourceCount >= 3 && sourceClassCount >= 2,
+    comparisonReady: missionCoverage
+      ? missionCoverage.comparisonReady
+      : qualifyingCount >= 3 && sourceClassCount >= 2,
     contradictions: [],
     // The persisted assessment is intentionally concise. Deep research may
     // identify more gaps than the review card can use; retain a stable,
     // de-duplicated first six instead of rejecting the entire analysis.
     gaps: Array.from(new Set(gaps)).slice(0, 6),
     summary: sourceCount
-      ? missionCoverage ? `Ano has ${missionCoverage.qualifyingSourceCount} decision-relevant excerpts across ${missionCoverage.sourceClassCount} source classes for a comparative market study.` : `Ano has ${sourceCount} saved source excerpt${sourceCount === 1 ? "" : "s"} across ${sourceClassCount} source class${sourceClassCount === 1 ? "" : "es"}.`
+      ? missionCoverage
+        ? `Ano has ${missionCoverage.qualifyingSourceCount} decision-relevant excerpts across ${missionCoverage.sourceClassCount} source classes for a comparative market study.`
+        : qualifyingCount > 0
+          ? `Ano has ${qualifyingCount} public research excerpt${qualifyingCount === 1 ? "" : "s"} across ${sourceClassCount} source class${sourceClassCount === 1 ? "" : "es"}.`
+          : `Ano saved ${sourceCount} workspace reference${sourceCount === 1 ? "" : "s"}; external public market evidence is still limited.`
       : "Ano has no retrievable source excerpts to assess.",
   });
 }
 
 export function auditMarketSynthesisDraft(draft: MarketSynthesisDraft, sources: SynthesisSource[]) {
-  const sourceIds = new Set(sources.map((source) => source.id));
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
   const claimIds = new Set<string>();
+  const restrictedClaimIds = new Set<string>();
   for (const claim of draft.claims) {
     if (claimIds.has(claim.id)) throw new MarketSynthesisPersistenceError("Ano rejected a duplicate evidence claim before saving it.", "CITATION_AUDIT_FAILED");
     claimIds.add(claim.id);
-    if (claim.sourceIds.some((sourceId) => !sourceIds.has(sourceId))) {
+    if (claim.sourceIds.some((sourceId) => !sourceById.has(sourceId))) {
       throw new MarketSynthesisPersistenceError("Ano rejected a claim that cited a source outside the saved evidence ledger.", "CITATION_AUDIT_FAILED");
     }
     if (claim.kind === "comparable" && !claim.comparisonBasis) {
       throw new MarketSynthesisPersistenceError("Ano rejected comparable evidence without a stated basis for the comparison.", "CITATION_AUDIT_FAILED");
+    }
+    const citedSources = claim.sourceIds.map((id) => sourceById.get(id)!);
+    const onlyVendor =
+      citedSources.length > 0 && citedSources.every((source) => source.sourceClass === "vendor");
+    const onlyWorkspace =
+      citedSources.length > 0 &&
+      citedSources.every((source) => source.sourceProvenance === "workspace_supplied");
+    if (onlyVendor && (claim.kind === "observation" || claim.kind === "comparable" || claim.evidenceStrength === "strong" || claim.evidenceStrength === "moderate")) {
+      throw new MarketSynthesisPersistenceError("Ano rejected vendor sources acting as direct demand proof rather than contextual or counter-evidence.", "CITATION_AUDIT_FAILED");
+    }
+    if (onlyWorkspace && (claim.kind === "observation" || claim.evidenceStrength === "strong" || claim.evidenceStrength === "moderate")) {
+      throw new MarketSynthesisPersistenceError("Ano rejected workspace-supplied context labeled as direct public market evidence.", "CITATION_AUDIT_FAILED");
+    }
+    if (onlyVendor || onlyWorkspace) {
+      restrictedClaimIds.add(claim.id);
     }
   }
   const marketIds = new Set<string>();
@@ -116,6 +158,12 @@ export function auditMarketSynthesisDraft(draft: MarketSynthesisDraft, sources: 
     marketIds.add(market.id);
     if (market.claimIds.some((claimId) => !claimIds.has(claimId))) {
       throw new MarketSynthesisPersistenceError("Ano rejected a market profile with an unverified claim reference.", "CITATION_AUDIT_FAILED");
+    }
+    if (
+      (market.evidenceStrength === "strong" || market.evidenceStrength === "moderate") &&
+      market.claimIds.every((claimId) => restrictedClaimIds.has(claimId))
+    ) {
+      throw new MarketSynthesisPersistenceError("Ano rejected a market strength rating supported solely by vendor or workspace sources.", "CITATION_AUDIT_FAILED");
     }
   }
   const industryIds = new Set<string>();
@@ -127,6 +175,12 @@ export function auditMarketSynthesisDraft(draft: MarketSynthesisDraft, sources: 
     }
     if (industry.claimIds.some((claimId) => !claimIds.has(claimId))) {
       throw new MarketSynthesisPersistenceError("Ano rejected an industry profile with an unverified claim reference.", "CITATION_AUDIT_FAILED");
+    }
+    if (
+      (industry.evidenceStrength === "strong" || industry.evidenceStrength === "moderate") &&
+      industry.claimIds.every((claimId) => restrictedClaimIds.has(claimId))
+    ) {
+      throw new MarketSynthesisPersistenceError("Ano rejected an industry strength rating supported solely by vendor or workspace sources.", "CITATION_AUDIT_FAILED");
     }
   }
 }
@@ -150,7 +204,7 @@ export async function loadSynthesisSources(session: WorkspaceSession, conversati
   const run = await runForConversation(session, conversationId);
   const { data, error } = await session.client
     .from("research_sources")
-    .select("id, title, source_class, supporting_excerpt, published_at")
+    .select("id, title, canonical_url, source_class, source_provenance, supporting_excerpt, published_at")
     .eq("workspace_id", session.workspace.id)
     .eq("ano_research_run_id", String(run.id))
     .eq("status", "fetched")
@@ -167,15 +221,30 @@ export async function loadSynthesisSources(session: WorkspaceSession, conversati
   if (assessmentsError) throw new MarketSynthesisPersistenceError("Ano could not read evidence-quality assessments.");
   const scoreBySource = new Map((assessments ?? []).map((assessment) => [String(assessment.research_source_id), Number(assessment.overall_score)]));
   const ranked = sourceRows
-    .map((source) => ({ source, score: scoreBySource.get(String(source.id)) ?? 0 }))
-    .sort((left, right) => right.score - left.score);
+    .map((source) => {
+      const provenance = (source.source_provenance
+        ? String(source.source_provenance)
+        : String(source.canonical_url ?? "").startsWith("https://product-brief.ano.local/")
+          ? "workspace_supplied"
+          : "public_web") as NonNullable<SynthesisSource["sourceProvenance"]>;
+      const provenanceBoost = provenance === "workspace_supplied" ? -100 : provenance === "comparable_evidence" ? -10 : 0;
+      const vendorPenalty = String(source.source_class) === "vendor" ? -30 : 0;
+      return {
+        source,
+        provenance,
+        score: scoreBySource.get(String(source.id)) ?? 0,
+        rankScore: (scoreBySource.get(String(source.id)) ?? 0) + provenanceBoost + vendorPenalty,
+      };
+    })
+    .sort((left, right) => right.rankScore - left.rankScore);
   const selected = [...new Map(ranked.map((item) => [String(item.source.source_class), item])).values(), ...ranked]
     .filter((item, index, all) => all.findIndex((candidate) => String(candidate.source.id) === String(item.source.id)) === index)
     .slice(0, 24);
-  const sources = selected.map(({ source, score }) => ({
+  const sources = selected.map(({ source, provenance, score }) => ({
     id: String(source.id),
     title: text(source.title, 500) ?? "Untitled source",
     sourceClass: source.source_class as SynthesisSource["sourceClass"],
+    sourceProvenance: provenance,
     excerpt: text(source.supporting_excerpt, 1_200) ?? "",
     publishedAt: source.published_at ? iso(source.published_at) : null,
     evidenceScore: score,
@@ -514,7 +583,7 @@ export async function ensureAutopilotFallbackSynthesis(
     claims: [
       {
         id: claimId,
-        kind: "observation",
+        kind: "hypothesis",
         statement:
           text(
             `Based on supplied product context: ${brief.offer} Aiming for ${brief.goal}.`,

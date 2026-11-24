@@ -41,6 +41,19 @@ function canonicalWebUrl(value: string) {
   if (url.username || url.password || !url.hostname) {
     throw new ResearchProviderError("Ano rejected an unsafe search-result URL before source retrieval.", "INVALID_RESPONSE");
   }
+  for (const key of Array.from(url.searchParams.keys())) {
+    const lower = key.toLowerCase();
+    if (
+      lower.startsWith("utm_") ||
+      lower === "fbclid" ||
+      lower === "gclid" ||
+      lower === "msclkid" ||
+      lower === "mc_cid" ||
+      lower === "mc_eid"
+    ) {
+      url.searchParams.delete(key);
+    }
+  }
   url.hash = "";
   return url.toString();
 }

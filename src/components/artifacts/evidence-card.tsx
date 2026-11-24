@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 
-import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
+import {
+  formatSourceProvenanceLabel,
+  resolveSourceProvenance,
+  type EvidenceResearchView,
+} from "@/lib/ano/evidence-research";
 import { MaterialButton } from "@/components/material/material-button";
 import { useMaterialWeb } from "@/components/material/register";
 
@@ -65,25 +69,28 @@ export function EvidenceCard({ research, onOpenContextRail }: EvidenceCardProps)
       )}
 
       <div className="m3-evidence-source-grid">
-        {visibleSources.slice(0, 8).map((source) => (
-          <article key={source.id} className="m3-evidence-source-item">
-            <div className="m3-evidence-source-top">
-              <span className="m3-claim-pill">Source observation</span>
-              <span className="m3-source-tag">{source.sourceClass}</span>
-            </div>
-            <a href={source.url} target="_blank" rel="noreferrer">
-              {source.title}
-            </a>
-            <p>
-              {source.excerpt ??
-                "This source could not be retrieved safely; Ano retained its safe failure record."}
-            </p>
-            <small>
-              {source.status === "fetched" ? "Retrieved" : "Not retrieved"} ·{" "}
-              {new Date(source.retrievedAt).toLocaleDateString()}
-            </small>
-          </article>
-        ))}
+        {visibleSources.slice(0, 8).map((source) => {
+          const provenance = resolveSourceProvenance(source);
+          return (
+            <article key={source.id} className="m3-evidence-source-item">
+              <div className="m3-evidence-source-top">
+                <span className="m3-claim-pill">{formatSourceProvenanceLabel(provenance)}</span>
+                <span className="m3-source-tag">{source.sourceClass}</span>
+              </div>
+              <a href={source.url} target="_blank" rel="noreferrer">
+                {source.title}
+              </a>
+              <p>
+                {source.excerpt ??
+                  "This source could not be retrieved safely; Ano retained its safe failure record."}
+              </p>
+              <small>
+                {source.status === "fetched" ? "Retrieved" : "Not retrieved"} ·{" "}
+                {new Date(source.retrievedAt).toLocaleDateString()}
+              </small>
+            </article>
+          );
+        })}
       </div>
 
       {visibleSources.length > 8 && (

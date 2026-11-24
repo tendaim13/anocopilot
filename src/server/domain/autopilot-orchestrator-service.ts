@@ -21,7 +21,11 @@ import {
   recommendDiscoveryProvider,
   type CompanySearchView,
 } from "@/lib/ano/company-discovery";
-import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
+import {
+  MAX_ITERATIVE_RESEARCH_WAVES,
+  resolveSourceProvenance,
+  type EvidenceResearchView,
+} from "@/lib/ano/evidence-research";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
 import type { OutreachTemplatePackView } from "@/lib/ano/outreach-templates";
 import type { PeopleDiscoveryView } from "@/lib/ano/people-playbooks";
@@ -474,14 +478,33 @@ async function runStageMarketResearch(
   reportProgress?: StageProgressReporter,
 ): Promise<AutopilotStageSummary> {
   const existing = await deps.getEvidenceResearch(session, conversationId).catch(() => null);
-  if (existing && existing.run.status === "sources_ready" && existing.run.sourceCount > 0) {
+  const existingFetched =
+    existing?.sources.filter((s) => s.status === "fetched" && Boolean(s.excerpt)) ?? [];
+  const existingPublic = existingFetched.filter(
+    (s) => resolveSourceProvenance(s) !== "workspace_supplied",
+  );
+  const existingWorkspace = existingFetched.filter(
+    (s) => resolveSourceProvenance(s) === "workspace_supplied",
+  );
+  const searxngAllowed =
+    deps.isSearxngAvailable() && (await deps.checkBudget(session, "searxng"));
+
+  if (
+    existing &&
+    existing.run.status === "sources_ready" &&
+    existing.run.sourceCount > 0 &&
+    (existingPublic.length > 0 || existingWorkspace.length === 0)
+  ) {
+    const publicCount = existingPublic.length || existing.run.sourceCount;
     return {
       stage: "market_research",
       status: "completed",
-      headline: `Market research complete (${existing.run.sourceCount} saved sources)`,
-      detail: `Reused ${existing.run.sourceCount} saved public research source${existing.run.sourceCount === 1 ? "" : "s"} for market synthesis.`,
+      headline: `Market research complete (${publicCount} saved sources)`,
+      detail: `Reused ${publicCount} saved public research source${publicCount === 1 ? "" : "s"} for market synthesis.`,
       metrics: {
-        sourceCount: existing.run.sourceCount,
+        sourceCount: publicCount,
+        publicSourceCount: publicCount,
+        workspaceSourceCount: existingWorkspace.length,
         consumedSearches: existing.run.consumedSearches,
         usedFallback: false,
       },
@@ -494,15 +517,18 @@ async function runStageMarketResearch(
   let usedFallback = false;
   let view: EvidenceResearchView | null = null;
 
-  const searxngAllowed =
-    deps.isSearxngAvailable() && (await deps.checkBudget(session, "searxng"));
-
   if (searxngAllowed) {
     try {
-      await reportProgress?.(describeAutopilotStageProgress("market_research", { wave: 1, maxWaves: 3 }), {
-        waveNumber: existing?.run.currentWave ?? 0,
-        savedSources: existing?.run.sourceCount ?? 0,
-      });
+      await reportProgress?.(
+        describeAutopilotStageProgress("market_research", {
+          wave: 1,
+          maxWaves: MAX_ITERATIVE_RESEARCH_WAVES,
+        }),
+        {
+          waveNumber: existing?.run.currentWave ?? 0,
+          savedSources: existing?.run.sourceCount ?? 0,
+        },
+      );
       const prepared = await deps.prepareEvidenceResearch(session, conversationId, {
         maximumSearches: authorityScope.maxPublicSearches,
         maximumFetches: authorityScope.maxSourceFetches,
@@ -523,7 +549,7 @@ async function runStageMarketResearch(
             );
           }
           view = await deps.startEvidenceResearch(session, conversationId, prepared.run.id, {
-            maxWaves: 3,
+            maxWaves: MAX_ITERATIVE_RESEARCH_WAVES,
           });
         } else {
           view = prepared;
@@ -534,19 +560,31 @@ async function runStageMarketResearch(
         "Live market web research paused; proceeding using your uploaded product brief and materials.",
       );
     }
+  } else if (existing && existing.run.status === "sources_ready" && existingWorkspace.length > 0) {
+    view = existing;
+    usedFallback = true;
+    warnings.push(
+      "External market search was unavailable; proceeding directly from your workspace materials.",
+    );
   } else {
     warnings.push(
       "External market search was unavailable; proceeding directly from your product materials.",
     );
   }
 
+  const fetchedAfterSearch =
+    view?.sources.filter((source) => source.status === "fetched" && Boolean(source.excerpt)) ?? [];
+  const publicAfterSearch = fetchedAfterSearch.filter(
+    (source) => resolveSourceProvenance(source) !== "workspace_supplied",
+  );
+  const hasUsablePublicSources = Boolean(
+    view && view.run.status === "sources_ready" && publicAfterSearch.length > 0,
+  );
   const hasUsableSources = Boolean(
-    view &&
-      view.run.status === "sources_ready" &&
-      view.sources.some((source) => source.status === "fetched" && Boolean(source.excerpt)),
+    view && view.run.status === "sources_ready" && fetchedAfterSearch.length > 0,
   );
 
-  if (!hasUsableSources) {
+  if (!hasUsablePublicSources && !hasUsableSources) {
     usedFallback = true;
     if (warnings.length === 0) {
       warnings.push(
@@ -563,23 +601,37 @@ async function runStageMarketResearch(
       productSources,
       warnings[0] ?? "fallback_product_sources",
     );
+  } else if (!hasUsablePublicSources && hasUsableSources) {
+    usedFallback = true;
   }
 
-  const sourceCount =
-    view?.sources.filter((source) => source.status === "fetched" && Boolean(source.excerpt))
-      .length ?? 0;
+  const finalFetched =
+    view?.sources.filter((source) => source.status === "fetched" && Boolean(source.excerpt)) ?? [];
+  const publicCount = finalFetched.filter(
+    (source) => resolveSourceProvenance(source) !== "workspace_supplied",
+  ).length;
+  const comparableCount = finalFetched.filter(
+    (source) => resolveSourceProvenance(source) === "comparable_evidence",
+  ).length;
+  const workspaceCount = finalFetched.filter(
+    (source) => resolveSourceProvenance(source) === "workspace_supplied",
+  ).length;
+  const sourceCount = usedFallback ? workspaceCount || finalFetched.length : publicCount || finalFetched.length;
 
   return {
     stage: "market_research",
     status: warnings.length > 0 ? "completed_with_warnings" : "completed",
     headline: usedFallback
-      ? `Market framing ready (${sourceCount} product source${sourceCount === 1 ? "" : "s"})`
+      ? `Market framing ready (${sourceCount} workspace source${sourceCount === 1 ? "" : "s"})`
       : `Market research complete (${sourceCount} public source${sourceCount === 1 ? "" : "s"})`,
     detail: usedFallback
-      ? `Prepared ${sourceCount} product-source reference${sourceCount === 1 ? "" : "s"} for segment synthesis.`
+      ? `Prepared ${sourceCount} workspace-supplied reference${sourceCount === 1 ? "" : "s"} for segment synthesis (not counted as public web research).`
       : `Collected ${sourceCount} public research excerpt${sourceCount === 1 ? "" : "s"} across ${view?.run.currentWave ?? 1} wave${(view?.run.currentWave ?? 1) === 1 ? "" : "s"}.`,
     metrics: {
       sourceCount,
+      publicSourceCount: publicCount,
+      comparableSourceCount: comparableCount,
+      workspaceSourceCount: workspaceCount,
       consumedSearches: view?.run.consumedSearches ?? 0,
       usedFallback,
     },

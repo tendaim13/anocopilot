@@ -54,6 +54,28 @@ function isUnsafeIpv6(address: string) {
     || lower.startsWith("2001:db8:");
 }
 
+const TRACKING_QUERY_PARAMS = new Set([
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "utm_id",
+  "fbclid",
+  "gclid",
+  "msclkid",
+  "mc_cid",
+  "mc_eid",
+]);
+
+function stripTrackingParams(url: URL) {
+  for (const key of Array.from(url.searchParams.keys())) {
+    if (key.toLowerCase().startsWith("utm_") || TRACKING_QUERY_PARAMS.has(key.toLowerCase())) {
+      url.searchParams.delete(key);
+    }
+  }
+}
+
 function canonicalRemoteUrl(value: string) {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
@@ -70,6 +92,7 @@ function canonicalRemoteUrl(value: string) {
   if (port !== "80" && port !== "443") {
     throw new ResearchProviderError("Ano rejected a source using a non-standard web port.", "INVALID_RESPONSE");
   }
+  stripTrackingParams(url);
   url.hash = "";
   return url;
 }
@@ -109,6 +132,35 @@ async function readTextWithinLimit(response: Response, maximumBytes: number) {
   } finally {
     reader.releaseLock();
   }
+}
+
+function parseValidIsoDate(raw: string | undefined | null): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() > Date.now() + 86_400_000) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+function extractPublishedAtFromHtml(body: string): string | null {
+  const $ = load(body);
+  const candidates = [
+    $('meta[property="article:published_time"]').attr("content"),
+    $('meta[name="article:published_time"]').attr("content"),
+    $('meta[name="citation_publication_date"]').attr("content"),
+    $('meta[name="publication_date"]').attr("content"),
+    $('meta[name="dc.date"]').attr("content"),
+    $('meta[name="DC.date"]').attr("content"),
+    $('meta[name="date"]').attr("content"),
+    $("time[datetime]").first().attr("datetime"),
+  ];
+  for (const candidate of candidates) {
+    const iso = parseValidIsoDate(candidate);
+    if (iso) return iso;
+  }
+  return null;
 }
 
 function extractText(contentType: string, body: string) {
@@ -279,6 +331,8 @@ export function createEvidenceSourceRetriever(
           });
           return knownFailure(current.toString(), "The source exceeded Ano’s safe 2 MB retrieval limit.");
         }
+        const publishedAt =
+          contentType === "text/html" ? extractPublishedAtFromHtml(body.text) : null;
         const content = extractText(contentType, body.text);
         if (!content) {
           recordInternalApiUsage({
@@ -304,7 +358,14 @@ export function createEvidenceSourceRetriever(
         return {
           requestId: createHash("sha256").update(`${savedResult.id}:${current.toString()}`).digest("hex"),
           credits: null,
-          results: [{ url: storedUrl, content, contentType }],
+          results: [
+            {
+              url: storedUrl,
+              content,
+              contentType,
+              ...(publishedAt ? { publishedAt } : {}),
+            },
+          ],
           failures: [],
         };
       }

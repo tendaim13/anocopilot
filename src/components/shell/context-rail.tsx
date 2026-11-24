@@ -4,7 +4,12 @@ import type {
   CompanySearchView,
   ProspeoProviderState,
 } from "@/lib/ano/company-discovery";
-import type { EvidenceResearchView, ResearchProviderKey } from "@/lib/ano/evidence-research";
+import {
+  formatSourceProvenanceLabel,
+  resolveSourceProvenance,
+  type EvidenceResearchView,
+  type ResearchProviderKey,
+} from "@/lib/ano/evidence-research";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
 import type {
   MercuryConnectorState,
@@ -183,7 +188,9 @@ export function ContextRail({
             <ul className="ano-rail-sources">
               {sources.map((source) => (
                 <li key={source.id}>
-                  <span className="ano-source-class">{source.sourceClass}</span>
+                  <span className="ano-source-class">
+                    {formatSourceProvenanceLabel(resolveSourceProvenance(source))} · {source.sourceClass}
+                  </span>
                   <a href={source.url} target="_blank" rel="noreferrer">
                     {source.title}
                   </a>

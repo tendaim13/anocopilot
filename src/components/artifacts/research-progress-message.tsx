@@ -1,6 +1,10 @@
 "use client";
 
-import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
+import {
+  formatSourceProvenanceLabel,
+  resolveSourceProvenance,
+  type EvidenceResearchView,
+} from "@/lib/ano/evidence-research";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
 import { maskVendorNamesForDisplay } from "@/lib/ano/research-conversation";
 import { MaterialButton } from "@/components/material/material-button";
@@ -118,7 +122,9 @@ export function ResearchProgressMessage({
           <ul className="m3-source-preview-list">
             {research.sources.slice(0, 4).map((source) => (
               <li key={source.id}>
-                <span className="m3-source-tag">{source.sourceClass}</span>
+                <span className="m3-source-tag">
+                  {formatSourceProvenanceLabel(resolveSourceProvenance(source))} · {source.sourceClass}
+                </span>
                 <a href={source.url} target="_blank" rel="noreferrer">
                   {source.title}
                 </a>

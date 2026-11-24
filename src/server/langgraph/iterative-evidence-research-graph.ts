@@ -10,7 +10,7 @@ import type { ResearchCoverage } from "@/server/research/deep-research-assessmen
 
 export const ITERATIVE_EVIDENCE_RESEARCH_GRAPH_NAME = "iterative-evidence-research";
 export const ITERATIVE_EVIDENCE_RESEARCH_GRAPH_VERSION = "deep-research-v1";
-const MAX_WAVES = 8;
+export const MAX_WAVES = 8;
 // Eight waves require 41 graph steps at most (five nodes per wave plus
 // completion). LangGraph defaults to 25, which can stop a valid bounded run
 // immediately before the final completion node. This is an internal execution
@@ -87,7 +87,7 @@ export function createIterativeEvidenceResearchGraph(
       objective: planned.objective,
       candidateMarkets: planned.candidateMarkets,
       searchBudget: queries.length,
-      fetchBudget: Math.min(remainingFetches, Math.max(8, queries.length * 3)),
+      fetchBudget: Math.min(remainingFetches, Math.max(10, queries.length * 3)),
       queries,
     });
     if (!persisted.queries.length) return { currentNode: "complete" };
@@ -104,7 +104,7 @@ export function createIterativeEvidenceResearchGraph(
 
   const selectSourcesToFetch = async (state: IterativeEvidenceResearchStateValue) => {
     const remainingFetches = state.maximumFetches - state.consumedFetches;
-    const selectedSearchResultIds = remainingFetches > 0 ? await executor.selectSourcesToFetch(state.researchRunId, Math.min(remainingFetches, Math.max(8, state.queries.length * 3))) : [];
+    const selectedSearchResultIds = remainingFetches > 0 ? await executor.selectSourcesToFetch(state.researchRunId, Math.min(remainingFetches, Math.max(10, state.queries.length * 3))) : [];
     return { selectedSearchResultIds, currentNode: "execute_wave_fetch" };
   };
 

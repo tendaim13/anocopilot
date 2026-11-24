@@ -24,7 +24,12 @@ export type ProviderSearchResponse = {
 export type ProviderExtractResponse = {
   requestId: string | null;
   credits: number | null;
-  results: Array<{ url: string; content: string; contentType?: string | null }>;
+  results: Array<{
+    url: string;
+    content: string;
+    contentType?: string | null;
+    publishedAt?: string | null;
+  }>;
   failures: Array<{ url: string; message: string; status?: "failed_safe" | "rejected" }>;
 };
 

@@ -809,7 +809,7 @@ test("server worker drains all 6 stages, renews lease heartbeats, coalesces dupl
     summariesPosted,
     onStage: async (stage) => {
       if (stage === "market_research") {
-        await new Promise((r) => setTimeout(r, 260));
+        await new Promise((r) => setTimeout(r, 380));
       }
     },
   });

@@ -5,8 +5,11 @@ import { createHash } from "node:crypto";
 import type { SupabaseWorkspaceSession, WorkspaceSession } from "@/contracts/ano";
 import {
   evidenceResearchViewSchema,
+  resolveSourceProvenance,
   type EvidenceResearchView,
   type ResearchQuery,
+  type SourceEvidenceRole,
+  type SourceProvenance,
 } from "@/lib/ano/evidence-research";
 import type { ResearchConversationView } from "@/lib/ano/research-conversation";
 import type { EvidenceResearchExecutor } from "@/server/langgraph/evidence-research-graph";
@@ -22,7 +25,9 @@ import {
   assessFetchedSource,
   assessResearchCoverage,
   classifySourceUrl,
+  extractRootDomain,
   scoreSearchCandidate,
+  selectDiverseSearchCandidates,
   type ResearchCoverage,
   type SourceClass,
 } from "@/server/research/deep-research-assessment";
@@ -461,13 +466,27 @@ async function persistFetchedSources(
   searchResults: SearchResultRow[],
   response: ProviderExtractResponse,
 ) {
-  const fetched = new Map(response.results.map((item) => [item.url, item.content]));
+  const fetched = new Map(response.results.map((item) => [item.url, item]));
   const failures = new Map(response.failures.map((item) => [item.url, item]));
   const rows = searchResults.map((item) => {
     const canonicalUrl = String(item.canonical_url);
-    const content = fetched.get(canonicalUrl);
-    const failure = failures.get(canonicalUrl) ?? (!content ? { message: "Ano could not retrieve this saved source safely.", status: "failed_safe" as const } : null);
+    const resultItem = fetched.get(canonicalUrl);
+    const content = resultItem?.content;
+    const failure =
+      failures.get(canonicalUrl) ??
+      (!content
+        ? { message: "Ano could not retrieve this saved source safely.", status: "failed_safe" as const }
+        : null);
     const excerpt = content ? safeText(content, 1_200) : null;
+    const publishedRaw = item.published_at ?? resultItem?.publishedAt ?? null;
+    let publishedAt: string | null = null;
+    if (publishedRaw) {
+      try {
+        publishedAt = isoTimestamp(publishedRaw);
+      } catch {
+        publishedAt = null;
+      }
+    }
     return {
       id: crypto.randomUUID(),
       workspace_id: session.workspace.id,
@@ -476,19 +495,32 @@ async function persistFetchedSources(
       provider_action_request_id: actionId,
       title: safeText(item.title, 500) ?? "Untitled source",
       canonical_url: canonicalUrl,
-      source_class: classifySourceUrl(canonicalUrl),
-      content_type: content ? response.results.find((item) => item.url === canonicalUrl)?.contentType ?? "text/html" : null,
+      source_class: classifySourceUrl(
+        canonicalUrl,
+        safeText(item.title, 500) ?? "",
+        excerpt ?? "",
+      ),
+      source_provenance: "public_web",
+      root_domain: extractRootDomain(canonicalUrl),
+      content_type: resultItem ? resultItem.contentType ?? "text/html" : null,
       supporting_excerpt: excerpt,
       content_hash: content ? stableHash(content) : null,
-      published_at: item.published_at ? isoTimestamp(item.published_at) : null,
+      published_at: publishedAt,
       retrieved_at: new Date().toISOString(),
       status: content ? "fetched" : failure?.status ?? "failed_safe",
       failure_message: failure ? safeText(failure.message) : null,
     };
   });
   if (!rows.length) return;
-  const { error } = await session.client.from("research_sources").upsert(rows, { onConflict: "search_result_id", ignoreDuplicates: true });
-  if (error) throw new EvidenceResearchPersistenceError("Ano could not save the retrieved source evidence. It will not retry the provider request.", "SOURCES_NOT_SAVED");
+  const { error } = await session.client
+    .from("research_sources")
+    .upsert(rows, { onConflict: "search_result_id", ignoreDuplicates: true });
+  if (error) {
+    throw new EvidenceResearchPersistenceError(
+      "Ano could not save the retrieved source evidence. It will not retry the provider request.",
+      "SOURCES_NOT_SAVED",
+    );
+  }
 }
 
 function queryFromRow(row: Record<string, unknown>): ResearchQuery {
@@ -515,13 +547,18 @@ async function deepQueryMap(session: SupabaseWorkspaceSession, runId: string) {
 }
 
 async function deepSelectedSearchResults(session: SupabaseWorkspaceSession, runId: string, limit: number) {
-  const [{ data: results, error: resultsError }, { data: sources, error: sourcesError }, { data: fetchActions, error: fetchActionsError }, queries] = await Promise.all([
+  const [
+    { data: results, error: resultsError },
+    { data: sources, error: sourcesError },
+    { data: fetchActions, error: fetchActionsError },
+    queries,
+  ] = await Promise.all([
     session.client.from("research_search_results")
       .select("id, title, canonical_url, published_at, provider_score, snippet, research_query_id")
       .eq("workspace_id", session.workspace.id)
       .eq("ano_research_run_id", runId),
     session.client.from("research_sources")
-      .select("search_result_id")
+      .select("id, search_result_id, canonical_url, root_domain, title, source_class, supporting_excerpt, status")
       .eq("workspace_id", session.workspace.id)
       .eq("ano_research_run_id", runId),
     session.client.from("provider_action_requests")
@@ -531,11 +568,10 @@ async function deepSelectedSearchResults(session: SupabaseWorkspaceSession, runI
       .eq("action_kind", "fetch"),
     deepQueryMap(session, runId),
   ]);
-  if (resultsError || sourcesError || fetchActionsError) throw new EvidenceResearchPersistenceError("Ano could not select the next source candidates.");
-  // A source row normally proves a result was already handled. Older safe
-  // failures can have only their fetch action, however, so include those too.
-  // This preserves the no-retry rule without letting one orphaned action stop
-  // the rest of the approved mission whenever it is ranked again.
+  if (resultsError || sourcesError || fetchActionsError) {
+    throw new EvidenceResearchPersistenceError("Ano could not select the next source candidates.");
+  }
+
   const alreadyAttempted = new Set((sources ?? []).map((source) => String(source.search_result_id)));
   for (const action of fetchActions ?? []) {
     const request = action.request_json;
@@ -543,23 +579,42 @@ async function deepSelectedSearchResults(session: SupabaseWorkspaceSession, runI
       alreadyAttempted.add(request.searchResultId);
     }
   }
-  type DeepSearchResult = SearchResultRow & { research_query_id: string | null; candidate_score: number };
-  const ranked: DeepSearchResult[] = (results ?? [])
-    .filter((row) => !alreadyAttempted.has(String(row.id)))
-    .map((row): DeepSearchResult => ({
-      ...(row as SearchResultRow),
-      research_query_id: row.research_query_id ? String(row.research_query_id) : null,
-      candidate_score: scoreSearchCandidate({
-        id: String(row.id),
-        url: String(row.canonical_url),
-        title: String(row.title),
-        snippet: row.snippet ? String(row.snippet) : null,
-        providerScore: row.provider_score === null ? null : Number(row.provider_score),
-        publishedAt: row.published_at ? isoTimestamp(row.published_at) : null,
-        query: row.research_query_id ? queries.get(String(row.research_query_id)) ?? null : null,
-      }).score,
+
+  const priorSources = (sources ?? [])
+    .filter((source) => source.status === "fetched" && Boolean(source.supporting_excerpt))
+    .map((source) => ({
+      id: String(source.id),
+      url: String(source.canonical_url),
+      rootDomain: source.root_domain ? String(source.root_domain) : null,
+      sourceClass: source.source_class as SourceClass,
+      title: String(source.title ?? ""),
+      excerpt: String(source.supporting_excerpt ?? ""),
     }));
-  return ranked.sort((left, right) => Number(right.candidate_score) - Number(left.candidate_score)).slice(0, limit);
+
+  const unattempted = (results ?? [])
+    .filter((row) => !alreadyAttempted.has(String(row.id)))
+    .map((row) => ({
+      row: row as SearchResultRow,
+      id: String(row.id),
+      url: String(row.canonical_url),
+      title: String(row.title ?? ""),
+      snippet: row.snippet ? String(row.snippet) : null,
+      providerScore: row.provider_score === null ? null : Number(row.provider_score),
+      publishedAt: row.published_at ? isoTimestamp(row.published_at) : null,
+      query: row.research_query_id ? queries.get(String(row.research_query_id)) ?? null : null,
+    }));
+
+  const selected = selectDiverseSearchCandidates(unattempted, {
+    limit,
+    priorSources,
+  });
+
+  return selected.map((item) => ({
+    ...item.row,
+    id: item.id,
+    research_query_id: item.row.research_query_id ? String(item.row.research_query_id) : null,
+    candidate_score: item.candidateScore,
+  }));
 }
 
 async function assessPersistedSource(
@@ -574,7 +629,7 @@ async function assessPersistedSource(
       .eq("search_result_id", String(searchResult.id))
       .maybeSingle(),
     session.client.from("research_sources")
-      .select("id, title, source_class, supporting_excerpt")
+      .select("id, title, canonical_url, root_domain, source_class, supporting_excerpt")
       .eq("workspace_id", session.workspace.id)
       .eq("ano_research_run_id", runId)
       .eq("status", "fetched"),
@@ -590,8 +645,35 @@ async function assessPersistedSource(
     query,
     priorSources: (prior ?? [])
       .filter((item) => String(item.id) !== String(source.id) && item.supporting_excerpt)
-      .map((item) => ({ sourceClass: item.source_class as SourceClass, title: String(item.title), excerpt: String(item.supporting_excerpt) })),
+      .map((item) => ({
+        id: String(item.id),
+        url: item.canonical_url ? String(item.canonical_url) : undefined,
+        rootDomain: item.root_domain ? String(item.root_domain) : null,
+        sourceClass: item.source_class as SourceClass,
+        title: String(item.title),
+        excerpt: String(item.supporting_excerpt),
+      })),
   });
+
+  if (
+    assessment.sourceClass !== source.source_class ||
+    assessment.sourceProvenance !== "public_web" ||
+    assessment.duplicateOfSourceId
+  ) {
+    await session.client
+      .from("research_sources")
+      .update({
+        source_class: assessment.sourceClass,
+        source_provenance: assessment.sourceProvenance,
+        root_domain: assessment.rootDomain,
+        ...(assessment.duplicateOfSourceId
+          ? { duplicate_of_source_id: assessment.duplicateOfSourceId }
+          : {}),
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", String(source.id));
+  }
+
   const { error } = await session.client.from("research_source_assessments").upsert({
     id: crypto.randomUUID(),
     workspace_id: session.workspace.id,
@@ -605,7 +687,19 @@ async function assessPersistedSource(
     redundancy_penalty: assessment.redundancyPenalty,
     overall_score: assessment.overallScore,
     decision_relevant: assessment.decisionRelevant,
-    assessment_json: { rationale: assessment.rationale, queryId: query?.id ?? null, candidateMarket: query?.candidateMarket ?? null, comparisonDimension: query?.comparisonDimension ?? null },
+    assessment_json: {
+      rationale: assessment.rationale,
+      evidenceRole: assessment.evidenceRole,
+      sourceProvenance: assessment.sourceProvenance,
+      countryRelevanceScore: assessment.countryRelevanceScore,
+      industryRelevanceScore: assessment.industryRelevanceScore,
+      rootDomain: assessment.rootDomain,
+      sourceFamily: assessment.sourceFamily,
+      isDuplicateOrSyndicated: assessment.isDuplicateOrSyndicated,
+      queryId: query?.id ?? null,
+      candidateMarket: query?.candidateMarket ?? null,
+      comparisonDimension: query?.comparisonDimension ?? null,
+    },
   }, { onConflict: "research_source_id" });
   if (error) throw new EvidenceResearchPersistenceError("Ano could not save the evidence-quality assessment.");
 }
@@ -613,7 +707,7 @@ async function assessPersistedSource(
 async function deepCoverage(session: SupabaseWorkspaceSession, runId: string, candidateMarkets: string[]): Promise<ResearchCoverage> {
   const [{ data: assessments, error: assessmentError }, queries] = await Promise.all([
     session.client.from("research_source_assessments")
-      .select("research_source_id, overall_score, decision_relevant, research_sources!inner(source_class, search_result_id)")
+      .select("research_source_id, overall_score, decision_relevant, assessment_json, research_sources!inner(source_class, source_provenance, root_domain, search_result_id)")
       .eq("workspace_id", session.workspace.id)
       .eq("ano_research_run_id", runId),
     deepQueryMap(session, runId),
@@ -628,9 +722,23 @@ async function deepCoverage(session: SupabaseWorkspaceSession, runId: string, ca
   const sources = (assessments ?? []).flatMap((assessment) => {
     const source = Array.isArray(assessment.research_sources) ? assessment.research_sources[0] : assessment.research_sources;
     if (!source) return [];
-    const queryId = resultQueryIds.get(String((source as Record<string, unknown>).search_result_id));
+    const srcRecord = source as Record<string, unknown>;
+    const meta =
+      assessment.assessment_json && typeof assessment.assessment_json === "object"
+        ? (assessment.assessment_json as Record<string, unknown>)
+        : {};
+    const queryId = resultQueryIds.get(String(srcRecord.search_result_id));
     return [{
-      sourceClass: String((source as Record<string, unknown>).source_class) as SourceClass,
+      sourceClass: String(srcRecord.source_class) as SourceClass,
+      sourceProvenance: (srcRecord.source_provenance
+        ? String(srcRecord.source_provenance)
+        : "public_web") as SourceProvenance,
+      evidenceRole: (typeof meta.evidenceRole === "string"
+        ? meta.evidenceRole
+        : String(srcRecord.source_class) === "vendor"
+          ? "contextual_counter_only"
+          : "direct_evidence") as SourceEvidenceRole,
+      rootDomain: srcRecord.root_domain ? String(srcRecord.root_domain) : null,
       overallScore: Number(assessment.overall_score),
       decisionRelevant: Boolean(assessment.decision_relevant),
       query: queryId ? queries.get(queryId) ?? null : null,
@@ -826,9 +934,28 @@ export function createIterativeEvidenceResearchExecutor(session: WorkspaceSessio
     },
 
     async executeFetch(runId, searchResultIds) {
-      const candidates = await deepSelectedSearchResults(session, runId, searchResultIds.length);
-      const wanted = new Set(searchResultIds);
-      const selected = candidates.filter((item) => wanted.has(String(item.id)));
+      const wantedIds = searchResultIds.map((id) => String(id));
+      const resultRows =
+        wantedIds.length === 0
+          ? []
+          : await (async () => {
+              const { data, error } = await session.client
+                .from("research_search_results")
+                .select("id, title, url, canonical_url, snippet, provider_score, published_at, rank, research_query_id")
+                .eq("workspace_id", session.workspace.id)
+                .eq("ano_research_run_id", runId)
+                .in("id", wantedIds);
+              if (error) {
+                throw new EvidenceResearchPersistenceError(
+                  `Ano could not load selected search results for fetch: ${error.message}`,
+                );
+              }
+              return data ?? [];
+            })();
+      const byId = new Map(resultRows.map((row) => [String(row.id), row]));
+      const selected = wantedIds
+        .map((id) => byId.get(id))
+        .filter((row): row is (typeof resultRows)[number] => Boolean(row));
       for (const result of selected) {
         const url = String(result.canonical_url);
         const action = await claimChildAction(session, runId, "fetch", `fetch:${String(result.id)}`, {
@@ -1081,8 +1208,8 @@ export async function ensureAutopilotFallbackResearchRun(
     attempt_number: attemptNumber,
     provider_key: "searxng",
     status: "sources_ready",
-    maximum_searches: 15,
-    maximum_fetches: 20,
+    maximum_searches: 50,
+    maximum_fetches: 100,
     consumed_searches: 0,
     consumed_fetches: 0,
     started_by: session.actorId,
@@ -1174,6 +1301,8 @@ export async function ensureAutopilotFallbackResearchRun(
       title,
       canonical_url: canonicalUrl,
       source_class: "company",
+      source_provenance: "workspace_supplied",
+      root_domain: extractRootDomain(canonicalUrl),
       content_type: item.mimeType ?? "text/plain",
       supporting_excerpt: excerpt,
       content_hash: stableHash(excerpt),
@@ -1227,6 +1356,8 @@ export async function ensureAutopilotFallbackResearchRun(
       title: "Product brief supplied in conversation",
       canonical_url: canonicalUrl,
       source_class: "company",
+      source_provenance: "workspace_supplied",
+      root_domain: extractRootDomain(canonicalUrl),
       content_type: "text/plain",
       supporting_excerpt: syntheticExcerpt,
       content_hash: stableHash(syntheticExcerpt),
@@ -1271,7 +1402,7 @@ export async function readEvidenceResearchView(session: WorkspaceSession, conver
   const runId = await getRunForConversation(session, conversationId);
   if (!runId) return null;
   const run = await recoverExpiredResearchLease(session, await getRun(session, runId));
-  const [actionsResult, sourcesResult] = await Promise.all([
+  const [actionsResult, sourcesResult, assessmentsResult] = await Promise.all([
     session.client
       .from("provider_action_requests")
       .select("id, action_kind, status, request_json, maximum_operations, reported_credits, created_at")
@@ -1279,10 +1410,66 @@ export async function readEvidenceResearchView(session: WorkspaceSession, conver
       .eq("ano_research_run_id", runId)
       .in("action_kind", [...EVIDENCE_RESEARCH_ACTION_KINDS])
       .order("created_at", { ascending: true }),
-    session.client.from("research_sources").select("id, title, canonical_url, source_class, supporting_excerpt, published_at, retrieved_at, status").eq("workspace_id", session.workspace.id).eq("ano_research_run_id", runId).order("retrieved_at", { ascending: false }),
+    session.client
+      .from("research_sources")
+      .select(
+        "id, title, canonical_url, source_class, source_provenance, root_domain, duplicate_of_source_id, supporting_excerpt, published_at, retrieved_at, status",
+      )
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId)
+      .order("retrieved_at", { ascending: false }),
+    session.client
+      .from("research_source_assessments")
+      .select("research_source_id, assessment_json")
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId),
   ]);
   if (actionsResult.error || sourcesResult.error) throw new EvidenceResearchPersistenceError("Ano could not read the saved public-evidence record.");
+  const roleBySourceId = new Map<string, SourceEvidenceRole>();
+  if (!assessmentsResult.error) {
+    for (const row of assessmentsResult.data ?? []) {
+      const json = (row.assessment_json ?? {}) as Record<string, unknown>;
+      const rawRole = typeof json.evidenceRole === "string" ? json.evidenceRole : typeof json.role === "string" ? json.role : null;
+      if (rawRole === "direct_evidence" || rawRole === "comparable_evidence" || rawRole === "contextual_counter_only") {
+        roleBySourceId.set(String(row.research_source_id), rawRole);
+      }
+    }
+  }
   const queries = Array.isArray(run.query_plan_json) ? run.query_plan_json : [];
+  const mappedSources = (sourcesResult.data ?? []).map((source) => {
+    const url = String(source.canonical_url);
+    const rawProvenance = typeof source.source_provenance === "string" ? source.source_provenance : null;
+    const provenance: SourceProvenance = resolveSourceProvenance({
+      url,
+      sourceProvenance: (rawProvenance ?? undefined) as SourceProvenance | undefined,
+    });
+    const evidenceRole =
+      roleBySourceId.get(String(source.id)) ??
+      (source.source_class === "vendor"
+        ? "contextual_counter_only"
+        : provenance === "comparable_evidence"
+          ? "comparable_evidence"
+          : "direct_evidence");
+    const rootDomain =
+      typeof source.root_domain === "string" && source.root_domain.trim().length > 0
+        ? source.root_domain
+        : extractRootDomain(url);
+    return {
+      id: String(source.id),
+      title: safeText(source.title, 500) ?? "Untitled source",
+      url,
+      sourceClass: source.source_class,
+      sourceProvenance: provenance,
+      evidenceRole,
+      rootDomain,
+      isSyndicatedDuplicate: Boolean(source.duplicate_of_source_id),
+      excerpt: source.supporting_excerpt ? safeText(source.supporting_excerpt, 1_200) : null,
+      publishedAt: source.published_at ? isoTimestamp(source.published_at) : null,
+      retrievedAt: isoTimestamp(source.retrieved_at),
+      status: source.status,
+    };
+  });
+  const fetchedSources = mappedSources.filter((source) => source.status === "fetched");
   return evidenceResearchViewSchema.parse({
     run: {
       id: String(run.id),
@@ -1296,7 +1483,10 @@ export async function readEvidenceResearchView(session: WorkspaceSession, conver
       consumedSearches: Number(run.consumed_searches ?? 0),
       consumedFetches: Number(run.consumed_fetches ?? 0),
       currentWave: Number(run.current_wave ?? 0),
-      sourceCount: (sourcesResult.data ?? []).filter((source) => source.status === "fetched").length,
+      sourceCount: fetchedSources.length,
+      publicSourceCount: fetchedSources.filter((source) => source.sourceProvenance === "public_web").length,
+      comparableSourceCount: fetchedSources.filter((source) => source.sourceProvenance === "comparable_evidence").length,
+      workspaceSourceCount: fetchedSources.filter((source) => source.sourceProvenance === "workspace_supplied").length,
       failureMessage: run.failure_message ? safeText(run.failure_message) : null,
       createdAt: isoTimestamp(run.created_at),
       updatedAt: isoTimestamp(run.updated_at),
@@ -1320,15 +1510,6 @@ export async function readEvidenceResearchView(session: WorkspaceSession, conver
         };
       }),
     queries,
-    sources: (sourcesResult.data ?? []).map((source) => ({
-      id: String(source.id),
-      title: safeText(source.title, 500) ?? "Untitled source",
-      url: String(source.canonical_url),
-      sourceClass: source.source_class,
-      excerpt: source.supporting_excerpt ? safeText(source.supporting_excerpt, 1_200) : null,
-      publishedAt: source.published_at ? isoTimestamp(source.published_at) : null,
-      retrievedAt: isoTimestamp(source.retrieved_at),
-      status: source.status,
-    })),
+    sources: mappedSources,
   });
 }
