@@ -44,7 +44,7 @@ export function ResearchPlanCard({
     <article className="m3-artifact-card m3-plan-artifact" aria-label={`Research plan version ${plan.version}`}>
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">RESEARCH PLAN · VERSION {plan.version}</p>
+          <p className="m3-artifact-kicker">Research Plan</p>
           <h2>{plan.summary}</h2>
         </div>
         <span className={`m3-status-badge status-${plan.approvalStatus}`}>
@@ -85,12 +85,6 @@ export function ResearchPlanCard({
           <span>Buyer roles</span>
           <strong>{plan.plannedScope.buyerRoles.join(", ") || "Evaluated from evidence"}</strong>
         </div>
-        <div>
-          <span>Planned ceiling</span>
-          <strong>
-            Up to {plan.budget.maximumSearches} searches · {plan.budget.maximumFetches} fetches
-          </strong>
-        </div>
       </div>
 
       <section className="m3-artifact-section">
@@ -117,10 +111,7 @@ export function ResearchPlanCard({
         <footer className="m3-artifact-footer">
           <div className="m3-decision-copy">
             <strong>Does this research plan look right?</strong>
-            <p>
-              Approving locks the plan for Phase B. No external web search or provider request
-              starts until you approve a separate provider scope.
-            </p>
+            <p>Approve to lock your market research scope and proceed.</p>
           </div>
           <div className="m3-action-row">
             <MaterialButton variant="filled" disabled={isWorking} onClick={onApprove}>
@@ -165,8 +156,7 @@ export function ResearchPlanCard({
 
       {plan.approvalStatus === "declined" && (
         <footer className="m3-artifact-footer m3-notice-subtle">
-          <strong>Plan declined.</strong> No external research was started. Send a new message below
-          to try a different direction.
+          <strong>Plan declined.</strong> Send a new message below to try a different direction.
         </footer>
       )}
     </article>

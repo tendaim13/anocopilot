@@ -39,9 +39,7 @@ export function ContactVerificationCard({
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">
-            EMAIL VERIFICATION · SELECTIVE BATCH
-          </p>
+          <p className="m3-artifact-kicker">Email verification</p>
           <h2>
             {verificationRun.status === "awaiting_approval"
               ? `Verify ${verificationRun.previewPairs.length} selected contact pair${verificationRun.previewPairs.length === 1 ? "" : "s"}`
@@ -67,17 +65,13 @@ export function ContactVerificationCard({
           <strong>Selective work email check</strong>
         </div>
         <div>
-          <span>Pairs submitted</span>
+          <span>Contacts selected</span>
           <strong>{verificationRun.previewPairs.length}</strong>
-        </div>
-        <div>
-          <span>Batch limit</span>
-          <strong>Up to 10 contacts</strong>
         </div>
       </div>
 
       <section className="m3-artifact-section">
-        <h3>Exact name-and-company pairs disclosed</h3>
+        <h3>Selected contacts</h3>
         <div className="m3-pair-list">
           {verificationRun.previewPairs.map((pair) => (
             <div key={pair.contactId} className="m3-evidence-source-item">
@@ -86,8 +80,7 @@ export function ContactVerificationCard({
                 <span className="m3-source-tag">{pair.companyName}</span>
               </div>
               <p>
-                Fields transmitted: {pair.fieldsSent.join(", ")}
-                {pair.website ? ` · ${pair.website}` : ""}
+                {pair.website ?? "Work email lookup"}
               </p>
             </div>
           ))}
@@ -97,7 +90,7 @@ export function ContactVerificationCard({
       {verificationRun.failureMessage &&
         verificationRun.status === "requires_manual_review" && (
           <div className="m3-warning-callout" role="status">
-            <strong>No automatic retry attempted</strong>
+            <strong>Verification paused</strong>
             <p>{maskVendorNamesForDisplay(verificationRun.failureMessage)}</p>
           </div>
         )}
@@ -105,10 +98,10 @@ export function ContactVerificationCard({
       {verificationRun.status === "awaiting_approval" && (
         <footer className="m3-artifact-footer">
           <div className="m3-decision-copy">
-            <strong>No external verification request has been sent yet.</strong>
+            <strong>Ready to verify selected contacts</strong>
             <p>
               {providerAvailable
-                ? "Only the listed pairs above will be submitted. Unselected people are untouched."
+                ? "Only the selected contacts above will be checked."
                 : "Email verification is currently unavailable on this server."}
             </p>
           </div>

@@ -131,7 +131,7 @@ export function RecommendationCard({
     <article className="m3-artifact-card m3-recommendation-artifact" aria-label="Cited market recommendation">
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">PHASE C · CITED RECOMMENDATION</p>
+          <p className="m3-artifact-kicker">Recommendation</p>
           <h2>
             {synthesis.recommendationMode === "no_usable_evidence"
               ? "No usable public evidence was found for this question."

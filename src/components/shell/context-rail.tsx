@@ -15,7 +15,10 @@ import type {
   DropcontactProviderState,
   PeopleDiscoveryView,
 } from "@/lib/ano/people-playbooks";
-import type { ResearchConversationView } from "@/lib/ano/research-conversation";
+import {
+  maskVendorNamesForDisplay,
+  type ResearchConversationView,
+} from "@/lib/ano/research-conversation";
 import { MaterialIconButton } from "@/components/material/material-icon-button";
 import { CloseIcon } from "./ano-icons";
 
@@ -59,12 +62,8 @@ export function ContextRail({
   conversation,
   research,
   synthesis,
-  provider,
   companySearch = null,
-  prospeo = null,
   peopleDiscovery = null,
-  dropcontact = null,
-  outreachExecution = null,
   templatePack = null,
 }: ContextRailProps) {
   if (!open) return null;
@@ -72,24 +71,34 @@ export function ContextRail({
   const plan = conversation?.plan ?? null;
   const events = conversation?.events ?? [];
   const sources = research?.sources ?? [];
+  const lockedMarket =
+    synthesis?.markets.find((m) => m.id === synthesis?.decision?.marketProfileId) ?? null;
+  const lockedIndustry =
+    synthesis?.industries.find((i) => i.id === synthesis?.decision?.industryProfileId) ?? null;
+  const verifiedCount =
+    peopleDiscovery?.contacts.filter((item) => item.verificationStatus === "verified").length ?? 0;
 
   return (
-    <aside className="ano-context-rail" aria-label="Research context">
+    <aside className="ano-context-rail" aria-label="Research details">
       <div className="ano-rail-header">
         <div>
-          <p className="ano-rail-kicker">CONTEXT RAIL</p>
-          <h2>Research details</h2>
+          <h2 className="md-typescale-title-medium">Research details</h2>
         </div>
-        <MaterialIconButton ariaLabel="Close context rail" onClick={onClose}>
+        <MaterialIconButton ariaLabel="Close research details" onClick={onClose}>
           <CloseIcon />
         </MaterialIconButton>
       </div>
+      <md-divider />
 
       <div className="ano-rail-body">
         <section className="ano-rail-card">
           <div className="ano-rail-card-head">
-            <h3>Research plan</h3>
-            {plan && <span className={`ano-pill status-${plan.approvalStatus}`}>V{plan.version} · {approvalLabel(plan.approvalStatus)}</span>}
+            <h3 className="md-typescale-title-small">Brief &amp; scope</h3>
+            {plan && (
+              <span className={`ano-pill status-${plan.approvalStatus}`}>
+                {approvalLabel(plan.approvalStatus)}
+              </span>
+            )}
           </div>
           {plan ? (
             <>
@@ -106,265 +115,68 @@ export function ContextRail({
               </dl>
             </>
           ) : (
-            <p className="ano-rail-empty">No research plan created yet.</p>
+            <p className="ano-rail-empty">No research brief saved yet.</p>
           )}
         </section>
 
         <section className="ano-rail-card">
           <div className="ano-rail-card-head">
-            <h3>Research scope</h3>
-            <span className={`ano-pill ${provider?.available ? "status-ready" : "status-muted"}`}>
-              {provider?.available ? "Web search ready" : "Not configured"}
-            </span>
+            <h3 className="md-typescale-title-small">Progress summary</h3>
+            {synthesis && (
+              <span className="ano-pill status-neutral ano-capitalize">
+                {runStatusLabel(synthesis.status)}
+              </span>
+            )}
           </div>
-          {research ? (
-            <dl className="ano-rail-dl">
-              <div>
-                <dt>Status</dt>
-                <dd className="ano-capitalize">{runStatusLabel(research.run.status)}</dd>
-              </div>
-              <div>
-                <dt>Searches</dt>
-                <dd>{research.run.consumedSearches} / {research.run.maximumSearches}</dd>
-              </div>
-              <div>
-                <dt>Source fetches</dt>
-                <dd>{research.run.consumedFetches} / {research.run.maximumFetches}</dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="ano-rail-empty">
-              {plan
-                ? `Planned ceiling: up to ${plan.budget.maximumSearches} searches and ${plan.budget.maximumFetches} fetches after approval.`
-                : "No public web research scope prepared."}
-            </p>
-          )}
-        </section>
-
-        <section className="ano-rail-card">
-          <div className="ano-rail-card-head">
-            <h3>Evidence summary</h3>
-            {synthesis && <span className="ano-pill status-neutral ano-capitalize">{runStatusLabel(synthesis.status)}</span>}
-          </div>
-          {synthesis ? (
+          {synthesis || companySearch || peopleDiscovery || templatePack ? (
             <>
-              <p className="ano-rail-copy">{synthesis.assessment.summary}</p>
+              {synthesis && <p className="ano-rail-copy">{synthesis.assessment.summary}</p>}
               <dl className="ano-rail-dl">
-                <div>
-                  <dt>Saved sources</dt>
-                  <dd>{research?.run.sourceCount ?? sources.length}</dd>
-                </div>
-                <div>
-                  <dt>Target route</dt>
-                  <dd className="ano-capitalize">{synthesis.decision ? runStatusLabel(synthesis.decision.status) : "Not locked"}</dd>
-                </div>
+                {synthesis?.decision && (
+                  <div>
+                    <dt>Target route</dt>
+                    <dd className="ano-capitalize">
+                      {lockedMarket && lockedIndustry
+                        ? `${lockedMarket.name} · ${lockedIndustry.name}`
+                        : runStatusLabel(synthesis.decision.status)}
+                    </dd>
+                  </div>
+                )}
+                {companySearch && (
+                  <div>
+                    <dt>Companies</dt>
+                    <dd>
+                      {companySearch.accounts.length} found ·{" "}
+                      {companySearch.cohort?.shortlistedCount ?? 0} shortlisted
+                    </dd>
+                  </div>
+                )}
+                {peopleDiscovery && (
+                  <div>
+                    <dt>Decision-makers</dt>
+                    <dd>
+                      {peopleDiscovery.contacts.length} named · {verifiedCount} verified
+                    </dd>
+                  </div>
+                )}
+                {templatePack && (
+                  <div>
+                    <dt>Outreach templates</dt>
+                    <dd>{templatePack.steps.length} steps ready</dd>
+                  </div>
+                )}
               </dl>
             </>
           ) : (
             <p className="ano-rail-empty">
-              {research?.run.sourceCount
-                ? `${research.run.sourceCount} saved source${research.run.sourceCount === 1 ? "" : "s"} waiting for synthesis.`
-                : "Evidence summary appears after public research completes."}
+              Market findings, companies, decision-makers, and templates appear here as research progresses.
             </p>
           )}
         </section>
 
         <section className="ano-rail-card">
           <div className="ano-rail-card-head">
-            <h3>Company discovery</h3>
-            <span
-              className={`ano-pill ${
-                companySearch?.status === "completed"
-                  ? "status-ready"
-                  : prospeo?.available
-                    ? "status-neutral"
-                    : "status-muted"
-              }`}
-            >
-              {companySearch
-                ? runStatusLabel(companySearch.status)
-                : prospeo?.available
-                  ? "Directory ready"
-                  : "Local discovery ready"}
-            </span>
-          </div>
-          {companySearch ? (
-            <dl className="ano-rail-dl">
-              <div>
-                <dt>Discovery source</dt>
-                <dd>
-                  {companySearch.providerKey === "openstreetmap"
-                    ? "Local business map"
-                    : "B2B company directory"}
-                </dd>
-              </div>
-              <div>
-                <dt>Target locations</dt>
-                <dd>{companySearch.canonicalLocations.join(", ")}</dd>
-              </div>
-              <div>
-                <dt>Result limit</dt>
-                <dd>{companySearch.maximumResults} companies max</dd>
-              </div>
-              <div>
-                <dt>Returned / shortlisted</dt>
-                <dd>
-                  {companySearch.accounts.length} returned ·{" "}
-                  {companySearch.cohort?.shortlistedCount ?? 0} shortlisted
-                </dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="ano-rail-empty">
-              {synthesis?.decision?.status === "locked"
-                ? "Target locked. Prepare a local business search or B2B company directory search."
-                : "Lock a market and industry route before preparing company discovery."}
-            </p>
-          )}
-        </section>
-
-        <section className="ano-rail-card">
-          <div className="ano-rail-card-head">
-            <h3>People & verification</h3>
-            <span
-              className={`ano-pill ${
-                peopleDiscovery?.verificationRun?.status === "completed" ||
-                peopleDiscovery?.personSearch?.status === "completed"
-                  ? "status-ready"
-                  : prospeo?.available || dropcontact?.available
-                    ? "status-neutral"
-                    : "status-muted"
-              }`}
-            >
-              {peopleDiscovery?.verificationRun
-                ? `Email verification ${runStatusLabel(peopleDiscovery.verificationRun.status)}`
-                : peopleDiscovery?.personSearch
-                  ? runStatusLabel(peopleDiscovery.personSearch.status)
-                  : prospeo?.available || dropcontact?.available
-                    ? "Verifier ready"
-                    : "Verifier unavailable"}
-            </span>
-          </div>
-          {peopleDiscovery && (peopleDiscovery.contacts.length > 0 || peopleDiscovery.playbooks.length > 0 || peopleDiscovery.personSearch) ? (
-            <dl className="ano-rail-dl">
-              <div>
-                <dt>Named candidates</dt>
-                <dd>{peopleDiscovery.contacts.length}</dd>
-              </div>
-              <div>
-                <dt>Verified emails</dt>
-                <dd>
-                  {
-                    peopleDiscovery.contacts.filter(
-                      (item) => item.verificationStatus === "verified",
-                    ).length
-                  }
-                </dd>
-              </div>
-              <div>
-                <dt>Account playbooks</dt>
-                <dd>{peopleDiscovery.playbooks.length}</dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="ano-rail-empty">
-              Shortlist a company to propose buyer roles, selectively verify work emails, and compile factual playbooks.
-            </p>
-          )}
-        </section>
-
-        <section className="ano-rail-card">
-          <div className="ano-rail-card-head">
-            <h3>Email templates</h3>
-            <span
-              className={`ano-pill ${
-                templatePack && templatePack.steps.every((s) => s.lint.passed)
-                  ? "status-ready"
-                  : templatePack
-                    ? "status-neutral"
-                    : "status-muted"
-              }`}
-            >
-              {templatePack
-                ? `v${templatePack.version} · ${templatePack.steps.filter((s) => s.lint.passed).length}/${templatePack.steps.length} clean`
-                : "Not generated"}
-            </span>
-          </div>
-          {templatePack ? (
-            <dl className="ano-rail-dl">
-              <div>
-                <dt>Voice / CTA</dt>
-                <dd>
-                  {templatePack.tone.replaceAll("_", " ")} ·{" "}
-                  {templatePack.ctaStyle.replaceAll("_", " ")}
-                </dd>
-              </div>
-              <div>
-                <dt>Steps</dt>
-                <dd>{templatePack.steps.length} steps</dd>
-              </div>
-              <div>
-                <dt>Supporting claims</dt>
-                <dd>{templatePack.claimIds.length}</dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="ano-rail-empty">
-              Generate human-voice cold email sequences with standard merge variables.
-            </p>
-          )}
-        </section>
-
-        <section className="ano-rail-card">
-          <div className="ano-rail-card-head">
-            <h3>Outreach drafts</h3>
-            <span
-              className={`ano-pill ${
-                outreachExecution?.proposals.some((p) => p.status === "executed")
-                  ? "status-ready"
-                  : outreachExecution?.proposals.some((p) => p.status === "awaiting_approval")
-                    ? "status-neutral"
-                    : "status-muted"
-              }`}
-            >
-              {outreachExecution?.proposals.some((p) => p.status === "awaiting_approval")
-                ? "Approval awaiting"
-                : "Per-action gated"}
-            </span>
-          </div>
-          {outreachExecution && (outreachExecution.drafts.length > 0 || outreachExecution.proposals.length > 0) ? (
-            <dl className="ano-rail-dl">
-              <div>
-                <dt>Draft versions</dt>
-                <dd>{outreachExecution.drafts.length}</dd>
-              </div>
-              <div>
-                <dt>Pending proposals</dt>
-                <dd>
-                  {
-                    outreachExecution.proposals.filter(
-                      (item) => item.status === "awaiting_approval",
-                    ).length
-                  }
-                </dd>
-              </div>
-              <div>
-                <dt>Executed receipts</dt>
-                <dd>
-                  {outreachExecution.proposals.filter((item) => item.status === "executed").length}
-                </dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="ano-rail-empty">
-              Compile an account playbook to prepare eligible outreach drafts and per-action approvals.
-            </p>
-          )}
-        </section>
-
-        <section className="ano-rail-card">
-          <div className="ano-rail-card-head">
-            <h3>Sources</h3>
+            <h3 className="md-typescale-title-small">Saved sources</h3>
             <span className="ano-count-pill">{sources.length}</span>
           </div>
           {sources.length > 0 ? (
@@ -380,13 +192,13 @@ export function ContextRail({
               ))}
             </ul>
           ) : (
-            <p className="ano-rail-empty">Saved public sources appear here after an approved run.</p>
+            <p className="ano-rail-empty">Saved public sources appear here after market research completes.</p>
           )}
         </section>
 
         <section className="ano-rail-card">
           <div className="ano-rail-card-head">
-            <h3>Activity</h3>
+            <h3 className="md-typescale-title-small">Recent activity</h3>
             <span className="ano-count-pill">{events.length}</span>
           </div>
           {events.length > 0 ? (
@@ -394,48 +206,17 @@ export function ContextRail({
               {events.map((event) => (
                 <li key={event.id}>
                   <div>
-                    <strong>{event.label}</strong>
-                    <p>{event.detail}</p>
+                    <strong>{maskVendorNamesForDisplay(event.label)}</strong>
+                    <p>{maskVendorNamesForDisplay(event.detail)}</p>
                   </div>
                   <time>{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
                 </li>
               ))}
             </ol>
           ) : (
-            <p className="ano-rail-empty">Safe graph checkpoints and approvals appear here.</p>
+            <p className="ano-rail-empty">Workspace milestones appear here.</p>
           )}
         </section>
-
-        {conversation && (
-          <section className="ano-rail-card" aria-label="Runtime diagnostics">
-            <div className="ano-rail-card-head">
-              <h3>Diagnostics</h3>
-              <span className="ano-pill status-neutral">{conversation.run.graphVersion}</span>
-            </div>
-            <dl className="ano-rail-dl">
-              <div>
-                <dt>Graph node</dt>
-                <dd>{conversation.run.currentNode}</dd>
-              </div>
-              <div>
-                <dt>Checkpoint</dt>
-                <dd>{conversation.run.checkpointRef ? conversation.run.checkpointRef.slice(0, 12) : "Pending"}</dd>
-              </div>
-              {research && (
-                <div>
-                  <dt>Research wave</dt>
-                  <dd>
-                    Wave {Math.max(1, research.run.currentWave)} · Attempt {research.run.attemptNumber}
-                  </dd>
-                </div>
-              )}
-              <div>
-                <dt>Updated</dt>
-                <dd>{new Date(conversation.conversation.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</dd>
-              </div>
-            </dl>
-          </section>
-        )}
       </div>
     </aside>
   );

@@ -19,12 +19,9 @@ function LibraryContent() {
     <section className="ano-section-page">
       <header className="ano-section-header">
         <div>
-          <p className="ano-rail-kicker">LIBRARY</p>
+          <p className="ano-rail-kicker">Library</p>
           <h1>{view === "briefs" ? "Saved briefs & plans" : "Sources & research records"}</h1>
-          <p>
-            Read-only access to saved research conversations and source records. Opening a record
-            never triggers duplicate provider calls.
-          </p>
+          <p>Read-only access to saved research conversations and source records.</p>
         </div>
       </header>
 

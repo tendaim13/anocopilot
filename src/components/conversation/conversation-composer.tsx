@@ -8,6 +8,7 @@ import type {
   ResearchConversationView,
 } from "@/lib/ano/research-conversation";
 import { MaterialButton } from "@/components/material/material-button";
+import { MaterialInputChip } from "@/components/material/material-input-chip";
 import { MaterialTextField } from "@/components/material/material-text-field";
 import { useMaterialWeb } from "@/components/material/register";
 import { AttachFileIcon, LinkIcon } from "@/components/shell/ano-icons";
@@ -153,58 +154,44 @@ export function ConversationComposer({
         )}
 
         {(productSources.length > 0 || pendingFiles.length > 0 || pendingUrls.length > 0) && (
-          <div className="m3-composer-attachments" aria-label="Attached product sources">
-            {productSources.map((src) => (
-              <span key={src.id} className="m3-attachment-chip is-saved">
-                <span className="m3-attachment-type">
-                  {src.sourceType === "website_url" ? "URL" : src.sourceType.toUpperCase()}
-                </span>
-                <span className="m3-attachment-label">{src.label}</span>
-                {onRemoveSavedSource && (
-                  <button
-                    type="button"
-                    className="m3-attachment-remove"
-                    aria-label={`Remove ${src.label}`}
-                    onClick={() => onRemoveSavedSource(src.id)}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
-            {pendingFiles.map((file, idx) => (
-              <span key={`${file.name}-${idx}`} className="m3-attachment-chip">
-                <span className="m3-attachment-type">FILE</span>
-                <span className="m3-attachment-label">{file.name}</span>
-                {onRemovePendingFile && (
-                  <button
-                    type="button"
-                    className="m3-attachment-remove"
-                    aria-label={`Remove ${file.name}`}
-                    onClick={() => onRemovePendingFile(idx)}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
-            {pendingUrls.map((url) => (
-              <span key={url} className="m3-attachment-chip">
-                <span className="m3-attachment-type">LINK</span>
-                <span className="m3-attachment-label">{url.replace(/^https?:\/\//i, "")}</span>
-                {onRemovePendingUrl && (
-                  <button
-                    type="button"
-                    className="m3-attachment-remove"
-                    aria-label={`Remove ${url}`}
-                    onClick={() => onRemovePendingUrl(url)}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
+          <md-chip-set aria-label="Attached product sources">
+            {productSources.map((src) => {
+              const label = `${src.sourceType === "website_url" ? "URL" : src.sourceType.toUpperCase()} · ${src.label}`;
+              return onRemoveSavedSource ? (
+                <MaterialInputChip
+                  key={src.id}
+                  label={label}
+                  selected
+                  onRemove={() => onRemoveSavedSource(src.id)}
+                />
+              ) : (
+                <md-assist-chip key={src.id} label={label} />
+              );
+            })}
+            {pendingFiles.map((file, idx) =>
+              onRemovePendingFile ? (
+                <MaterialInputChip
+                  key={`${file.name}-${idx}`}
+                  label={`FILE · ${file.name}`}
+                  onRemove={() => onRemovePendingFile(idx)}
+                />
+              ) : (
+                <md-assist-chip key={`${file.name}-${idx}`} label={`FILE · ${file.name}`} />
+              ),
+            )}
+            {pendingUrls.map((url) => {
+              const label = `LINK · ${url.replace(/^https?:\/\//i, "")}`;
+              return onRemovePendingUrl ? (
+                <MaterialInputChip
+                  key={url}
+                  label={label}
+                  onRemove={() => onRemovePendingUrl(url)}
+                />
+              ) : (
+                <md-assist-chip key={url} label={label} />
+              );
+            })}
+          </md-chip-set>
         )}
 
         {urlInputOpen && (

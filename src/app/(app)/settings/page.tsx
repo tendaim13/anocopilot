@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { MaterialButton } from "@/components/material/material-button";
 import { MaterialTextField } from "@/components/material/material-text-field";
+import { useMaterialWeb } from "@/components/material/register";
 import { MoonIcon, SunIcon } from "@/components/shell/ano-icons";
 import { useAppShell } from "@/components/shell/app-shell";
 import {
@@ -28,6 +29,7 @@ function inviteStatusBadgeClass(status: WorkspaceInviteSummary["status"]): strin
 }
 
 export default function SettingsPage() {
+  useMaterialWeb();
   const router = useRouter();
   const shell = useAppShell();
   const workspace = shell?.workspace;
@@ -299,46 +301,70 @@ export default function SettingsPage() {
                   disabled={creatingInvite}
                 />
                 <div className="ano-invite-controls">
-                  <label className="ano-select-field">
-                    <span>Role</span>
-                    <select
-                      className="ano-select"
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value as InviteRole)}
-                      disabled={creatingInvite}
-                    >
-                      <option value="member">Member</option>
-                      <option value="viewer">Viewer</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </label>
-                  <label className="ano-select-field">
-                    <span>Expires</span>
-                    <select
-                      className="ano-select"
-                      value={inviteExpiresHours}
-                      onChange={(e) => setInviteExpiresHours(Number(e.target.value))}
-                      disabled={creatingInvite}
-                    >
-                      <option value={24}>24 hours</option>
-                      <option value={168}>7 days</option>
-                      <option value={720}>30 days</option>
-                    </select>
-                  </label>
-                  <label className="ano-select-field">
-                    <span>Max uses</span>
-                    <select
-                      className="ano-select"
-                      value={inviteMaxUses}
-                      onChange={(e) => setInviteMaxUses(Number(e.target.value))}
-                      disabled={creatingInvite}
-                    >
-                      <option value={1}>1 use</option>
-                      <option value={5}>5 uses</option>
-                      <option value={25}>25 uses</option>
-                      <option value={100}>100 uses</option>
-                    </select>
-                  </label>
+                  <md-outlined-select
+                    label="Role"
+                    value={inviteRole}
+                    disabled={creatingInvite || undefined}
+                    onChange={(e) => {
+                      const next = (e.currentTarget as unknown as { value?: string }).value;
+                      if (next === "member" || next === "viewer" || next === "admin") {
+                        setInviteRole(next);
+                      }
+                    }}
+                  >
+                    <md-select-option value="member" selected={inviteRole === "member" || undefined}>
+                      <div slot="headline">Member</div>
+                    </md-select-option>
+                    <md-select-option value="viewer" selected={inviteRole === "viewer" || undefined}>
+                      <div slot="headline">Viewer</div>
+                    </md-select-option>
+                    <md-select-option value="admin" selected={inviteRole === "admin" || undefined}>
+                      <div slot="headline">Admin</div>
+                    </md-select-option>
+                  </md-outlined-select>
+
+                  <md-outlined-select
+                    label="Expires"
+                    value={String(inviteExpiresHours)}
+                    disabled={creatingInvite || undefined}
+                    onChange={(e) => {
+                      const next = Number((e.currentTarget as unknown as { value?: string }).value);
+                      if (Number.isFinite(next) && next > 0) setInviteExpiresHours(next);
+                    }}
+                  >
+                    <md-select-option value="24" selected={inviteExpiresHours === 24 || undefined}>
+                      <div slot="headline">24 hours</div>
+                    </md-select-option>
+                    <md-select-option value="168" selected={inviteExpiresHours === 168 || undefined}>
+                      <div slot="headline">7 days</div>
+                    </md-select-option>
+                    <md-select-option value="720" selected={inviteExpiresHours === 720 || undefined}>
+                      <div slot="headline">30 days</div>
+                    </md-select-option>
+                  </md-outlined-select>
+
+                  <md-outlined-select
+                    label="Max uses"
+                    value={String(inviteMaxUses)}
+                    disabled={creatingInvite || undefined}
+                    onChange={(e) => {
+                      const next = Number((e.currentTarget as unknown as { value?: string }).value);
+                      if (Number.isFinite(next) && next > 0) setInviteMaxUses(next);
+                    }}
+                  >
+                    <md-select-option value="1" selected={inviteMaxUses === 1 || undefined}>
+                      <div slot="headline">1 use</div>
+                    </md-select-option>
+                    <md-select-option value="5" selected={inviteMaxUses === 5 || undefined}>
+                      <div slot="headline">5 uses</div>
+                    </md-select-option>
+                    <md-select-option value="25" selected={inviteMaxUses === 25 || undefined}>
+                      <div slot="headline">25 uses</div>
+                    </md-select-option>
+                    <md-select-option value="100" selected={inviteMaxUses === 100 || undefined}>
+                      <div slot="headline">100 uses</div>
+                    </md-select-option>
+                  </md-outlined-select>
                 </div>
                 <MaterialButton type="submit" variant="filled" disabled={creatingInvite}>
                   {creatingInvite ? "Generating link…" : "Generate invite link"}

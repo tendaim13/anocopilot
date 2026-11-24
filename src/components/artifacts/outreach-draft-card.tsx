@@ -96,11 +96,11 @@ export function OutreachDraftCard({
   return (
     <article
       className="m3-artifact-card"
-      aria-label="Phase F outreach drafts and approval-gated proposals"
+      aria-label="Outreach drafts and action approvals"
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">PHASE F · OUTREACH DRAFTS &amp; APPROVALS</p>
+          <p className="m3-artifact-kicker">Outreach Drafts</p>
           <h2>
             {drafts.length === 0
               ? "Compile versioned outreach drafts from approved playbooks"
@@ -118,7 +118,7 @@ export function OutreachDraftCard({
         >
           {proposals.some((p) => p.status === "awaiting_approval")
             ? "Proposal approval required"
-            : "Per-action gated"}
+            : "Approval required"}
         </span>
       </header>
 

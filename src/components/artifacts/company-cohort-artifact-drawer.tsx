@@ -132,9 +132,7 @@ export function CompanyCohortArtifactDrawer({
       <aside className="m3-artifact-drawer">
         <header className="m3-artifact-drawer-header">
           <div>
-            <p className="m3-artifact-kicker">
-              ARTIFACT · {companySearch.providerKey === "openstreetmap" ? "LOCAL BUSINESS COHORT" : "B2B DIRECTORY COHORT"}
-            </p>
+            <p className="m3-artifact-kicker">Companies</p>
             <h2>
               {companySearch.targetMarketName} · {companySearch.accounts.length} companies
             </h2>
@@ -265,30 +263,27 @@ export function CompanyCohortArtifactDrawer({
                               className="m3-table-row-actions"
                               onClick={(event) => event.stopPropagation()}
                             >
-                              <button
-                                type="button"
-                                className={`m3-row-action-btn${account.lifecycleState === "shortlisted" ? " is-active" : ""}`}
+                              <MaterialButton
+                                variant={account.lifecycleState === "shortlisted" ? "tonal" : "text"}
                                 disabled={isWorking || account.lifecycleState === "shortlisted"}
                                 onClick={() => onUpdateAccountState(row.id, "shortlisted")}
                               >
                                 Shortlist
-                              </button>
-                              <button
-                                type="button"
-                                className="m3-row-action-btn"
+                              </MaterialButton>
+                              <MaterialButton
+                                variant="text"
                                 disabled={isWorking || account.lifecycleState === "held"}
                                 onClick={() => onUpdateAccountState(row.id, "held")}
                               >
                                 Hold
-                              </button>
-                              <button
-                                type="button"
-                                className="m3-row-action-btn"
+                              </MaterialButton>
+                              <MaterialButton
+                                variant="text"
                                 disabled={isWorking || account.lifecycleState === "dismissed"}
                                 onClick={() => onUpdateAccountState(row.id, "dismissed")}
                               >
                                 Dismiss
-                              </button>
+                              </MaterialButton>
                             </div>
                           </td>
                         </tr>

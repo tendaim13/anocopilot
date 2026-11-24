@@ -151,10 +151,10 @@ export function PeopleCohortArtifactDrawer({
         <header className="m3-artifact-drawer-header">
           <div>
             <p className="m3-artifact-kicker">
-              ARTIFACT ·{" "}
+              Decision-makers ·{" "}
               {peopleDiscovery.personSearch?.providerKey === "website_team"
-                ? "WEBSITE TEAM EXTRACTION"
-                : "BUYING COMMITTEE PEOPLE"}
+                ? "Company websites"
+                : "B2B directory"}
             </p>
             <h2>
               {contacts.length} decision-maker{contacts.length === 1 ? "" : "s"} across{" "}

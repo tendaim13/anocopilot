@@ -266,14 +266,13 @@ export function LoginForm() {
                 disabled={isSubmitting}
               />
               <div className="auth-inline-actions">
-                <button
-                  type="button"
-                  className="auth-inline-link"
+                <MaterialButton
+                  variant="text"
                   disabled={isSubmitting}
                   onClick={() => void handlePasswordReset()}
                 >
                   Forgot password?
-                </button>
+                </MaterialButton>
               </div>
             </>
           )}

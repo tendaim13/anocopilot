@@ -209,22 +209,22 @@ export function AppSidebar({
           <span className="ano-safe-dot" aria-hidden="true" />
           <div>
             <strong>{workspaceName}</strong>
-            <small>{actorEmail ?? "Approval-gated workspace"}</small>
+            <small>{actorEmail ?? "Active workspace"}</small>
           </div>
         </div>
         {mode === "supabase" && onSignOut && (
-          <button type="button" className="ano-sidebar-signout" onClick={onSignOut}>
+          <MaterialButton variant="outlined" onClick={onSignOut}>
             Sign out
-          </button>
+          </MaterialButton>
         )}
         {mode !== "supabase" && (
           <div className="ano-sidebar-auth-links">
-            <Link href="/login" className="ano-sidebar-signin" onClick={onNavigate}>
+            <MaterialButton variant="outlined" href="/login" onClick={onNavigate}>
               Sign in
-            </Link>
-            <Link href="/signup" className="ano-sidebar-signin" onClick={onNavigate}>
+            </MaterialButton>
+            <MaterialButton variant="filled" href="/signup" onClick={onNavigate}>
               Create account
-            </Link>
+            </MaterialButton>
           </div>
         )}
       </div>

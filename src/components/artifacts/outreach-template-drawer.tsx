@@ -173,7 +173,7 @@ export function OutreachTemplateDrawer({
         <header className="m3-artifact-drawer-header">
           <div>
             <p className="m3-artifact-kicker">
-              TEMPLATE STUDIO · SEQUENCE v{templatePack.version} · ANTI-AI VOICE CHECK
+              Outreach templates · Version {templatePack.version}
             </p>
             <h2>
               {activeStep.label} (Day {activeStep.dayOffset})
@@ -267,32 +267,27 @@ export function OutreachTemplateDrawer({
                 />
               )}
 
-              <label className="m3-template-field-label" htmlFor="m3-template-body-editor">
-                Message body (plain text)
-              </label>
-              <textarea
+              <MaterialTextField
                 id="m3-template-body-editor"
-                className="m3-template-textarea"
+                label="Message body (plain text)"
+                type="textarea"
                 rows={7}
                 value={draftBody}
-                onChange={(event) => setDraftBody(event.target.value)}
+                onValueChange={setDraftBody}
                 disabled={isWorking}
               />
 
               <div className="m3-chip-group">
                 <span className="m3-chip-group-label">Insert merge tag</span>
-                <div className="m3-action-row">
+                <md-chip-set aria-label="Insert merge tags">
                   {SUPPORTED_MERGE_TAGS.map((tag) => (
-                    <button
+                    <md-assist-chip
                       key={tag}
-                      type="button"
-                      className="m3-row-action-btn"
+                      label={tag}
                       onClick={() => appendMergeTag(tag)}
-                    >
-                      {tag}
-                    </button>
+                    />
                   ))}
-                </div>
+                </md-chip-set>
               </div>
 
               <MaterialTextField
@@ -353,7 +348,7 @@ export function OutreachTemplateDrawer({
                     })
                   }
                 >
-                  Regenerate all (Free)
+                  Regenerate sequence
                 </MaterialButton>
               </div>
             </section>
@@ -361,34 +356,38 @@ export function OutreachTemplateDrawer({
             <section className="m3-artifact-card">
               <header className="m3-artifact-header">
                 <div>
-                  <p className="m3-artifact-kicker">LIVE LEAD PREVIEW</p>
+                  <p className="m3-artifact-kicker">Live lead preview</p>
                   <h3>Test rendered output before export</h3>
                 </div>
               </header>
 
               {contacts.length > 0 ? (
-                <div className="m3-chip-group">
-                  <label className="m3-chip-group-label" htmlFor="m3-lead-preview-select">
-                    Preview with discovered lead ({contacts.length})
-                  </label>
-                  <select
-                    id="m3-lead-preview-select"
-                    className="m3-template-select"
-                    value={selectedContact?.id ?? ""}
-                    onChange={(event) => setSelectedLeadId(event.target.value)}
-                  >
-                    {contacts.map((contact) => (
-                      <option key={contact.id} value={contact.id}>
+                <md-outlined-select
+                  id="m3-lead-preview-select"
+                  label={`Preview with discovered lead (${contacts.length})`}
+                  value={selectedContact?.id ?? ""}
+                  onChange={(event) => {
+                    const next = (event.currentTarget as unknown as { value?: string }).value ?? "";
+                    setSelectedLeadId(next);
+                  }}
+                >
+                  {contacts.map((contact) => (
+                    <md-select-option
+                      key={contact.id}
+                      value={contact.id}
+                      selected={selectedContact?.id === contact.id || undefined}
+                    >
+                      <div slot="headline">
                         {contact.fullName} · {contact.title ?? "Decision maker"} @{" "}
                         {contact.accountName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                      </div>
+                    </md-select-option>
+                  ))}
+                </md-outlined-select>
               ) : (
                 <p className="m3-helper-note">
                   Previewing with {matchedAccount?.name ?? "sample company"}. Discover named
-                  contacts in Phase E to preview exact personalizations.
+                  decision-makers to preview exact personalizations.
                 </p>
               )}
 

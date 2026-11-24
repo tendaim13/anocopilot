@@ -111,6 +111,22 @@ interface MaterialChipProps extends MaterialHtmlProps {
   target?: "_blank" | "_parent" | "_self" | "_top" | "";
 }
 
+interface MaterialDividerProps extends MaterialHtmlProps {
+  inset?: boolean;
+  insetStart?: boolean;
+  "inset-start"?: boolean;
+  insetEnd?: boolean;
+  "inset-end"?: boolean;
+}
+
+interface MaterialInputChipProps extends MaterialChipProps {
+  avatar?: boolean;
+  removeOnly?: boolean;
+  "remove-only"?: boolean;
+  selected?: boolean;
+  onRemove?: (event: Event) => void;
+}
+
 interface MaterialFilterChipProps extends MaterialChipProps {
   selected?: boolean;
   removable?: boolean;
@@ -234,11 +250,14 @@ interface MaterialCheckboxProps extends MaterialHtmlProps {
 declare module "react" {
   namespace JSX {
     interface IntrinsicElements {
+      "md-elevated-button": MaterialButtonProps;
       "md-filled-button": MaterialButtonProps;
       "md-filled-tonal-button": MaterialButtonProps;
       "md-outlined-button": MaterialButtonProps;
       "md-text-button": MaterialButtonProps;
       "md-checkbox": MaterialCheckboxProps;
+      "md-divider": MaterialDividerProps;
+      "md-elevation": MaterialHtmlProps;
       "md-icon": MaterialIconProps;
       "md-icon-button": MaterialIconButtonProps;
       "md-filled-icon-button": MaterialIconButtonProps;
@@ -249,6 +268,7 @@ declare module "react" {
       "md-list-item": MaterialListItemProps;
       "md-chip-set": MaterialHtmlProps;
       "md-filter-chip": MaterialFilterChipProps;
+      "md-input-chip": MaterialInputChipProps;
       "md-suggestion-chip": MaterialChipProps;
       "md-assist-chip": MaterialChipProps;
       "md-dialog": MaterialDialogProps;

@@ -34,7 +34,7 @@ export function EvidenceCard({ research, onOpenContextRail }: EvidenceCardProps)
     <article className="m3-artifact-card" aria-label="Saved evidence source ledger">
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">SOURCE LEDGER · SOURCE OBSERVATIONS</p>
+          <p className="m3-artifact-kicker">Market Sources</p>
           <h2>
             {research.sources.length} saved source{research.sources.length === 1 ? "" : "s"}
           </h2>

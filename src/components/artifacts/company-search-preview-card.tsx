@@ -177,7 +177,7 @@ export function CompanySearchPreviewCard({
       <header className="m3-artifact-header">
         <div>
           <p className="m3-artifact-kicker">
-            PHASE D · {displayedProvider === "openstreetmap" ? "LOCAL BUSINESS DISCOVERY" : "B2B COMPANY DISCOVERY"}
+            Companies · {displayedProvider === "openstreetmap" ? "Local business" : "B2B directory"}
           </p>
           <h2>
             {!companySearch
@@ -235,19 +235,9 @@ export function CompanySearchPreviewCard({
           </strong>
         </div>
         <div>
-          <span>Result ceiling</span>
-          <strong>Max 25 companies</strong>
-        </div>
-        <div>
           <span>Discovery mode</span>
           <strong>
             {displayedProvider === "openstreetmap" ? "Local map search" : "B2B company directory"}
-          </strong>
-        </div>
-        <div>
-          <span>Linked Phase C claims</span>
-          <strong>
-            {linkedClaimCount} cited claim{linkedClaimCount === 1 ? "" : "s"}
           </strong>
         </div>
       </div>
@@ -411,7 +401,7 @@ export function CompanySearchPreviewCard({
 
       {isManualReview && companySearch?.failureMessage && (
         <div className="m3-warning-callout" role="status">
-          <strong>No automatic retry was attempted</strong>
+          <strong>Search paused</strong>
           <p>{maskVendorNamesForDisplay(companySearch.failureMessage)}</p>
         </div>
       )}
@@ -422,16 +412,12 @@ export function CompanySearchPreviewCard({
             <strong>
               {showFilterEditor
                 ? companySearch && !isCompleted
-                  ? "No search has run with these filters yet."
+                  ? "Preview filters updated."
                   : isOsmSelected
-                    ? "Preparing a preview resolves your target cities and metro regions."
-                    : "Preparing a preview verifies your location and industry filters."
+                    ? "Preview resolves your target cities and metro regions."
+                    : "Preview verifies your location and industry filters."
                 : "Want narrower, more relevant businesses for your product?"}
             </strong>
-            <p>
-              People discovery, email verification, CRM writes, and outreach remain strictly off in
-              this step.
-            </p>
           </div>
           <div className="m3-action-row">
             {isCompleted && !isEditingFilters && (

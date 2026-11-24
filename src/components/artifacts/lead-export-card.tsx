@@ -87,11 +87,11 @@ export function LeadExportCard({
   return (
     <article
       className="m3-artifact-card"
-      aria-label="Phase 9C blaster-ready leads and email templates export pack"
+      aria-label="Leads and email templates export"
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">PHASE 9C · EXPORT PACK (CSV &amp; TEMPLATES)</p>
+          <p className="m3-artifact-kicker">Export</p>
           <h2>Export blaster-ready leads list &amp; email templates</h2>
         </div>
         <span
@@ -106,8 +106,8 @@ export function LeadExportCard({
       </header>
 
       <p className="m3-artifact-lead">
-        Download RFC-4180 formula-safe CSV files formatted for external email blasters, spreadsheets,
-        or manual outreach. Keeps verified vs public-website email provenance honest in every row.
+        Download spreadsheet-safe CSV files formatted for external email tools or manual outreach,
+        keeping verified vs public-website email provenance honest in every row.
       </p>
 
       <div className="m3-metric-strip">

@@ -109,7 +109,7 @@ export function PeopleDiscoveryCard({
         id: "00000000-0000-4000-8000-000000000001",
         marketProfileId: null,
         name: targetIndustryName ?? companySearch?.targetIndustryName ?? "Target industry",
-        summary: "Target industry from locked Phase C route.",
+        summary: "Target industry from locked market route.",
         operationalProblems: [],
         solutionFit: [],
         buyerRoleHypotheses: peopleDiscovery.personSearch?.approvedRoles ?? [],
@@ -213,13 +213,12 @@ export function PeopleDiscoveryCard({
   return (
     <article
       className="m3-artifact-card"
-      aria-label="Phase E people and buying committee discovery"
+      aria-label="Decision-makers and buying committee discovery"
     >
       <header className="m3-artifact-header">
         <div>
           <p className="m3-artifact-kicker">
-            PHASE E · BUYING COMMITTEE &amp; PEOPLE (
-            {isWebsiteSelected ? "COMPANY WEBSITES" : "B2B DIRECTORY"})
+            Decision-Makers · {isWebsiteSelected ? "Company websites" : "B2B directory"}
           </p>
           <h2>
             {!personSearch
@@ -395,7 +394,7 @@ export function PeopleDiscoveryCard({
 
       {personSearch?.failureMessage && personSearch.status === "requires_manual_review" && (
         <div className="m3-warning-callout" role="status">
-          <strong>No automatic retry attempted</strong>
+          <strong>Search paused</strong>
           <p>{maskVendorNamesForDisplay(personSearch.failureMessage)}</p>
         </div>
       )}

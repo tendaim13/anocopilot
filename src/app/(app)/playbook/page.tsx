@@ -59,7 +59,7 @@ function PlaybooksContent() {
     <section className="ano-section-page">
       <header className="ano-section-header">
         <div>
-          <p className="ano-rail-kicker">PIPELINE · PHASE E</p>
+          <p className="ano-rail-kicker">Playbooks</p>
           <h1>Factual account playbooks</h1>
           <p>
             Evidence-grounded account, industry, and buyer playbooks compiled exclusively from
@@ -109,7 +109,7 @@ function PlaybooksContent() {
           <p>
             {shell?.mode !== "supabase"
               ? "Authenticate with your Ano workspace account to inspect factual sales playbooks."
-              : "Shortlist an account in Phase D and click Compile factual playbooks inside the conversation thread."}
+              : "Shortlist an account and compile factual playbooks inside a research thread."}
           </p>
         </article>
       )}

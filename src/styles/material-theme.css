@@ -4,9 +4,9 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Material 3 Reference Typeface */
-  --md-ref-typeface-brand: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --md-ref-typeface-plain: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* Material 3 Reference Typeface (self-hosted Roboto from app/layout.tsx) */
+  --md-ref-typeface-brand: var(--font-roboto), "Roboto", sans-serif;
+  --md-ref-typeface-plain: var(--font-roboto), "Roboto", sans-serif;
   --md-ref-typeface-weight-bold: 700;
   --md-ref-typeface-weight-medium: 500;
   --md-ref-typeface-weight-regular: 400;
@@ -51,15 +51,7 @@
   --md-sys-color-scrim: #18181b;
   --md-sys-color-surface-tint: #ea580c;
 
-  /* Ano Semantic & Shell Tokens (Light) */
-  --ano-color-shell: #fafafa;
-  --ano-color-shell-elevated: #f4f4f5;
-  --ano-color-shell-text: #18181b;
-  --ano-color-shell-muted: #71717a;
-  --ano-color-shell-border: #e4e4e7;
-  --ano-color-shell-hover: rgba(234, 88, 12, 0.08);
-  --ano-color-shell-active-bg: #ffedd5;
-  --ano-color-shell-active-text: #9a3412;
+  /* Ano Semantic Status Tokens (Light) */
   --ano-color-safe: #15803d;
   --ano-color-safe-container: #dcfce7;
   --ano-color-on-safe-container: #14532d;
@@ -68,7 +60,6 @@
   --ano-color-warning-container: #fef3c7;
   --ano-color-on-warning-container: #78350f;
   --ano-color-warning-outline: #fde68a;
-  --ano-elevation-card: 0 10px 30px rgba(24, 24, 27, 0.07);
 
   /* Material 3 Shape Tokens */
   --md-sys-shape-corner-none: 0px;
@@ -147,12 +138,9 @@
   --md-sys-typescale-label-small-line-height: 1rem;
   --md-sys-typescale-label-small-weight: var(--md-ref-typeface-weight-medium);
 
-  /* Component Token Defaults */
+  /* Component Token Defaults — preserve authentic Material 3 pill buttons */
   --md-outlined-text-field-container-shape: var(--md-sys-shape-corner-small);
-  --md-filled-button-container-shape: var(--md-sys-shape-corner-small);
-  --md-filled-tonal-button-container-shape: var(--md-sys-shape-corner-small);
-  --md-outlined-button-container-shape: var(--md-sys-shape-corner-small);
-  --md-text-button-container-shape: var(--md-sys-shape-corner-small);
+  --md-outlined-select-text-field-container-shape: var(--md-sys-shape-corner-small);
 }
 
 [data-theme="dark"] {
@@ -198,15 +186,7 @@
   --md-sys-color-scrim: #000000;
   --md-sys-color-surface-tint: #ff7a45;
 
-  /* Ano Semantic & Shell Tokens (Dark) */
-  --ano-color-shell: #0d0d0f;
-  --ano-color-shell-elevated: #16161a;
-  --ano-color-shell-text: #f4f4f5;
-  --ano-color-shell-muted: #a1a1aa;
-  --ano-color-shell-border: #27272a;
-  --ano-color-shell-hover: rgba(255, 122, 69, 0.12);
-  --ano-color-shell-active-bg: rgba(255, 122, 69, 0.18);
-  --ano-color-shell-active-text: #ffedd5;
+  /* Ano Semantic Status Tokens (Dark) */
   --ano-color-safe: #4ade80;
   --ano-color-safe-container: #0f291a;
   --ano-color-on-safe-container: #bbf7d0;
@@ -215,10 +195,10 @@
   --ano-color-warning-container: #2c1e06;
   --ano-color-on-warning-container: #fef3c7;
   --ano-color-warning-outline: #78350f;
-  --ano-elevation-card: 0 18px 42px rgba(0, 0, 0, 0.55);
 }
 
 /* Prevent layout shift before Material custom elements finish upgrading. */
+md-elevated-button:not(:defined),
 md-filled-button:not(:defined),
 md-filled-tonal-button:not(:defined),
 md-outlined-button:not(:defined),
@@ -228,7 +208,7 @@ md-text-button:not(:defined) {
   justify-content: center;
   min-height: 40px;
   padding: 0 24px;
-  border-radius: var(--md-sys-shape-corner-small);
+  border-radius: var(--md-sys-shape-corner-full);
   font-family: var(--md-sys-typescale-label-large-font);
   font-size: var(--md-sys-typescale-label-large-size);
   font-weight: var(--md-sys-typescale-label-large-weight);
@@ -264,20 +244,19 @@ md-outlined-text-field {
   display: grid;
   place-items: center;
   padding: 28px;
-  background:
-    radial-gradient(circle at 15% 15%, color-mix(in srgb, var(--md-sys-color-primary-container) 35%, transparent) 0%, transparent 36%),
-    var(--md-sys-color-background);
+  background: var(--md-sys-color-background);
   color: var(--md-sys-color-on-background);
 }
 
 .auth-card {
+  position: relative;
   width: min(100%, 480px);
   padding: 36px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-large);
   background: var(--md-sys-color-surface-container-lowest);
   color: var(--md-sys-color-on-surface);
-  box-shadow: var(--ano-elevation-card);
+  --md-elevation-level: 2;
 }
 
 .onboarding-card {
@@ -298,10 +277,10 @@ md-outlined-text-field {
 
 .auth-card .eyebrow {
   color: var(--md-sys-color-primary);
-  font-family: var(--md-sys-typescale-label-small-font);
   font-size: var(--md-sys-typescale-label-small-size);
-  font-weight: 800;
-  letter-spacing: 1.6px;
+  line-height: var(--md-sys-typescale-label-small-line-height);
+  font-weight: var(--md-ref-typeface-weight-bold);
+  letter-spacing: 0.08em;
   margin: 0 0 8px;
 }
 
@@ -309,15 +288,15 @@ md-outlined-text-field {
   margin: 0 0 10px;
   color: var(--md-sys-color-on-surface);
   font-family: var(--md-sys-typescale-headline-large-font);
-  font-size: clamp(28px, 3.5vw, 36px);
-  line-height: 1.1;
-  letter-spacing: -0.03em;
+  font-size: var(--md-sys-typescale-headline-large-size);
+  line-height: var(--md-sys-typescale-headline-large-line-height);
+  font-weight: var(--md-sys-typescale-headline-large-weight);
+  letter-spacing: -0.02em;
 }
 
 .auth-card .lede {
   margin: 0;
   color: var(--md-sys-color-on-surface-variant);
-  font-family: var(--md-sys-typescale-body-medium-font);
   font-size: var(--md-sys-typescale-body-medium-size);
   line-height: var(--md-sys-typescale-body-medium-line-height);
 }
@@ -345,14 +324,16 @@ md-outlined-text-field {
 }
 
 .brand-lockup strong {
-  font-size: 20px;
-  letter-spacing: -0.03em;
+  font-size: var(--md-sys-typescale-title-large-size);
+  line-height: var(--md-sys-typescale-title-large-line-height);
+  letter-spacing: -0.02em;
 }
 
 .brand-lockup small {
   margin-top: 2px;
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: var(--md-sys-typescale-label-small-size);
+  line-height: var(--md-sys-typescale-label-small-line-height);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
@@ -360,9 +341,10 @@ md-outlined-text-field {
   display: flex;
   align-items: center;
   color: var(--md-sys-color-primary);
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -14px;
+  font-size: var(--md-sys-typescale-headline-medium-size);
+  line-height: 1;
+  font-weight: var(--md-ref-typeface-weight-bold);
+  letter-spacing: -0.45em;
   width: 34px;
 }
 
@@ -382,9 +364,8 @@ md-outlined-text-field {
   background: var(--ano-color-safe-container);
   color: var(--ano-color-on-safe-container);
   padding: 12px 14px;
-  font-family: var(--md-sys-typescale-body-small-font);
   font-size: var(--md-sys-typescale-body-small-size);
-  line-height: 1.45;
+  line-height: var(--md-sys-typescale-body-small-line-height);
 }
 
 .workspace-domain-note b {
@@ -398,9 +379,8 @@ md-outlined-text-field {
   background: var(--ano-color-warning-container);
   color: var(--ano-color-on-warning-container);
   padding: 12px 14px;
-  font-family: var(--md-sys-typescale-body-small-font);
   font-size: var(--md-sys-typescale-body-small-size);
-  line-height: 1.45;
+  line-height: var(--md-sys-typescale-body-small-line-height);
 }
 
 .auth-message.is-error {
@@ -411,15 +391,18 @@ md-outlined-text-field {
 
 .auth-footnote {
   margin: 22px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   color: var(--md-sys-color-on-surface-variant);
-  font-family: var(--md-sys-typescale-body-small-font);
   font-size: var(--md-sys-typescale-body-small-size);
-  line-height: 1.45;
+  line-height: var(--md-sys-typescale-body-small-line-height);
 }
 
 .auth-footnote a {
   color: var(--md-sys-color-primary);
-  font-weight: 700;
+  font-weight: var(--md-ref-typeface-weight-bold);
   text-decoration: none;
 }
 
@@ -433,21 +416,6 @@ md-outlined-text-field {
   margin-top: -8px;
 }
 
-.auth-inline-link {
-  border: none;
-  background: transparent;
-  padding: 0;
-  color: var(--md-sys-color-primary);
-  font: inherit;
-  font-size: var(--md-sys-typescale-body-small-font-size, 13px);
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.auth-inline-link:hover {
-  text-decoration: underline;
-}
-
 .auth-secondary-section {
   margin-top: 22px;
   padding-top: 18px;
@@ -458,8 +426,9 @@ md-outlined-text-field {
 
 .auth-secondary-label {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--md-sys-typescale-label-large-size);
+  line-height: var(--md-sys-typescale-label-large-line-height);
+  font-weight: var(--md-ref-typeface-weight-medium);
   color: var(--md-sys-color-on-surface-variant);
 }
 

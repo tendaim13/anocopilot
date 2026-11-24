@@ -100,7 +100,7 @@ function PeopleContent() {
     <section className="ano-section-page">
       <header className="ano-section-header">
         <div>
-          <p className="ano-rail-kicker">PIPELINE · PHASE E / 9C</p>
+          <p className="ano-rail-kicker">People</p>
           <h1>People &amp; contact export</h1>
           <p>
             Named buyers discovered for shortlisted companies alongside verified work email and
@@ -199,9 +199,7 @@ function PeopleContent() {
               <article className="m3-artifact-card">
                 <header className="m3-artifact-header">
                   <div>
-                    <p className="m3-artifact-kicker">
-                      PERSON RECORD · {contact.confidence.toUpperCase()} ROLE CONFIDENCE
-                    </p>
+                    <p className="m3-artifact-kicker">Decision-maker</p>
                     <h2>{contact.fullName}</h2>
                     <p className="m3-helper-note">
                       {[contact.title, contact.accountName, contact.location]

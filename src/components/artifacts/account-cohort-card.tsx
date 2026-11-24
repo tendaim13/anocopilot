@@ -53,8 +53,8 @@ export function AccountCohortCard({
       <header className="m3-artifact-header">
         <div>
           <p className="m3-artifact-kicker">
-            COMPANY COHORT ARTIFACT ·{" "}
-            {companySearch.providerKey === "openstreetmap" ? "LOCAL BUSINESS" : "B2B DIRECTORY"}
+            Companies ·{" "}
+            {companySearch.providerKey === "openstreetmap" ? "Local business" : "B2B directory"}
           </p>
           <h2>
             {cohort.totalReturned} candidate account

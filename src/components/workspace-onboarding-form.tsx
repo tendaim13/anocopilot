@@ -262,13 +262,9 @@ export function WorkspaceOnboardingForm() {
               <Link href="/research">Back to Ano</Link> ·{" "}
             </>
           ) : null}
-          <button
-            type="button"
-            className="auth-inline-link"
-            onClick={() => void handleSignOut()}
-          >
+          <MaterialButton variant="text" onClick={() => void handleSignOut()}>
             Sign out
-          </button>
+          </MaterialButton>
         </p>
       </section>
     </main>

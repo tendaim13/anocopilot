@@ -30,7 +30,7 @@ export function PlaybookCard({ playbook }: PlaybookCardProps) {
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">FACTUAL ACCOUNT PLAYBOOK · PROVENANCE-LOCKED</p>
+          <p className="m3-artifact-kicker">Account Playbook</p>
           <h2>{playbook.headline}</h2>
           <p className="m3-helper-note">
             {playbook.targetMarketName} · {playbook.targetIndustryName}

@@ -120,7 +120,7 @@ export function AccountDossierCard({
       </section>
 
       <section className="m3-muted-callout">
-        <strong>Market-level hypothesis boundary (Phase C claims)</strong>
+        <strong>Market context</strong>
         <p className="m3-helper-note">{maskVendorNamesForDisplay(account.fit.industryHypothesisNote)}</p>
         {linkedClaims.length > 0 && (
           <ul className="m3-bullet-list">

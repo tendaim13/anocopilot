@@ -144,11 +144,10 @@ function CompaniesContent() {
     <section className="ano-section-page">
       <header className="ano-section-header">
         <div>
-          <p className="ano-rail-kicker">PIPELINE · PHASE D</p>
+          <p className="ano-rail-kicker">Companies</p>
           <h1>Companies directory</h1>
           <p>
-            Signal-backed company candidates anchored to your locked Phase C target routes.
-            Every dossier preserves retrieval provenance separately from industry claims.
+            Signal-backed company candidates anchored to your locked target routes.
           </p>
         </div>
         <MaterialButton variant="filled" onClick={() => router.push("/research")}>

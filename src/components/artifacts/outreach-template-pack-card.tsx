@@ -85,11 +85,11 @@ export function OutreachTemplatePackCard({
   return (
     <article
       className="m3-artifact-card"
-      aria-label="Phase 9B human-voice outreach email templates"
+      aria-label="Outreach email templates"
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">PHASE 9B · BLASTER-READY OUTREACH TEMPLATES</p>
+          <p className="m3-artifact-kicker">Outreach Templates</p>
           <h2>
             {templatePack
               ? `Human-voice 3-step sequence · v${templatePack.version}`

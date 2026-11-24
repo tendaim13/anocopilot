@@ -42,7 +42,7 @@ export function ResearchProgressMessage({
       <article className="m3-artifact-card m3-progress-card" role="status">
         <div className="m3-artifact-header">
           <div>
-            <p className="m3-artifact-kicker">PUBLIC RESEARCH RUNNING</p>
+            <p className="m3-artifact-kicker">Market research</p>
             <h2>Collecting and assessing public sources</h2>
           </div>
           <span className="m3-status-badge status-running">
@@ -64,19 +64,19 @@ export function ResearchProgressMessage({
       <article className="m3-artifact-card m3-warning-card" role="status">
         <header className="m3-artifact-header">
           <div>
-            <p className="m3-artifact-kicker">SAFE STOP</p>
+            <p className="m3-artifact-kicker">Research paused</p>
             <h2>
               {canContinueApproved
-                ? "One provider request was excluded for manual review"
+                ? "One search request paused for review"
                 : research.run.status === "requires_manual_review"
                   ? "Manual review required"
-                  : "Research stopped safely"}
+                  : "Research paused safely"}
             </h2>
           </div>
         </header>
         <p className="m3-artifact-lead">
           {canContinueApproved
-            ? `Ano could not confirm one ${interruptedAction?.kind === "search" ? "public web search" : "source retrieval"}, so it excluded that request without retrying it. You can continue using the remaining approved budget.`
+            ? `Ano could not confirm one ${interruptedAction?.kind === "search" ? "public web search" : "source retrieval"}. You can continue your approved research run.`
             : research.run.failureMessage
               ? maskVendorNamesForDisplay(research.run.failureMessage)
               : "Ano paused and did not retry the request."}
@@ -104,13 +104,13 @@ export function ResearchProgressMessage({
       <article className="m3-artifact-card m3-evidence-ready-card">
         <header className="m3-artifact-header">
           <div>
-            <p className="m3-artifact-kicker">EVIDENCE COLLECTED</p>
+            <p className="m3-artifact-kicker">Evidence collected</p>
             <h2>
               {research.run.sourceCount} saved source{research.run.sourceCount === 1 ? "" : "s"} ready
             </h2>
           </div>
           <MaterialButton variant="text" onClick={onOpenContextRail}>
-            Inspect sources & budget
+            Inspect sources
           </MaterialButton>
         </header>
 
@@ -130,10 +130,7 @@ export function ResearchProgressMessage({
         {synthesis?.status === "running" && (
           <div className="m3-synthesis-running">
             <md-linear-progress indeterminate aria-label="Analyzing saved evidence" />
-            <p>
-              Checking citations across the saved source excerpts. No web search or external
-              provider is running.
-            </p>
+            <p>Checking citations across your saved sources.</p>
           </div>
         )}
 
@@ -141,10 +138,7 @@ export function ResearchProgressMessage({
           <footer className="m3-artifact-footer">
             <div className="m3-decision-copy">
               <strong>Turn saved sources into a cited market recommendation</strong>
-              <p>
-                Uses only stored source excerpts in your workspace; makes no new search, directory,
-                contact, or outreach request.
-              </p>
+              <p>Synthesizes facts exclusively from your saved sources.</p>
             </div>
             <MaterialButton variant="filled" disabled={isWorking} onClick={onAnalyseEvidence}>
               {isWorking ? "Analyzing saved evidence…" : "Create market recommendation"}

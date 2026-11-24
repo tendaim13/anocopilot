@@ -4,7 +4,7 @@ import type { MouseEvent, ReactNode } from "react";
 
 import { useMaterialWeb } from "./register";
 
-export type MaterialButtonVariant = "filled" | "tonal" | "outlined" | "text";
+export type MaterialButtonVariant = "elevated" | "filled" | "tonal" | "outlined" | "text";
 
 export interface MaterialButtonProps {
   id?: string;
@@ -24,6 +24,7 @@ export interface MaterialButtonProps {
 }
 
 const TAG_BY_VARIANT: Record<MaterialButtonVariant, string> = {
+  elevated: "md-elevated-button",
   filled: "md-filled-button",
   tonal: "md-filled-tonal-button",
   outlined: "md-outlined-button",
@@ -94,6 +95,9 @@ export function MaterialButton({
     onClick: handleClick,
   };
 
+  if (variant === "elevated") {
+    return <md-elevated-button {...sharedProps}>{children}</md-elevated-button>;
+  }
   if (variant === "tonal") {
     return <md-filled-tonal-button {...sharedProps}>{children}</md-filled-tonal-button>;
   }

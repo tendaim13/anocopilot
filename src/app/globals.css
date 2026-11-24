@@ -1,4 +1,4 @@
-/* Global structural defaults and resets only. Theme tokens live in src/styles/material-theme.css. */
+/* Global structural resets only. All typography, color & shape tokens come from @material/web & material-theme.css. */
 
 *,
 *::before,
@@ -19,14 +19,13 @@ body {
   min-height: 100vh;
   background: var(--md-sys-color-background);
   color: var(--md-sys-color-on-background);
-  font-family: var(--md-ref-typeface-plain);
+  font-family: var(--md-sys-typescale-body-medium-font);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
+pre {
+  font-family: var(--md-sys-typescale-body-medium-font);
 }
 
 a {
