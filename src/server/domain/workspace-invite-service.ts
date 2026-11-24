@@ -242,7 +242,7 @@ export async function previewWorkspaceInviteByToken(
     throw new WorkspaceInviteServiceError(
       503,
       "SUPABASE_NOT_CONFIGURED",
-      "Ano is not connected to its Supabase project yet.",
+      "Workspace authentication is temporarily unavailable.",
     );
   }
 
@@ -281,7 +281,7 @@ export async function acceptWorkspaceInviteByToken(
     throw new WorkspaceInviteServiceError(
       503,
       "SUPABASE_NOT_CONFIGURED",
-      "Ano is not connected to its Supabase project yet.",
+      "Workspace authentication is temporarily unavailable.",
     );
   }
 

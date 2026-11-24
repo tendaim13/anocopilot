@@ -272,7 +272,8 @@ export function SignUpForm() {
         )}
 
         <p className="auth-footnote">
-          Already have an account? <Link href={loginHref}>Sign in</Link>
+          Already have an account? <Link href={loginHref}>Sign in</Link> ·{" "}
+          <Link href="/">Return to Ano</Link>
         </p>
       </section>
     </main>

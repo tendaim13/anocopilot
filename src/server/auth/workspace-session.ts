@@ -58,7 +58,7 @@ export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
     throw new WorkspaceSessionError(
       503,
       "SUPABASE_NOT_CONFIGURED",
-      "Ano is not connected to its own Supabase workspace yet.",
+      "Workspace authentication is temporarily unavailable.",
     );
   }
 

@@ -11,6 +11,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit --incremental false",
     "test": "node --conditions=react-server --import tsx --test tests/*.test.ts",
+    "test:phase12": "node --conditions=react-server --import tsx --test tests/phase12a-llm-resilience.test.ts tests/phase12b-vendor-masking.test.ts tests/phase12c-material3-and-clean-ui.test.ts tests/phase12d-release-gate.test.ts",
     "check:migrations": "node scripts/check-migrations-registered.mjs",
     "test:phase4a": "tsx --test tests/phase4a-runtime.test.ts",
     "test:phase4b": "tsx --test tests/phase4b-bedrock-runtime.test.ts",

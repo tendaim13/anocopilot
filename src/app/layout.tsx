@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Roboto } from "next/font/google";
 import "@material/web/typography/md-typescale-styles.css";
 import "@/styles/material-theme.css";
+import "@/styles/home.css";
 import "@/styles/shell.css";
 import "@/styles/conversation.css";
 import "@/styles/artifacts.css";
