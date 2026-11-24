@@ -12,7 +12,7 @@
   --md-ref-typeface-weight-regular: 400;
 
   /* Material 3 System Color Tokens (Light — Orange & White) */
-  --md-sys-color-primary: #ea580c;
+  --md-sys-color-primary: #b43904;
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-primary-container: #ffedd5;
   --md-sys-color-on-primary-container: #431407;
@@ -49,7 +49,7 @@
   --md-sys-color-inverse-primary: #ff7a45;
   --md-sys-color-shadow: #18181b;
   --md-sys-color-scrim: #18181b;
-  --md-sys-color-surface-tint: #ea580c;
+  --md-sys-color-surface-tint: #b43904;
 
   /* Ano Semantic Status Tokens (Light) */
   --ano-color-safe: #15803d;
@@ -181,7 +181,7 @@
   --md-sys-color-outline-variant: #2e2e33;
   --md-sys-color-inverse-surface: #f4f4f5;
   --md-sys-color-inverse-on-surface: #18181b;
-  --md-sys-color-inverse-primary: #ea580c;
+  --md-sys-color-inverse-primary: #b43904;
   --md-sys-color-shadow: #000000;
   --md-sys-color-scrim: #000000;
   --md-sys-color-surface-tint: #ff7a45;

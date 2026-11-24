@@ -30,6 +30,11 @@
     "smoke:research-phase-a": "node --env-file=.env.local --conditions=react-server --import tsx scripts/smoke-research-phase-a.ts",
     "smoke:searxng": "node --env-file=.env.local scripts/smoke-searxng-gateway.mjs",
     "smoke:searxng:ci": "node scripts/smoke-searxng-gateway.mjs",
+    "smoke:production": "node scripts/smoke-production.mjs",
+    "check:deploy-env": "node scripts/check-deploy-env.mjs",
+    "test:rls:live": "node --env-file=.env.local scripts/verify-rls-isolation.mjs",
+    "test:rls:live:ci": "node scripts/verify-rls-isolation.mjs",
+    "test:e2e": "playwright test",
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
     "db:apply:ci": "node scripts/apply-ano-schema.mjs",
     "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs",
@@ -58,6 +63,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",

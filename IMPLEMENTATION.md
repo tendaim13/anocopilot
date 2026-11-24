@@ -1,6 +1,9 @@
 # Ano implementation plan: LangGraph research-to-revenue platform
 
-**Status:** Phase A is implemented and structurally verified. The initial Tavily Phase B pilot is retained as an audit record but is superseded for all future work. Phase B.1/B.2 are implemented and schema-verified: new runs use a private SearXNG adapter plus Ano-owned safe source retrieval. The private gateway is live with TLS and authenticated health checks. The 2026-10-30 recommendation-policy revision below supersedes every earlier instruction that treated incomplete comparative coverage as a reason to withhold a research answer from the user.
+> [!NOTE]
+> **Historical design record:** This document captures the initial LangGraph specification. For Ano's unified current-state production architecture, safety boundaries, migrations (`000001`–`000031`), and verification suite, see [docs/ARCHITECTURE.md](file:///Users/tendaimidzi/Code/AnoCopilot/docs/ARCHITECTURE.md).
+
+**Status:** Superseded as a current-state reference by [docs/ARCHITECTURE.md](file:///Users/tendaimidzi/Code/AnoCopilot/docs/ARCHITECTURE.md). The initial Tavily pilot is retained purely as a schema audit record; new runs use private authenticated SearXNG (`BRAVE_API_KEY` injected server-side), server-worker execution, map-reduce synthesis, and explicit bounded authority.
 
 **Supersedes for future work:** `IMPLEMENTATION_PLAN.md`. The earlier plan started with a form-led market hypothesis and moved too quickly to company discovery. This document replaces that direction with a research-first, chat-led product.
 

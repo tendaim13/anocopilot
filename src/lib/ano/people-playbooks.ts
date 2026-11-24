@@ -249,12 +249,32 @@ export const accountPlaybookViewSchema = z.object({
 });
 export type AccountPlaybookView = z.infer<typeof accountPlaybookViewSchema>;
 
+export const industryPlaybookViewSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  conversationId: identifier,
+  targetDecisionId: identifier,
+  targetMarketName: z.string().trim().min(1).max(160),
+  targetIndustryName: z.string().trim().min(1).max(160),
+  headline: z.string().trim().min(1).max(240),
+  segmentThesis: z.string().trim().min(1).max(1_200),
+  shortlistedCount: z.number().int().min(0),
+  buyingCommitteeRoles: z.array(z.string().trim().min(1).max(120)).max(10),
+  operationalProblems: z.array(listText).max(8),
+  solutionFitPoints: z.array(listText).max(8),
+  evidenceBackedPoints: z.array(playbookEvidencePointSchema).min(1).max(16),
+  validationQuestions: z.array(listText).min(1).max(6),
+  unknowns: z.array(listText).min(1).max(8),
+  updatedAt: z.string().datetime(),
+});
+export type IndustryPlaybookView = z.infer<typeof industryPlaybookViewSchema>;
+
 export const peopleDiscoveryViewSchema = z.object({
   shortlistedCount: z.number().int().min(0),
   personSearch: personSearchViewSchema.nullable(),
   contacts: z.array(contactCandidateViewSchema).max(25),
   verificationRun: contactVerificationRunViewSchema.nullable(),
   playbooks: z.array(accountPlaybookViewSchema).max(25),
+  industryPlaybook: industryPlaybookViewSchema.nullable().optional(),
 });
 export type PeopleDiscoveryView = z.infer<typeof peopleDiscoveryViewSchema>;
 
@@ -846,6 +866,85 @@ export function buildPersonSearchPreview(input: {
   });
 }
 
+const GENERIC_PERSON_LABEL_PATTERN =
+  /^(?:info|contact|hello|hi|support|sales|admin|administration|office|team|front\s*desk|reception|general|inquiries|enquiries|careers|hr|billing|accounts|appointments|booking|service|desk|noreply|no-reply|unknown|unknown\s*person|customer\s*care|clinic|practice)(?:\s+(?:team|desk|inbox|office))?$/i;
+
+function normalizeDomainHost(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase().replace(/^www\./, "");
+}
+
+export function isNamedPersonCandidate(
+  contact: Pick<ContactCandidateView, "fullName" | "firstName" | "lastName">,
+): boolean {
+  const rawName = contact.fullName.trim();
+  if (!rawName || /@/.test(rawName)) {
+    return false;
+  }
+  const stripped = rawName
+    .replace(/^(?:dr|mr|mrs|ms|mx|prof)\.?\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!stripped || GENERIC_PERSON_LABEL_PATTERN.test(stripped) || /^\d+$/.test(stripped)) {
+    return false;
+  }
+  const first = (contact.firstName ?? "").trim();
+  const last = (contact.lastName ?? "").trim();
+  if (
+    first.length >= 2 &&
+    last.length >= 2 &&
+    !GENERIC_PERSON_LABEL_PATTERN.test(first) &&
+    !GENERIC_PERSON_LABEL_PATTERN.test(last)
+  ) {
+    return true;
+  }
+  const tokens = stripped
+    .split(/\s+/)
+    .map((part) => part.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ'-]/g, ""))
+    .filter((part) => part.length >= 2);
+  return tokens.length >= 2 && tokens.every((part) => !GENERIC_PERSON_LABEL_PATTERN.test(part));
+}
+
+export function selectAppropriateVerificationProvider(
+  selectedContacts: ContactCandidateView[],
+  availability: { prospeo: boolean; dropcontact: boolean },
+  requestedProvider?: ContactVerificationProvider,
+): ContactVerificationProvider {
+  if (requestedProvider) {
+    if (requestedProvider === "prospeo") {
+      if (availability.prospeo || !availability.dropcontact) return "prospeo";
+      return "dropcontact";
+    }
+    if (requestedProvider === "dropcontact") {
+      if (availability.dropcontact || !availability.prospeo) return "dropcontact";
+      return "prospeo";
+    }
+  }
+
+  const prospeoNativeCount = selectedContacts.filter(
+    (contact) =>
+      contact.sourceKey.startsWith("prospeo-person:") ||
+      contact.discoveryProvider === "prospeo" ||
+      Boolean(contact.linkedInUrl),
+  ).length;
+  const websiteNameDomainCount = selectedContacts.filter(
+    (contact) =>
+      contact.discoveryProvider === "website_team" ||
+      contact.sourceKey.startsWith("website-team:") ||
+      Boolean(contact.firstName && contact.lastName && contact.accountDomain),
+  ).length;
+
+  const prefersProspeo =
+    prospeoNativeCount > 0 && prospeoNativeCount >= websiteNameDomainCount;
+  if (prefersProspeo) {
+    if (availability.prospeo) return "prospeo";
+    if (availability.dropcontact) return "dropcontact";
+    return "prospeo";
+  }
+  if (availability.dropcontact) return "dropcontact";
+  if (availability.prospeo) return "prospeo";
+  return "dropcontact";
+}
+
 export function matchAccountForPerson(
   person: NormalizedProspeoPersonInput,
   shortlistedAccounts: AccountCandidateDossier[],
@@ -856,10 +955,10 @@ export function matchAccountForPerson(
     );
     if (bySource) return bySource;
   }
-  const personDomain = person.companyDomain?.trim().toLowerCase();
+  const personDomain = normalizeDomainHost(person.companyDomain);
   if (personDomain) {
     const byDomain = shortlistedAccounts.find(
-      (account) => account.domain?.trim().toLowerCase() === personDomain,
+      (account) => normalizeDomainHost(account.domain) === personDomain,
     );
     if (byDomain) return byDomain;
   }
@@ -871,7 +970,11 @@ export function matchAccountForPerson(
     });
     if (byName) return byName;
   }
-  return shortlistedAccounts[0] ?? null;
+  // Never misattribute a person from an unrelated company onto an arbitrary shortlisted account.
+  if (person.companyId || personDomain || personCompany) {
+    return null;
+  }
+  return shortlistedAccounts.length === 1 ? shortlistedAccounts[0] : null;
 }
 
 export function normalizeDiscoveredPersonCandidate(
@@ -1020,6 +1123,14 @@ export function buildDropcontactVerificationPreview(input: {
       "Select at least one named person before preparing work email verification.",
     );
   }
+  const unnamedContacts = input.selectedContacts.filter(
+    (contact) => !isNamedPersonCandidate(contact),
+  );
+  if (unnamedContacts.length > 0) {
+    throw new Error(
+      "Only named buyer candidates can be verified. Remove generic office or inbox entries before continuing.",
+    );
+  }
   if (input.selectedContacts.length > 10) {
     throw new Error(
       "Select at most 10 people per email verification batch.",
@@ -1084,6 +1195,14 @@ export function buildDropcontactVerificationPreview(input: {
 
 export const buildContactVerificationPreview = buildDropcontactVerificationPreview;
 
+function formatClaimKindAttribution(kind: ResearchClaim["kind"]): string {
+  if (kind === "comparable") return "Comparable market evidence";
+  if (kind === "hypothesis") return "Market research hypothesis";
+  if (kind === "inference") return "Market research inference";
+  if (kind === "uncertainty") return "Research gap noted";
+  return "Direct market research";
+}
+
 export function compileFactualAccountPlaybook(input: {
   playbookId: string;
   conversationId: string;
@@ -1116,7 +1235,7 @@ export function compileFactualAccountPlaybook(input: {
       kind: "research_claim",
       refId: claim.id,
       statement: claim.statement,
-      attribution: `Market research (${claim.kind})`,
+      attribution: formatClaimKindAttribution(claim.kind),
     });
   }
 
@@ -1152,7 +1271,9 @@ export function compileFactualAccountPlaybook(input: {
       kind: "company_signal",
       refId: `${account.id}:shortlisted`,
       statement: `${account.name} was shortlisted in ${input.targetMarketName}.`,
-      attribution: "B2B company directory",
+      attribution: account.sourceKey.startsWith("osm:")
+        ? "Local business directory"
+        : "B2B company directory",
     });
   }
 
@@ -1235,5 +1356,197 @@ export function compileFactualAccountPlaybook(input: {
     unknowns,
     createdAt: now,
     updatedAt: now,
+  });
+}
+
+export function compileFactualIndustryPlaybook(input: {
+  playbookId?: string;
+  conversationId: string;
+  targetDecisionId: string;
+  targetMarketName: string;
+  industry: IndustryProfile;
+  claims: ResearchClaim[];
+  shortlistedAccounts: AccountCandidateDossier[];
+  contacts: ContactCandidateView[];
+  nowIso?: string;
+}): IndustryPlaybookView {
+  const now = input.nowIso ?? new Date().toISOString();
+  const { industry } = input;
+  const industryClaimIds = new Set(industry.claimIds);
+  const accountClaimIds = new Set(
+    input.shortlistedAccounts.flatMap((account) => account.claimIds),
+  );
+  const relevantClaims = input.claims.filter(
+    (claim) => industryClaimIds.has(claim.id) || accountClaimIds.has(claim.id),
+  );
+
+  const evidenceBackedPoints: PlaybookEvidencePoint[] = [];
+  for (const claim of relevantClaims.slice(0, 8)) {
+    evidenceBackedPoints.push({
+      kind: "research_claim",
+      refId: claim.id,
+      statement: claim.statement,
+      attribution: formatClaimKindAttribution(claim.kind),
+    });
+  }
+
+  for (const account of input.shortlistedAccounts.slice(0, 4)) {
+    const primaryReason =
+      account.matchReasons?.[0] ?? account.signals[0]?.explanation ?? account.fit.rationale;
+    const refSignalId = account.signals[0]?.id ?? `${account.id}:shortlist-fit`;
+    evidenceBackedPoints.push({
+      kind: "company_signal",
+      refId: refSignalId,
+      statement: `${account.name}: ${primaryReason}`,
+      attribution: account.signals[0]?.sourceAttribution ?? "Shortlisted company dossier",
+    });
+  }
+
+  for (const contact of input.contacts.slice(0, 4)) {
+    if (contact.verificationStatus === "verified" && contact.verifiedDetails?.email) {
+      evidenceBackedPoints.push({
+        kind: "contact_record",
+        refId: contact.id,
+        statement: `${contact.fullName}${contact.title ? ` (${contact.title})` : ""} at ${contact.accountName} — verified work email confirmed.`,
+        attribution: "Verified work email",
+      });
+    }
+  }
+
+  if (evidenceBackedPoints.length === 0) {
+    evidenceBackedPoints.push({
+      kind: "research_claim",
+      refId: `${industry.id}:segment-summary`,
+      statement: `${industry.name} in ${input.targetMarketName}: ${industry.summary}`,
+      attribution: "Market synthesis hypothesis",
+    });
+  }
+
+  const buyingCommitteeRoles = cleanUnique(
+    [
+      ...industry.buyerRoleHypotheses,
+      ...input.contacts.map((c) => c.title ?? "").filter(Boolean),
+    ],
+    10,
+  );
+  const operationalProblems = cleanUnique(industry.operationalProblems, 8);
+  const solutionFitPoints = cleanUnique(industry.solutionFit, 8);
+  const validationQuestions = cleanUnique(
+    [
+      ...industry.unknowns.map((item) => `Validate in discovery: ${item}`),
+      ...operationalProblems.map(
+        (problem) => `Which team owns solving "${problem.toLowerCase()}" across ${industry.name} buyers?`,
+      ),
+    ],
+    6,
+  );
+  if (validationQuestions.length === 0) {
+    validationQuestions.push(
+      `Confirm which workflow bottleneck triggers buyer urgency inside ${industry.name}.`,
+    );
+  }
+
+  const unknowns = cleanUnique(
+    [
+      ...industry.unknowns,
+      ...(input.contacts.every((c) => c.verificationStatus !== "verified")
+        ? ["No verified work emails exist yet for discovered buyers in this segment."]
+        : []),
+      "Industry operational patterns from public research remain hypotheses until confirmed across active customer conversations.",
+    ],
+    8,
+  );
+
+  return industryPlaybookViewSchema.parse({
+    id: input.playbookId ?? `${input.targetDecisionId}:industry-playbook`,
+    conversationId: input.conversationId,
+    targetDecisionId: input.targetDecisionId,
+    targetMarketName: input.targetMarketName,
+    targetIndustryName: industry.name,
+    headline: `Industry playbook for ${industry.name} (${input.targetMarketName})`,
+    segmentThesis: `${industry.summary} Grounded in ${relevantClaims.length} research claim${relevantClaims.length === 1 ? "" : "s"} and ${input.shortlistedAccounts.length} shortlisted target account${input.shortlistedAccounts.length === 1 ? "" : "s"}.`,
+    shortlistedCount: input.shortlistedAccounts.length,
+    buyingCommitteeRoles,
+    operationalProblems,
+    solutionFitPoints,
+    evidenceBackedPoints: evidenceBackedPoints.slice(0, 16),
+    validationQuestions,
+    unknowns,
+    updatedAt: now,
+  });
+}
+
+export function auditFactualAccountPlaybook(
+  playbook: AccountPlaybookView,
+  groundTruth: {
+    validClaimIds: Set<string>;
+    validSignalIds: Set<string>;
+    verifiedContactIds: Set<string>;
+    knownContactIds: Set<string>;
+  },
+): AccountPlaybookView {
+  for (const angle of playbook.buyerAngles) {
+    if (
+      angle.contactProvenance === "verified_contact" &&
+      (!angle.contactId || !groundTruth.verifiedContactIds.has(angle.contactId))
+    ) {
+      throw new Error(
+        `Account playbook for ${playbook.accountName} mislabeled an unverified contact as verified.`,
+      );
+    }
+  }
+
+  const filteredClaimIds = playbook.claimIds.filter((id) => groundTruth.validClaimIds.has(id));
+  const filteredSignalIds = playbook.signalIds.filter((id) => groundTruth.validSignalIds.has(id));
+  const filteredPoints = playbook.evidenceBackedPoints.filter((point) => {
+    if (point.kind === "research_claim") return groundTruth.validClaimIds.has(point.refId);
+    if (point.kind === "contact_record") return groundTruth.knownContactIds.has(point.refId);
+    if (point.refId.endsWith(":shortlisted")) return true;
+    return groundTruth.validSignalIds.has(point.refId);
+  });
+
+  if (filteredPoints.length === 0) {
+    throw new Error(
+      `Account playbook for ${playbook.accountName} must contain at least one grounded evidence point.`,
+    );
+  }
+
+  return accountPlaybookViewSchema.parse({
+    ...playbook,
+    claimIds: filteredClaimIds,
+    signalIds: filteredSignalIds,
+    evidenceBackedPoints: filteredPoints,
+  });
+}
+
+export function auditFactualIndustryPlaybook(
+  playbook: IndustryPlaybookView,
+  groundTruth: {
+    validClaimIds: Set<string>;
+    validSignalIds: Set<string>;
+    verifiedContactIds: Set<string>;
+  },
+): IndustryPlaybookView {
+  const filteredPoints = playbook.evidenceBackedPoints.filter((point) => {
+    if (point.kind === "research_claim") {
+      return point.refId.endsWith(":segment-summary") || groundTruth.validClaimIds.has(point.refId);
+    }
+    if (point.kind === "contact_record") {
+      return groundTruth.verifiedContactIds.has(point.refId);
+    }
+    return (
+      point.refId.endsWith(":shortlist-fit") || groundTruth.validSignalIds.has(point.refId)
+    );
+  });
+
+  if (filteredPoints.length === 0) {
+    throw new Error(
+      `Industry playbook for ${playbook.targetIndustryName} must contain at least one grounded evidence point.`,
+    );
+  }
+
+  return industryPlaybookViewSchema.parse({
+    ...playbook,
+    evidenceBackedPoints: filteredPoints,
   });
 }

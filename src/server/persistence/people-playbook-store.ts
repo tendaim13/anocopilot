@@ -9,15 +9,19 @@ import type {
 } from "@/lib/ano/market-synthesis";
 import {
   accountPlaybookViewSchema,
+  auditFactualAccountPlaybook,
   buildDropcontactVerificationPreview,
   buildPersonSearchPreview,
   buyerRoleRecommendationSchema,
   buyingCommitteeCriteriaSchema,
   compileFactualAccountPlaybook,
+  compileFactualIndustryPlaybook,
   contactCandidateViewSchema,
   contactVerificationRunViewSchema,
   deriveBuyingCommitteeCriteria,
   dropcontactPreviewPairSchema,
+  industryPlaybookViewSchema,
+  isNamedPersonCandidate,
   matchAccountForPerson,
   normalizeDiscoveredPersonCandidate,
   peopleDiscoveryViewSchema,
@@ -60,6 +64,7 @@ import { readMarketSynthesis } from "@/server/persistence/market-synthesis-store
 import {
   loadLockedTargetContext,
   readCompanySearchForConversation,
+  sanitizeDownstreamErrorMessage,
 } from "@/server/persistence/target-account-discovery-store";
 
 export class PeoplePlaybookPersistenceError extends Error {
@@ -98,7 +103,7 @@ function requireLiveSession(
 function iso(value: unknown) {
   const date = new Date(String(value));
   if (Number.isNaN(date.getTime())) {
-    throw new PeoplePlaybookPersistenceError("Ano found an invalid Phase E timestamp.");
+    throw new PeoplePlaybookPersistenceError("Ano found an invalid people-discovery timestamp.");
   }
   return date.toISOString();
 }
@@ -132,10 +137,10 @@ function mapPersonSearchRow(
     roleRecommendations.length > 0
       ? roleRecommendations
       : (approvedRoles.length > 0 ? approvedRoles : ["Managing Director"]).map((title) => ({
-          title,
-          rationale: "Approved buyer role criterion.",
-          claimIds: [],
-        }));
+        title,
+        rationale: "Approved buyer role criterion.",
+        claimIds: [],
+      }));
 
   const shortlistedNames = accountIds.map(
     (id) => accountNamesById.get(id) ?? "Shortlisted company",
@@ -171,8 +176,8 @@ function mapPersonSearchRow(
     estimatedMaximumCredits: providerKey === "website_team" ? 0 : 1,
     estimateDetail:
       providerKey === "website_team"
-        ? "Free website team-page discovery scans up to 10 shortlisted company websites (max 3 pages per site, $0 credits) to extract named owners, directors, and managers with cited source URLs. Email verification remains separate via Dropcontact."
-        : "One first-page Prospeo /search-person request returns up to 25 named buyers matching your Buying Committee filters across shortlisted companies (max 1 credit). Verified contact details require a separate selective Dropcontact approval.",
+        ? "Website team-page discovery scans up to 10 shortlisted company websites (max 3 pages per site) to extract named owners, directors, and managers with cited source URLs. Email verification remains a separate approval."
+        : "Decision-maker directory search returns up to 25 named buyers matching your Buying Committee filters across shortlisted companies. Verified contact details require a separate selective approval.",
     resultCount: typeof row.result_count === "number" ? row.result_count : null,
     providerReceipt: receipt,
     failureMessage: row.failure_message ? String(row.failure_message) : null,
@@ -274,8 +279,8 @@ function mapVerificationRow(row: Row): ContactVerificationRunView {
     String(row.provider_key) === "prospeo" ? "prospeo" : "dropcontact";
   const estimateDetail =
     providerKey === "prospeo"
-      ? `Prospeo enriches ${previewPairs.length} selected contact${previewPairs.length === 1 ? "" : "s"} for verified work emails (max ${credits} credit${credits === 1 ? "" : "s"}; 0 credits on misses or 90-day repeats). No other contacts are submitted.`
-      : `Dropcontact checks ${previewPairs.length} selected name-and-company pair${previewPairs.length === 1 ? "" : "s"} (estimated ${credits} Dropcontact credit${credits === 1 ? "" : "s"}). No other discovered contacts are submitted.`;
+      ? `Selective directory verification checks ${previewPairs.length} selected named contact${previewPairs.length === 1 ? "" : "s"} for verified work emails. No other contacts are submitted.`
+      : `Selective work email verification checks ${previewPairs.length} selected name-and-company pair${previewPairs.length === 1 ? "" : "s"}. No other discovered contacts are submitted.`;
 
   return contactVerificationRunViewSchema.parse({
     id: String(row.id),
@@ -347,7 +352,9 @@ export async function loadShortlistedContext(
   const accounts = companySearch?.accounts ?? [];
   const allAccountsById = new Map(accounts.map((account) => [account.id, account]));
   const shortlistedAccounts = accounts.filter(
-    (account) => account.lifecycleState === "shortlisted",
+    (account) =>
+      account.lifecycleState === "shortlisted" &&
+      account.targetDecisionId === targetContext.targetDecisionId,
   );
 
   return {
@@ -369,6 +376,7 @@ export async function readPeopleDiscoveryForConversation(
       contacts: [],
       verificationRun: null,
       playbooks: [],
+      industryPlaybook: null,
     };
   }
 
@@ -438,25 +446,56 @@ export async function readPeopleDiscoveryForConversation(
     );
   }
 
+  const contacts = (contactsRes.data ?? []).map((row) =>
+    mapContactRow(row as Row, accountsById),
+  );
+  const playbooks = (playbooksRes.data ?? []).map((row) =>
+    mapPlaybookRow(
+      row as Row,
+      accountNamesById,
+      targetMarketName,
+      targetIndustryName,
+    ),
+  );
+  const lockedIndustry = synthesis?.industries.find(
+    (item) => item.id === synthesis.decision?.industryProfileId,
+  );
+  const shortlistedForRoute = accounts.filter(
+    (item) =>
+      item.lifecycleState === "shortlisted" &&
+      (!synthesis?.decision?.id || item.targetDecisionId === synthesis.decision.id),
+  );
+  const industryPlaybook =
+    synthesis?.decision?.status === "locked" &&
+      lockedIndustry &&
+      (shortlistedForRoute.length > 0 || playbooks.length > 0)
+      ? compileFactualIndustryPlaybook({
+        conversationId,
+        targetDecisionId: synthesis.decision.id,
+        targetMarketName,
+        industry: lockedIndustry,
+        claims: synthesis.claims,
+        shortlistedAccounts: shortlistedForRoute,
+        contacts,
+        nowIso:
+          playbooks[0]?.updatedAt ??
+          (typeof verificationRes.data?.updated_at === "string"
+            ? verificationRes.data.updated_at
+            : new Date().toISOString()),
+      })
+      : null;
+
   return peopleDiscoveryViewSchema.parse({
     shortlistedCount,
     personSearch: personSearchRes.data
       ? mapPersonSearchRow(personSearchRes.data as Row, accountNamesById)
       : null,
-    contacts: (contactsRes.data ?? []).map((row) =>
-      mapContactRow(row as Row, accountsById),
-    ),
+    contacts,
     verificationRun: verificationRes.data
       ? mapVerificationRow(verificationRes.data as Row)
       : null,
-    playbooks: (playbooksRes.data ?? []).map((row) =>
-      mapPlaybookRow(
-        row as Row,
-        accountNamesById,
-        targetMarketName,
-        targetIndustryName,
-      ),
-    ),
+    playbooks,
+    industryPlaybook,
   });
 }
 
@@ -474,7 +513,7 @@ export async function saveRoleProposalAndPersonSearchPreview(
   const providerKey: PersonDiscoveryProvider = input.providerKey ?? "prospeo";
   if (context.shortlistedAccounts.length === 0) {
     throw new PeoplePlaybookPersistenceError(
-      "Shortlist at least one company in Phase D before preparing buyer-role person discovery.",
+      "Shortlist at least one company before preparing buyer-role person discovery.",
       "SHORTLIST_REQUIRED",
     );
   }
@@ -605,12 +644,12 @@ export async function saveRoleProposalAndPersonSearchPreview(
       event_key: `phase-e-person-preview:${context.targetDecisionId}`,
       label:
         providerKey === "website_team"
-          ? "Buying committee ready for free website team scan"
-          : "Buying committee & Prospeo preview ready",
+          ? "Buying committee ready for website team scan"
+          : "Buying committee & buyer lookup preview ready",
       detail:
         providerKey === "website_team"
-          ? `Ano proposed ${preview.approvedRoles.join(", ")} across ${preview.shortlistedAccountIds.length} shortlisted compan${preview.shortlistedAccountIds.length === 1 ? "y" : "ies"} via free website team extraction ($0 credits).`
-          : `Ano proposed ${preview.approvedRoles.join(", ")} across ${preview.shortlistedAccountIds.length} shortlisted compan${preview.shortlistedAccountIds.length === 1 ? "y" : "ies"}. Awaiting explicit approval before running 1-page Prospeo person search.`,
+          ? `Ano proposed ${preview.approvedRoles.join(", ")} across ${preview.shortlistedAccountIds.length} shortlisted compan${preview.shortlistedAccountIds.length === 1 ? "y" : "ies"} via website team extraction.`
+          : `Ano proposed ${preview.approvedRoles.join(", ")} across ${preview.shortlistedAccountIds.length} shortlisted compan${preview.shortlistedAccountIds.length === 1 ? "y" : "ies"}. Awaiting explicit approval before running decision-maker lookup.`,
     },
     { onConflict: "graph_run_id,event_key" },
   );
@@ -660,7 +699,7 @@ async function backfillExistingContactsFromWebsiteReports(
     const existingCleanEmail = existingRawEmail ? sanitizePublicEmail(existingRawEmail) : null;
     const needsEmailRepair = Boolean(
       existingRawEmail &&
-        (!existingCleanEmail || existingCleanEmail !== existingRawEmail.toLowerCase()),
+      (!existingCleanEmail || existingCleanEmail !== existingRawEmail.toLowerCase()),
     );
     const alreadyHasCleanEmail = Boolean(existingCleanEmail) && !needsEmailRepair;
     const alreadyHasPhone = hasNonEmptyString(prevReceipt.public_phone);
@@ -839,9 +878,9 @@ async function runWebsiteFailsafeForProspeoSearch(input: {
         source_url: candidate.sourceUrl,
         ...(candidate.publicEmail
           ? {
-              public_email: candidate.publicEmail,
-              public_email_kind: candidate.publicEmailKind ?? "shared_inbox",
-            }
+            public_email: candidate.publicEmail,
+            public_email_kind: candidate.publicEmailKind ?? "shared_inbox",
+          }
           : {}),
         ...(candidate.publicPhone ? { public_phone: candidate.publicPhone } : {}),
       },
@@ -932,10 +971,10 @@ export async function executeApprovedProspeoPersonSearch(
   const buyingCommittee = committeeParsed.success
     ? committeeParsed.data
     : deriveBuyingCommitteeCriteria({
-        industry: context.industry,
-        brief: context.brief,
-        shortlistedAccounts: context.shortlistedAccounts,
-      });
+      industry: context.industry,
+      brief: context.brief,
+      shortlistedAccounts: context.shortlistedAccounts,
+    });
 
   const rawRoles: unknown[] = Array.isArray(beforeRow.role_recommendations_json)
     ? (beforeRow.role_recommendations_json as unknown[])
@@ -1068,9 +1107,9 @@ export async function executeApprovedProspeoPersonSearch(
             source_url: candidate.sourceUrl,
             ...(candidate.publicEmail
               ? {
-                  public_email: candidate.publicEmail,
-                  public_email_kind: candidate.publicEmailKind ?? "shared_inbox",
-                }
+                public_email: candidate.publicEmail,
+                public_email_kind: candidate.publicEmailKind ?? "shared_inbox",
+              }
               : {}),
             ...(candidate.publicPhone ? { public_phone: candidate.publicPhone } : {}),
           },
@@ -1306,10 +1345,10 @@ export async function executeApprovedProspeoPersonSearch(
 
     const { count: recoveredTotal } = noResults
       ? await session.client
-          .from("contact_candidates")
-          .select("id", { count: "exact", head: true })
-          .eq("workspace_id", session.workspace.id)
-          .eq("person_search_id", personSearchId)
+        .from("contact_candidates")
+        .select("id", { count: "exact", head: true })
+        .eq("workspace_id", session.workspace.id)
+        .eq("person_search_id", personSearchId)
       : { count: null };
 
     const status = noResults ? "completed" : "requires_manual_review";
@@ -1414,12 +1453,52 @@ export async function saveDropcontactVerificationPreview(
     );
   }
 
+  const shortlistedAccountIds = new Set(
+    context.shortlistedAccounts.map((account) => account.id),
+  );
   const selectedSet = new Set(selectedContactIds);
   const selectedContacts = view.contacts.filter((contact) => selectedSet.has(contact.id));
   if (selectedContacts.length === 0) {
     throw new PeoplePlaybookPersistenceError(
       "Select at least one named person before preparing an email verification preview.",
       "NO_CONTACTS_SELECTED",
+    );
+  }
+
+  if (
+    selectedContacts.some(
+      (contact) => !shortlistedAccountIds.has(contact.accountCandidateId),
+    )
+  ) {
+    throw new PeoplePlaybookPersistenceError(
+      "Only contacts belonging to shortlisted companies under the locked market route can be verified.",
+      "NON_SHORTLISTED_CONTACT",
+    );
+  }
+
+  if (selectedContacts.some((contact) => !isNamedPersonCandidate(contact))) {
+    throw new PeoplePlaybookPersistenceError(
+      "Only named buyer candidates can be sent for selective email verification.",
+      "UNNAMED_CONTACT_NOT_ALLOWED",
+    );
+  }
+
+  if (
+    selectedContacts.some((contact) => contact.verificationStatus === "verified")
+  ) {
+    throw new PeoplePlaybookPersistenceError(
+      "Selected contact(s) already have verified work emails and do not need re-verification.",
+      "CONTACT_ALREADY_VERIFIED",
+    );
+  }
+
+  const previouslyVerifiedCount = view.contacts.filter(
+    (contact) => contact.verificationStatus === "verified",
+  ).length;
+  if (previouslyVerifiedCount + selectedContacts.length > 10) {
+    throw new PeoplePlaybookPersistenceError(
+      "Selective verification allows up to 10 named people per research run.",
+      "VERIFICATION_AUTHORITY_EXCEEDED",
     );
   }
 
@@ -1683,13 +1762,13 @@ export async function executeApprovedDropcontactVerification(
         const verifiedDetails =
           entry.verified && entry.email
             ? {
-                email: entry.email,
-                emailQualification: entry.emailQualification,
-                phone: entry.phone,
-                verifiedDomain: entry.verifiedDomain,
-                provider: "prospeo" as const,
-                verifiedAt: completedAt,
-              }
+              email: entry.email,
+              emailQualification: entry.emailQualification,
+              phone: entry.phone,
+              verifiedDomain: entry.verifiedDomain,
+              provider: "prospeo" as const,
+              verifiedAt: completedAt,
+            }
             : null;
         const prevReceipt = existingReceiptsById.get(entry.contactId) ?? {};
 
@@ -1726,13 +1805,13 @@ export async function executeApprovedDropcontactVerification(
         if (entry.verified) verifiedCount += 1;
         const verifiedDetails = entry.verified
           ? {
-              email: entry.email,
-              emailQualification: entry.emailQualification,
-              phone: entry.phone,
-              verifiedDomain: entry.verifiedDomain,
-              provider: "dropcontact" as const,
-              verifiedAt: completedAt,
-            }
+            email: entry.email,
+            emailQualification: entry.emailQualification,
+            phone: entry.phone,
+            verifiedDomain: entry.verifiedDomain,
+            provider: "dropcontact" as const,
+            verifiedAt: completedAt,
+          }
           : null;
         const prevReceipt = existingReceiptsById.get(entry.contactId) ?? {};
 
@@ -1855,10 +1934,12 @@ export async function executeApprovedDropcontactVerification(
     return readPeopleDiscoveryForConversation(session, context.conversationId);
   } catch (error) {
     const completedAt = new Date().toISOString();
-    const message =
+    const message = sanitizeDownstreamErrorMessage(
       error instanceof DropcontactClientError || error instanceof ProspeoClientError
         ? error.message
-        : "Ano could not confirm the work email verification batch safely and did not retry automatically.";
+        : error,
+      "Ano could not confirm the work email verification batch safely and did not retry automatically.",
+    );
 
     await session.client
       .from("contact_candidates")
@@ -1950,8 +2031,19 @@ export async function compileAndSaveAccountPlaybooks(
   );
   const now = new Date().toISOString();
 
+  const validClaimIds = new Set(context.claims.map((claim) => claim.id));
+  const validSignalIds = new Set(
+    context.shortlistedAccounts.flatMap((account) => account.signals.map((signal) => signal.id)),
+  );
+  const verifiedContactIds = new Set(
+    currentView.contacts
+      .filter((contact) => contact.verificationStatus === "verified")
+      .map((contact) => contact.id),
+  );
+  const knownContactIds = new Set(currentView.contacts.map((contact) => contact.id));
+
   const rowsToUpsert = context.shortlistedAccounts.map((account) => {
-    const playbook = compileFactualAccountPlaybook({
+    const compiledPlaybook = compileFactualAccountPlaybook({
       playbookId: crypto.randomUUID(),
       conversationId: context.conversationId,
       targetDecisionId: context.targetDecisionId,
@@ -1962,6 +2054,12 @@ export async function compileAndSaveAccountPlaybooks(
       contacts: currentView.contacts,
       offerSummary: context.brief?.offer,
       nowIso: now,
+    });
+    const playbook = auditFactualAccountPlaybook(compiledPlaybook, {
+      validClaimIds,
+      validSignalIds,
+      verifiedContactIds,
+      knownContactIds,
     });
 
     return {

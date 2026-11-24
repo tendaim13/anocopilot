@@ -40,7 +40,21 @@ jobs:
         run: |
           npm run check:migrations
           npm run typecheck
+          npm run test:phase4b
           npm test
+
+      - name: Validate required production deployment & database secrets
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          ANO_DATABASE_LABEL: ano
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+          ANO_SMOKE_AUTH_EMAIL: ${{ secrets.ANO_SMOKE_AUTH_EMAIL }}
+          ANO_SMOKE_AUTH_PASSWORD: ${{ secrets.ANO_SMOKE_AUTH_PASSWORD }}
+        run: npm run check:deploy-env
 
       - name: Apply & verify Ano Supabase migrations
         env:
@@ -48,10 +62,6 @@ jobs:
           SUPABASE_DB_SSL_CA: ${{ secrets.SUPABASE_DB_SSL_CA }}
           ANO_DATABASE_LABEL: ano
         run: |
-          if [ -z "$SUPABASE_DB_URL" ]; then
-            echo "::notice::SUPABASE_DB_URL secret is not set in the production GitHub environment; skipping DB migrations."
-            exit 0
-          fi
           npm run db:apply:ci
           npm run db:status:ci
 
@@ -61,12 +71,13 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+          ANO_SMOKE_AUTH_EMAIL: ${{ secrets.ANO_SMOKE_AUTH_EMAIL }}
+          ANO_SMOKE_AUTH_PASSWORD: ${{ secrets.ANO_SMOKE_AUTH_PASSWORD }}
+          SEARXNG_BASE_URL: ${{ secrets.SEARXNG_BASE_URL }}
+          SEARXNG_GATEWAY_TOKEN: ${{ secrets.SEARXNG_GATEWAY_TOKEN }}
         run: |
-          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
-            echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets are not set yet; skipping Vercel deployment."
-            exit 0
-          fi
-
           npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
           npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
 
@@ -91,30 +102,4 @@ jobs:
             echo "Production alias URL: $ALIAS_URL"
           fi
 
-          CURL_HEADERS=()
-          if [ -n "$VERCEL_AUTOMATION_BYPASS_SECRET" ]; then
-            CURL_HEADERS=(-H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}")
-          fi
-
-          USE_VERCEL_CURL="false"
-          HEALTH_JSON=$(curl -sS ${CURL_HEADERS[@]+"${CURL_HEADERS[@]}"} "${SMOKE_URL}/api/health" || true)
-          if ! grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$HEALTH_JSON"; then
-            echo "Direct health check against ${SMOKE_URL}/api/health did not return ok:true; retrying with vercel curl..."
-            USE_VERCEL_CURL="true"
-            HEALTH_JSON=$(npx --yes vercel@latest curl /api/health --deployment "$DEPLOY_URL" --token="$VERCEL_TOKEN" -- -fsS)
-          fi
-
-          echo "Health check response: $HEALTH_JSON"
-          grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' <<<"$HEALTH_JSON"
-
-          if [ "$USE_VERCEL_CURL" = "true" ]; then
-            AUTH_STATUS=$(npx --yes vercel@latest curl /api/v1/conversations --deployment "$DEPLOY_URL" --token="$VERCEL_TOKEN" -- -s -o /dev/null -w "%{http_code}" | tr -d '[:space:]')
-          else
-            AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${CURL_HEADERS[@]+"${CURL_HEADERS[@]}"} "${SMOKE_URL}/api/v1/conversations" | tr -d '[:space:]')
-          fi
-
-          echo "Unauthenticated /api/v1/conversations status: $AUTH_STATUS"
-          if [ "$AUTH_STATUS" != "401" ] && [ "$AUTH_STATUS" != "403" ]; then
-            echo "::error::Expected 401 or 403 from unauthenticated /api/v1/conversations, got $AUTH_STATUS."
-            exit 1
-          fi
+          ANO_SMOKE_BASE_URL="$SMOKE_URL" npm run smoke:production

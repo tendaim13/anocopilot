@@ -3,15 +3,35 @@ import "server-only";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 
-import type { EvidenceAssessment, MarketSynthesisDraft, SynthesisStatus } from "@/lib/ano/market-synthesis";
+import type {
+  EvidenceAssessment,
+  EvidenceGroupSummary,
+  MarketSynthesisDraft,
+  SynthesisStatus,
+} from "@/lib/ano/market-synthesis";
 import type { ResearchBrief, ResearchPlan } from "@/lib/ano/research-conversation";
 import type { SynthesisSource } from "@/server/agents/market-synthesis-model";
 
 export const MARKET_SYNTHESIS_GRAPH_NAME = "evidence-market-synthesis";
-export const MARKET_SYNTHESIS_GRAPH_VERSION = "phase-c-v2";
+export const MARKET_SYNTHESIS_GRAPH_VERSION = "phase-c-v3-map-reduce";
 
 export type MarketSynthesisModel = {
-  synthesise: (brief: ResearchBrief, plan: ResearchPlan, sources: SynthesisSource[]) => Promise<MarketSynthesisDraft>;
+  mapEvidenceGroups?: (
+    brief: ResearchBrief,
+    plan: ResearchPlan,
+    sources: SynthesisSource[],
+  ) => Promise<EvidenceGroupSummary[]>;
+  reduceGroupSummaries?: (
+    brief: ResearchBrief,
+    plan: ResearchPlan,
+    sources: SynthesisSource[],
+    groupSummaries: EvidenceGroupSummary[],
+  ) => Promise<MarketSynthesisDraft>;
+  synthesise: (
+    brief: ResearchBrief,
+    plan: ResearchPlan,
+    sources: SynthesisSource[],
+  ) => Promise<MarketSynthesisDraft>;
 };
 
 export type MarketSynthesisExecutor = {
@@ -26,6 +46,7 @@ export const MarketSynthesisGraphState = Annotation.Root({
   brief: Annotation<ResearchBrief>(),
   plan: Annotation<ResearchPlan>(),
   sources: Annotation<SynthesisSource[]>(),
+  groupSummaries: Annotation<EvidenceGroupSummary[]>({ reducer: (_left, right) => right, default: () => [] }),
   assessment: Annotation<EvidenceAssessment | null>({ reducer: (_left, right) => right, default: () => null }),
   draft: Annotation<MarketSynthesisDraft | null>({ reducer: (_left, right) => right, default: () => null }),
   status: Annotation<SynthesisStatus>(),
@@ -36,18 +57,40 @@ export type MarketSynthesisGraphStateValue = typeof MarketSynthesisGraphState.St
 
 /**
  * Phase C is intentionally separated from Phase B. The only inputs are source
- * IDs and bounded excerpts already saved by Ano; this graph has no search or
- * connector adapter and cannot advance to prospecting.
+ * IDs and bounded excerpts already saved by Ano; this graph runs bounded
+ * map-reduce synthesis over all saved sources and cannot advance to prospecting.
  */
 export function createMarketSynthesisGraph(model: MarketSynthesisModel, executor: MarketSynthesisExecutor, checkpointer: BaseCheckpointSaver) {
   const assessEvidenceCoverage = async (state: MarketSynthesisGraphStateValue) => {
     const assessment = executor.assess(state.sources);
-    return { assessment, status: "running" as const, currentNode: assessment.fetchedSourceCount === 0 ? "complete_no_usable_evidence" : "synthesise_market_report" };
+    return {
+      assessment,
+      status: "running" as const,
+      currentNode: assessment.fetchedSourceCount === 0 ? "complete_no_usable_evidence" : "map_evidence_groups",
+    };
+  };
+
+  const mapEvidenceGroups = async (state: MarketSynthesisGraphStateValue) => {
+    const groupSummaries = model.mapEvidenceGroups
+      ? await model.mapEvidenceGroups(state.brief, state.plan, state.sources)
+      : [];
+    return {
+      groupSummaries,
+      status: "running" as const,
+      currentNode: "synthesise_market_report",
+    };
   };
 
   const synthesiseMarketReport = async (state: MarketSynthesisGraphStateValue) => {
-    const draft = await model.synthesise(state.brief, state.plan, state.sources);
-    return { draft, status: "running" as const, currentNode: "citation_audit" };
+    const draft =
+      model.reduceGroupSummaries && state.groupSummaries.length > 0
+        ? await model.reduceGroupSummaries(state.brief, state.plan, state.sources, state.groupSummaries)
+        : await model.synthesise(state.brief, state.plan, state.sources);
+    const enrichedDraft: MarketSynthesisDraft =
+      state.groupSummaries.length > 0 && !draft.groupSummaries?.length
+        ? { ...draft, groupSummaries: state.groupSummaries }
+        : draft;
+    return { draft: enrichedDraft, status: "running" as const, currentNode: "citation_audit" };
   };
 
   const citationAudit = async (state: MarketSynthesisGraphStateValue) => {
@@ -62,15 +105,18 @@ export function createMarketSynthesisGraph(model: MarketSynthesisModel, executor
     return { status: "ready_for_review" as const, currentNode: "review_market_report" };
   };
 
-  const routeAfterAssessment = (state: MarketSynthesisGraphStateValue) => state.assessment && state.assessment.fetchedSourceCount > 0 ? "synthesise_market_report" : "complete_no_usable_evidence";
+  const routeAfterAssessment = (state: MarketSynthesisGraphStateValue) =>
+    state.assessment && state.assessment.fetchedSourceCount > 0 ? "map_evidence_groups" : "complete_no_usable_evidence";
 
   return new StateGraph(MarketSynthesisGraphState)
     .addNode("assess_evidence_coverage", assessEvidenceCoverage)
+    .addNode("map_evidence_groups", mapEvidenceGroups)
     .addNode("synthesise_market_report", synthesiseMarketReport)
     .addNode("citation_audit", citationAudit)
     .addNode("complete_no_usable_evidence", completeNoUsableEvidence)
     .addEdge(START, "assess_evidence_coverage")
     .addConditionalEdges("assess_evidence_coverage", routeAfterAssessment)
+    .addEdge("map_evidence_groups", "synthesise_market_report")
     .addEdge("synthesise_market_report", "citation_audit")
     .addEdge("citation_audit", END)
     .addEdge("complete_no_usable_evidence", END)

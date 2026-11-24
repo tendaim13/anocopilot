@@ -46,7 +46,7 @@ async function loadTemplateContextForConversation(
 
   if (!synthesis?.decision || synthesis.decision.status !== "locked") {
     throw new OutreachTemplateServiceError(
-      "Lock a Phase C target market and industry route before generating outreach email templates.",
+      "Lock a target market and industry route before generating outreach email templates.",
       "TARGET_DECISION_REQUIRED",
     );
   }

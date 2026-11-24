@@ -52,7 +52,7 @@ jobs:
       - name: Run offline test suites
         env:
           ANO_AGENT_MODE: disabled
-        run: npm test
+        run: npm run test:phase4b && npm test
 
       - name: Verify Next.js production build
         env:
@@ -61,3 +61,14 @@ jobs:
           ANO_AGENT_MODE: disabled
           ANO_ALLOW_DEMO_MODE: "false"
         run: npm run build
+
+      - name: Install Chromium for Playwright E2E and accessibility checks
+        run: npx playwright install --with-deps chromium
+
+      - name: Run authenticated E2E & accessibility checks
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
+          ANO_AGENT_MODE: disabled
+          ANO_ALLOW_DEMO_MODE: "false"
+        run: npm run test:e2e

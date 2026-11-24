@@ -5,6 +5,7 @@ import {
   deriveBuyerRoleRecommendations,
   deriveBuyingCommitteeCriteria,
   recommendPersonDiscoveryProvider,
+  selectAppropriateVerificationProvider,
   type CompanyArchetype,
   type ContactVerificationProvider,
   type DropcontactProviderState,
@@ -160,6 +161,7 @@ export async function approvePersonSearchForConversation(
   conversationId: string,
   personSearchId: string,
 ) {
+  const context = await loadShortlistedContext(session, conversationId);
   const existingView = await readPeopleDiscoveryForConversation(session, conversationId);
   const targetProvider = existingView.personSearch?.providerKey ?? "prospeo";
   if (targetProvider === "prospeo" && !prospeoConfiguration().available) {
@@ -178,7 +180,6 @@ export async function approvePersonSearchForConversation(
     }
   }
 
-  const context = await loadShortlistedContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
 
   const graph = createAccountToPeopleGraph(
@@ -243,15 +244,18 @@ export async function prepareContactVerificationForConversation(
   selectedContactIds: string[],
   requestedProvider?: ContactVerificationProvider,
 ) {
-  const providerKey: ContactVerificationProvider =
-    requestedProvider ??
-    (prospeoConfiguration().available && !dropcontactConfiguration().available
-      ? "prospeo"
-      : dropcontactConfiguration().available
-        ? "dropcontact"
-        : "prospeo");
-
   const context = await loadShortlistedContext(session, conversationId);
+  const existingView = await readPeopleDiscoveryForConversation(session, conversationId);
+  const selectedSet = new Set(selectedContactIds);
+  const selectedContacts = existingView.contacts.filter((contact) => selectedSet.has(contact.id));
+  const providerKey = selectAppropriateVerificationProvider(
+    selectedContacts,
+    {
+      prospeo: prospeoConfiguration().available,
+      dropcontact: dropcontactConfiguration().available,
+    },
+    requestedProvider,
+  );
   const checkpointer = await getResearchCheckpointer();
 
   const graph = createAccountToPeopleGraph(
@@ -301,6 +305,7 @@ export async function approveContactVerificationForConversation(
   conversationId: string,
   verificationRunId: string,
 ) {
+  const context = await loadShortlistedContext(session, conversationId);
   const existingView = await readPeopleDiscoveryForConversation(session, conversationId);
   const providerKey = existingView.verificationRun?.providerKey ?? "dropcontact";
   if (providerKey === "prospeo" && !prospeoConfiguration().available) {
@@ -323,7 +328,6 @@ export async function approveContactVerificationForConversation(
     );
   }
 
-  const context = await loadShortlistedContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
 
   const graph = createAccountToPeopleGraph(

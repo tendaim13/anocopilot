@@ -51,7 +51,7 @@ function requireLiveSession(
 function iso(value: unknown) {
   const date = new Date(String(value));
   if (Number.isNaN(date.getTime())) {
-    throw new OutreachExecutionPersistenceError("Ano found an invalid Phase F timestamp.");
+    throw new OutreachExecutionPersistenceError("Ano found an invalid outreach timestamp.");
   }
   return date.toISOString();
 }
@@ -289,7 +289,7 @@ export async function generateOutreachDrafts(
 
   if (targetPlaybooks.length === 0) {
     throw new OutreachExecutionPersistenceError(
-      "Compile at least one factual Phase E playbook before generating outreach drafts.",
+      "Compile at least one factual account playbook before generating outreach drafts.",
       "PLAYBOOK_REQUIRED",
     );
   }
@@ -640,6 +640,8 @@ export async function decideAndExecuteProposal(
             proposalId,
             proposalType,
             status: "recorded_after_human_approval",
+            deliveryMode: "draft_only_recorded_approval",
+            externalDispatchExecuted: false,
             targetReference: beforeRow.target_reference ?? null,
             approvedBy: session.actorId,
             executedAt: now,

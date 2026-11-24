@@ -55,6 +55,7 @@ const requiredMigrations = [
   "20261124_000028_autopilot_explicit_authority",
   "20261124_000029_durable_autopilot_jobs",
   "20261124_000030_research_source_provenance",
+  "20261124_000031_map_reduce_synthesis_report",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
@@ -234,8 +235,40 @@ try {
         /public_web/.test(row.definition) &&
         /comparable_evidence/.test(row.definition),
     );
+  const phase13eColumns = await client.query(
+    "select column_name from information_schema.columns where table_schema = 'public' and table_name = 'ano_research_syntheses' and column_name = any($1::text[])",
+    [["group_summaries_json", "report_json"]],
+  );
+  const phase13eMapReduceSynthesisReady = phase13eColumns.rows.length === 2;
+  const rlsResult = await client.query(
+    `
+      select
+        n.nspname as schema_name,
+        c.relname as table_name,
+        c.relrowsecurity as rls_enabled
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind = 'r'
+        and (
+          (n.nspname = 'public' and c.relname = any($1::text[]))
+          or (n.nspname = 'ano_internal' and c.relname = 'api_usage_logs')
+        )
+    `,
+    [requiredTables],
+  );
+  const rlsEnabledSet = new Set(
+    rlsResult.rows
+      .filter((row) => row.rls_enabled === true)
+      .map((row) => `${row.schema_name}.${row.table_name}`),
+  );
+  const expectedRlsTables = [
+    ...requiredTables.map((table) => `public.${table}`),
+    "ano_internal.api_usage_logs",
+  ];
+  const tablesWithoutRls = expectedRlsTables.filter((fqName) => !rlsEnabledSet.has(fqName));
+  const rlsEnabledReady = tablesWithoutRls.length === 0;
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady && phase13bAuthorityReady && phase13cDurableJobsReady && phase13dSourceProvenanceReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady && phase13bAuthorityReady && phase13cDurableJobsReady && phase13dSourceProvenanceReady && phase13eMapReduceSynthesisReady && rlsEnabledReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -258,8 +291,11 @@ try {
     phase13bAuthorityReady,
     phase13cDurableJobsReady,
     phase13dSourceProvenanceReady,
+    phase13eMapReduceSynthesisReady,
+    rlsEnabledReady,
+    tablesWithoutRls,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady || !phase13bAuthorityReady || !phase13cDurableJobsReady || !phase13dSourceProvenanceReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady || !phase13bAuthorityReady || !phase13cDurableJobsReady || !phase13dSourceProvenanceReady || !phase13eMapReduceSynthesisReady || !rlsEnabledReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

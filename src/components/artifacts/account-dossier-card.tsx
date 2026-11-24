@@ -96,6 +96,18 @@ export function AccountDossierCard({
       </div>
 
       <section className="m3-artifact-section">
+        <h3>Why this company matches</h3>
+        <ul className="m3-bullet-list">
+          {(account.matchReasons && account.matchReasons.length > 0
+            ? account.matchReasons
+            : [account.fit.rationale]
+          ).map((reason) => (
+            <li key={reason}>{maskVendorNamesForDisplay(reason)}</li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="m3-artifact-section">
         <h3>Confirmed company signals</h3>
         <div className="m3-evidence-source-grid">
           {account.signals.map((signal) => (

@@ -48,6 +48,44 @@ export class TargetAccountDiscoveryPersistenceError extends Error {
 
 type Row = Record<string, unknown>;
 
+const SECRET_OR_VENDOR_ERROR_PATTERN =
+  /\b(?:Prospeo|Dropcontact|OpenStreetMap|OSM|Nominatim|Overpass|Mercury|SearXNG|Google AI Studio|Gemini|Amazon Bedrock|Bedrock|LangGraph|Supabase|PROSPEO_KEY|DROPCONTACT_API_KEY|SEARXNG_BASE_URL|SEARXNG_GATEWAY_TOKEN|GEMINI_API_KEY|ANO_AGENT_MODE|OVERPASS_API_URL)\b/gi;
+
+const TOKEN_OR_ENV_ASSIGNMENT_PATTERN =
+  /(?:Bearer\s+[A-Za-z0-9._-]+|[A-Z0-9_]*_KEY\s*=\s*[^\s,;]+|sk-[A-Za-z0-9_-]{8,}|https?:\/\/[^\s]*\?(?:[^\s]*token|key)=[^\s]+)/gi;
+
+export function sanitizeDownstreamErrorMessage(error: unknown, fallback: string): string {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "";
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+
+  if (
+    /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|TLSSocket|TypeError:\s*fetch failed|HTTP\s*5\d{2}|HTTP\s*40[13]|postgres|row-level security|column\s+"[^"]+"/i.test(
+      trimmed,
+    )
+  ) {
+    return fallback;
+  }
+
+  const scrubbed = trimmed
+    .replace(TOKEN_OR_ENV_ASSIGNMENT_PATTERN, "[redacted]")
+    .replace(SECRET_OR_VENDOR_ERROR_PATTERN, "external data service")
+    .replace(/\$?\d+\s*credits?/gi, "approved allowance")
+    .replace(/\b(?:PHASE|Phase)\s+[A-F]\b/g, "the previous step")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!scrubbed || scrubbed.length > 260) {
+    return fallback;
+  }
+  return scrubbed;
+}
+
 export type LockedTargetContext = {
   conversationId: string;
   targetDecisionId: string;
@@ -63,7 +101,7 @@ function requireLiveSession(
 ): asserts session is SupabaseWorkspaceSession {
   if (session.kind === "demo") {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Sign in before Ano can preview or run Prospeo company discovery.",
+      "Sign in before Ano can preview or run company discovery.",
       "AUTH_REQUIRED",
     );
   }
@@ -135,12 +173,15 @@ function mapAccountRow(row: Row, fallbackClaimIds: string[] = []): AccountCandid
       rationale:
         typeof rawFit.rationale === "string" && rawFit.rationale
           ? rawFit.rationale
-          : `Scored ${totalScore}/100 from ${rawSnapshot.provider === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} company attributes.`,
+          : `Scored ${totalScore}/100 from ${rawSnapshot.provider === "openstreetmap" ? "local business" : "company directory"} attributes.`,
       industryHypothesisNote:
         typeof rawFit.industryHypothesisNote === "string" && rawFit.industryHypothesisNote
           ? rawFit.industryHypothesisNote
-          : "Phase C industry claims remain segment hypotheses until validated directly.",
+          : "Selected market research claims remain segment hypotheses until validated directly.",
     },
+    matchReasons: asStringArray(rawFit.matchReasons).length > 0
+      ? asStringArray(rawFit.matchReasons)
+      : undefined,
     signals,
     claimIds: asStringArray(row.claim_ids, fallbackClaimIds),
     evidenceUrls: asStringArray(row.evidence_urls_json),
@@ -174,7 +215,7 @@ export async function loadLockedTargetContext(
 
   if (!synthesis || synthesis.decision?.status !== "locked") {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Lock a Phase C target market and industry route before preparing company discovery.",
+      "Lock a target market and industry route before preparing company discovery.",
       "TARGET_DECISION_REQUIRED",
     );
   }
@@ -705,11 +746,10 @@ export async function executeApprovedProspeoSearch(
 
   const providerKey: CompanyDiscoveryProvider =
     beforeRow.provider_key === "openstreetmap" ? "openstreetmap" : "prospeo";
-  const providerLabel = providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo";
 
   if (providerKey === "prospeo" && !prospeoConfiguration().available) {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Add PROSPEO_KEY on the server before running Prospeo company discovery.",
+      "B2B company directory discovery is temporarily unavailable because this capability is not configured on the server.",
       "PROSPEO_NOT_CONFIGURED",
     );
   }
@@ -840,8 +880,9 @@ export async function executeApprovedProspeoSearch(
     }
 
     const completedAt = new Date().toISOString();
+    const cappedCompanies = companiesToScore.slice(0, 25);
 
-    const dossiers = companiesToScore.map((company) =>
+    const dossiers = cappedCompanies.map((company) =>
       scoreAndBuildAccountDossier(company, {
         dossierId: crypto.randomUUID(),
         conversationId: context.conversationId,
@@ -861,7 +902,7 @@ export async function executeApprovedProspeoSearch(
 
     if (dossiers.length > 0) {
       const rowsToUpsert = dossiers.map((dossier, index) => {
-        const company = companiesToScore[index];
+        const company = cappedCompanies[index];
         return {
           id: dossier.id,
           workspace_id: session.workspace.id,
@@ -896,7 +937,10 @@ export async function executeApprovedProspeoSearch(
           claim_ids: dossier.claimIds,
           fit_score: dossier.fit.totalScore,
           fit_confidence: dossier.fit.confidence,
-          fit_breakdown_json: dossier.fit,
+          fit_breakdown_json: {
+            ...dossier.fit,
+            ...(dossier.matchReasons ? { matchReasons: dossier.matchReasons } : {}),
+          },
           evidence_urls_json: dossier.evidenceUrls,
           unknowns_json: dossier.unknowns,
           retrieved_at: completedAt,
@@ -1007,9 +1051,10 @@ export async function executeApprovedProspeoSearch(
       providerKey === "openstreetmap" ? "Local business discovery" : "B2B company directory";
     const message = noResults
       ? `${sourceLabel} returned no companies for this approved query.`
-      : isKnownProviderError
-        ? error.message
-        : `Ano could not complete ${sourceLabel.toLowerCase()} safely and did not retry automatically.`;
+      : sanitizeDownstreamErrorMessage(
+          isKnownProviderError ? error.message : error,
+          `Ano could not complete ${sourceLabel.toLowerCase()} safely and did not retry automatically.`,
+        );
     const failureCode =
       noResults
         ? null
@@ -1096,18 +1141,20 @@ export async function updateAccountCandidateLifecycleState(
   state: Exclude<AccountLifecycleState, "discovered" | "review">,
 ): Promise<CompanySearchView> {
   requireLiveSession(session);
+  const targetContext = await loadLockedTargetContext(session, conversationId);
   const { data: updated, error } = await session.client
     .from("account_candidates")
     .update({ lifecycle_state: state })
     .eq("workspace_id", session.workspace.id)
     .eq("conversation_id", conversationId)
+    .eq("target_decision_id", targetContext.targetDecisionId)
     .eq("id", accountId)
     .select("id, source_key, company_search_id, name")
     .maybeSingle();
 
   if (error || !updated) {
     throw new TargetAccountDiscoveryPersistenceError(
-      "Ano could not update that company candidate in this workspace.",
+      "Ano could not update that company candidate under the locked market route.",
       "ACCOUNT_NOT_FOUND",
     );
   }
@@ -1119,6 +1166,7 @@ export async function updateAccountCandidateLifecycleState(
     outcome: "completed",
     details_json: {
       conversation_id: conversationId,
+      target_decision_id: targetContext.targetDecisionId,
       account_candidate_id: updated.id,
       source_key: updated.source_key,
       state,
@@ -1129,6 +1177,73 @@ export async function updateAccountCandidateLifecycleState(
   if (!view) {
     throw new TargetAccountDiscoveryPersistenceError(
       "Ano updated the company state but could not reload the cohort.",
+    );
+  }
+
+  if (view.cohort) {
+    await session.client
+      .from("provider_company_searches")
+      .update({ cohort_summary_json: view.cohort })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", view.id);
+  }
+
+  return view;
+}
+
+export async function batchUpdateAccountCandidateLifecycleStates(
+  session: WorkspaceSession,
+  conversationId: string,
+  accountIds: string[],
+  state: Exclude<AccountLifecycleState, "discovered" | "review">,
+): Promise<CompanySearchView> {
+  requireLiveSession(session);
+  const targetContext = await loadLockedTargetContext(session, conversationId);
+  const uniqueIds = Array.from(
+    new Set(accountIds.map((id) => id.trim()).filter(Boolean)),
+  ).slice(0, 25);
+
+  if (uniqueIds.length === 0) {
+    throw new TargetAccountDiscoveryPersistenceError(
+      "Select at least one discovered company candidate before updating shortlist status.",
+      "ACCOUNT_SELECTION_REQUIRED",
+    );
+  }
+
+  const { data: updatedRows, error } = await session.client
+    .from("account_candidates")
+    .update({ lifecycle_state: state })
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId)
+    .eq("target_decision_id", targetContext.targetDecisionId)
+    .in("id", uniqueIds)
+    .select("id, source_key, company_search_id, name");
+
+  if (error || !updatedRows || updatedRows.length === 0) {
+    throw new TargetAccountDiscoveryPersistenceError(
+      "Ano could not update the selected company candidates under the locked market route.",
+      "ACCOUNT_NOT_FOUND",
+    );
+  }
+
+  await session.client.from("audit_logs").insert({
+    workspace_id: session.workspace.id,
+    actor_id: session.actorId,
+    event_type: "candidate.batch_state_changed",
+    outcome: "completed",
+    details_json: {
+      conversation_id: conversationId,
+      target_decision_id: targetContext.targetDecisionId,
+      account_candidate_ids: updatedRows.map((row) => row.id),
+      updated_count: updatedRows.length,
+      state,
+    },
+  });
+
+  const view = await readCompanySearchForConversation(session, conversationId);
+  if (!view) {
+    throw new TargetAccountDiscoveryPersistenceError(
+      "Ano updated the selected companies but could not reload the cohort.",
     );
   }
 

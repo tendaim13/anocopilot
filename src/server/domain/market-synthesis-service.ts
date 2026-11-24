@@ -63,7 +63,7 @@ export async function analyseMarketSynthesisForConversation(session: WorkspaceSe
   try {
     const [checkpointer, configuration] = await Promise.all([getResearchCheckpointer(), Promise.resolve(requirePlannerConfig())]);
     const graph = createMarketSynthesisGraph(createMarketSynthesisModel(configuration), {
-      assess: assessSourceLedger,
+      assess: (sources) => assessSourceLedger(sources, input.missionCoverage),
       saveNoUsableEvidence: (synthesisId, nextAssessment, graphRunId) => saveNoUsableEvidence(session, synthesisId, nextAssessment, graphRunId),
       saveSynthesis: (synthesisId, graphRunId, nextAssessment, draft, sources) => saveMarketSynthesis(session, synthesisId, graphRunId, nextAssessment, draft, sources),
     }, checkpointer);

@@ -127,6 +127,10 @@ const migrations = [
     id: "20261124_000030_research_source_provenance",
     file: path.join(projectRoot, "supabase/migrations/20261124_000030_research_source_provenance.sql"),
   },
+  {
+    id: "20261124_000031_map_reduce_synthesis_report",
+    file: path.join(projectRoot, "supabase/migrations/20261124_000031_map_reduce_synthesis_report.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {

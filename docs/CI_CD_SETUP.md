@@ -9,12 +9,12 @@ This repository uses a cost-optimized single-job GitHub Actions pipeline so **al
 - `.github/workflows/ci.yml` — Runs on PRs and pushes to `main`:
   - Checks Node `22.x`, ensures `.env.local` / `.env.production` are never tracked, and checks no server secret uses a `NEXT_PUBLIC_` prefix.
   - Verifies all `supabase/migrations/*.sql` files are registered (`npm run check:migrations`).
-  - Runs `npm run typecheck`, unified offline `npm test`, and `npm run build` (`ANO_AGENT_MODE=disabled`).
+  - Runs `npm run typecheck`, `npm run test:phase4b`, unified offline `npm test`, `npm run build` (`ANO_AGENT_MODE=disabled`, Turbopack only), installs Chromium, and runs `npm run test:e2e` (Playwright E2E + WCAG 2.1 AA axe accessibility checks).
 - `.github/workflows/deploy-production.yml` — Runs on pushes to `main`:
-  - Re-verifies `check:migrations`, `typecheck`, and `npm test`.
-  - Runs `npm run db:apply:ci && npm run db:status:ci` against Ano's Supabase database **before** code deployment (when `SUPABASE_DB_URL` is configured).
-  - Builds once via `vercel build --prod` and deploys via `vercel deploy --prebuilt --prod` (when Vercel secrets are configured).
-  - Smoke checks `GET /api/health` (`200`, `"ok":true`) and verifies `GET /api/v1/conversations` rejects unauthenticated traffic (`401`/`403`), checking the production alias URL first and falling back to authenticated `vercel curl` when Vercel Authentication protects the immutable deployment URL.
+  - Re-verifies `check:migrations`, `typecheck`, `test:phase4b`, and `npm test`.
+  - **Fails deployment strictly** (`npm run check:deploy-env`) if any required database, Vercel, Supabase public, or authenticated smoke secret (`SUPABASE_DB_URL`, `ANO_DATABASE_LABEL=ano`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `ANO_SMOKE_AUTH_EMAIL`, `ANO_SMOKE_AUTH_PASSWORD`) is missing.
+  - Runs `npm run db:apply:ci && npm run db:status:ci` (verifying migrations, policies, and RLS enabled across all 53 tables) against Ano's Supabase database **before** building and deploying via `vercel deploy --prebuilt --prod`.
+  - Runs `npm run smoke:production` verifying `/api/health`, public `/`, unauthenticated `401`/`403` rejection on `/api/v1/conversations`, real Supabase SSR cookie sign-in, authenticated `GET /api/v1/workspace`, `GET /api/v1/conversations`, `GET /api/v1/work-queue`, zero secret/vendor leaks, and optional private SearXNG gateway smoke when configured.
 - `vercel.json` — Configures Fluid Compute `maxDuration` (`300s` for deep Phase B/C/D/E routes, `120s` for Phase 9B templates/chat) and security headers.
 - `src/app/api/health/route.ts` — Unauthenticated liveness probe returning `{ ok, service, commit, agentMode, supabaseConfigured, timestamp }`.
 
@@ -45,12 +45,18 @@ In your GitHub repo **Settings → Environments → New environment: `production
 
 | Secret Name | Value | Required For |
 | --- | --- | --- |
-| `SUPABASE_DB_URL` | Ano's Postgres URI from `.env.local` | Applying & verifying migrations in CI (`db:apply:ci`) |
+| `SUPABASE_DB_URL` | Ano's Postgres URI from `.env.local` | Applying & verifying migrations + live RLS status in CI (`db:apply:ci` / `db:status:ci`) |
 | `SUPABASE_DB_SSL_CA` | Optional: raw PEM contents (or base64) of Supabase CA cert | Strict CA verification in GitHub Actions |
 | `VERCEL_TOKEN` | Vercel Personal Access Token | Prebuilt deploy to Vercel |
 | `VERCEL_ORG_ID` | From `.vercel/project.json` (`orgId`) | Vercel CLI pull/build/deploy |
 | `VERCEL_PROJECT_ID` | From `.vercel/project.json` (`projectId`) | Vercel CLI pull/build/deploy |
+| `NEXT_PUBLIC_SUPABASE_URL` | Ano's Supabase HTTPS URL | Authenticated production smoke sign-in (`smoke:production`) |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Ano's Supabase publishable key | Authenticated production smoke sign-in (`smoke:production`) |
+| `ANO_SMOKE_AUTH_EMAIL` | Dedicated non-privileged test account email | Authenticated post-deploy smoke verification |
+| `ANO_SMOKE_AUTH_PASSWORD` | Dedicated test account password | Authenticated post-deploy smoke verification |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | Optional: Vercel Deployment Protection bypass secret | Direct curl smoke check if protection is enabled on the production alias too |
+| `SEARXNG_BASE_URL` | Optional: HTTPS private SearXNG gateway URL | Optional post-deploy SearXNG + Brave Search smoke verification |
+| `SEARXNG_GATEWAY_TOKEN` | Optional: SearXNG gateway token | Optional post-deploy SearXNG + Brave Search smoke verification |
 
 ---
 

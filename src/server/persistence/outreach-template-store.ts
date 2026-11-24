@@ -65,6 +65,7 @@ function mapTemplatePackRow(row: Row): OutreachTemplatePackView {
     steps,
     claimIds: asStringArray(row.claim_ids_json),
     generationMode: String(row.generation_mode ?? "llm"),
+    deliveryMode: "draft_only",
     lastInstruction:
       typeof row.last_instruction === "string" && row.last_instruction.trim()
         ? row.last_instruction

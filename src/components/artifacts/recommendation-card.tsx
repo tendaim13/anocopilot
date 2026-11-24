@@ -28,6 +28,13 @@ function strengthLabel(value: "strong" | "moderate" | "limited" | "insufficient"
   return "Insufficient evidence";
 }
 
+function confidenceWord(value: "strong" | "moderate" | "limited" | "insufficient") {
+  if (value === "strong") return "Strong";
+  if (value === "moderate") return "Moderate";
+  if (value === "limited") return "Limited";
+  return "Insufficient";
+}
+
 function claimLabel(kind: MarketSynthesis["claims"][number]["kind"]) {
   if (kind === "observation") return "Source observation";
   if (kind === "comparable") return "Comparable evidence";
@@ -97,6 +104,7 @@ export function RecommendationCard({
   onOpenSources,
   onStartNewResearch,
 }: RecommendationCardProps) {
+  const report = synthesis.report;
   const directClaims = synthesis.claims.filter((claim) => claim.kind === "observation");
   const reasoningClaims = synthesis.claims.filter(
     (claim) => claim.kind === "comparable" || claim.kind === "inference",
@@ -104,6 +112,13 @@ export function RecommendationCard({
   const validationClaims = synthesis.claims.filter(
     (claim) => claim.kind === "hypothesis" || claim.kind === "uncertainty",
   );
+  const reportOnlyComparable =
+    (report?.comparableEvidence ?? []).filter(
+      (item) => !reasoningClaims.some((claim) => claim.kind === "comparable" && claim.statement === item.statement),
+    );
+  const hasReportAssumptions = (report?.assumptions.length ?? 0) > 0;
+  const hasReportUnknowns = (report?.unknowns.length ?? 0) > 0;
+  const hasReportNextActions = (report?.nextValidationActions.length ?? 0) > 0;
 
   if (synthesis.status === "failed_safe" || synthesis.status === "requires_manual_review") {
     return (
@@ -145,7 +160,20 @@ export function RecommendationCard({
         </span>
       </header>
 
-      <p className="m3-artifact-lead">{synthesis.assessment.summary}</p>
+      <p className="m3-artifact-lead">{report?.recommendation.summary ?? synthesis.assessment.summary}</p>
+
+      {report?.confidence && (
+        <p className="m3-muted-callout">
+          <strong>Confidence: {confidenceWord(report.confidence.level)}</strong>
+          {" · "}
+          {report.confidence.totalSourcesAnalyzed} source
+          {report.confidence.totalSourcesAnalyzed === 1 ? "" : "s"} analyzed
+          {report.confidence.groupsAnalyzed > 0
+            ? ` across ${report.confidence.groupsAnalyzed} evidence group${report.confidence.groupsAnalyzed === 1 ? "" : "s"}`
+            : ""}
+          {` — ${report.confidence.rationale}`}
+        </p>
+      )}
 
       {synthesis.recommendationMode === "no_usable_evidence" ? (
         <section className="m3-muted-callout">
@@ -153,6 +181,13 @@ export function RecommendationCard({
             Ano preserved the completed research record but found no usable source basis for a
             market recommendation. Nothing was invented.
           </p>
+          {hasReportNextActions && (
+            <ul className="m3-bullet-list">
+              {report!.nextValidationActions.map((action) => (
+                <li key={action}>{action}</li>
+              ))}
+            </ul>
+          )}
           <div className="m3-action-row">
             <MaterialButton variant="outlined" onClick={onOpenSources}>
               Inspect sources
@@ -164,18 +199,18 @@ export function RecommendationCard({
         </section>
       ) : (
         <>
-          {directClaims.length > 0 && (
+          {(directClaims.length > 0 || (report?.evidence.length ?? 0) > 0) && (
             <section className="m3-artifact-section">
               <h3>What Ano found (Direct findings)</h3>
               <ul className="m3-bullet-list">
-                {directClaims.map((claim) => (
-                  <li key={claim.id}>{claim.statement}</li>
+                {(directClaims.length > 0 ? directClaims : report?.evidence ?? []).map((item, idx) => (
+                  <li key={"id" in item ? item.id : `ev-${idx}`}>{item.statement}</li>
                 ))}
               </ul>
             </section>
           )}
 
-          {reasoningClaims.length > 0 && (
+          {(reasoningClaims.length > 0 || reportOnlyComparable.length > 0) && (
             <section className="m3-artifact-section m3-reasoning-callout">
               <h3>What this may mean for you</h3>
               <ul className="m3-claim-list">
@@ -186,6 +221,17 @@ export function RecommendationCard({
                     {claim.comparisonBasis && (
                       <small className="m3-comparison-basis">
                         Why comparable: {claim.comparisonBasis}
+                      </small>
+                    )}
+                  </li>
+                ))}
+                {reportOnlyComparable.map((item, idx) => (
+                  <li key={`cmp-${idx}`}>
+                    <span className="m3-claim-pill kind-comparable">Comparable evidence</span>
+                    <span>{item.statement}</span>
+                    {item.comparisonBasis && (
+                      <small className="m3-comparison-basis">
+                        Why comparable: {item.comparisonBasis}
                       </small>
                     )}
                   </li>
@@ -260,12 +306,45 @@ export function RecommendationCard({
             </section>
           )}
 
-          {validationClaims.length > 0 && (
-            <section className="m3-artifact-section m3-muted-callout">
-              <h3>What to validate next</h3>
+          {hasReportAssumptions && (
+            <section className="m3-artifact-section">
+              <h3>Key assumptions</h3>
               <ul className="m3-bullet-list">
-                {validationClaims.map((claim) => (
-                  <li key={claim.id}>{claim.statement}</li>
+                {report!.assumptions.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {hasReportUnknowns ? (
+            <section className="m3-artifact-section m3-muted-callout">
+              <h3>Open unknowns</h3>
+              <ul className="m3-bullet-list">
+                {report!.unknowns.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          ) : (
+            validationClaims.length > 0 && (
+              <section className="m3-artifact-section m3-muted-callout">
+                <h3>What to validate next</h3>
+                <ul className="m3-bullet-list">
+                  {validationClaims.map((claim) => (
+                    <li key={claim.id}>{claim.statement}</li>
+                  ))}
+                </ul>
+              </section>
+            )
+          )}
+
+          {hasReportNextActions && (
+            <section className="m3-artifact-section">
+              <h3>Next validation actions</h3>
+              <ul className="m3-bullet-list">
+                {report!.nextValidationActions.map((action) => (
+                  <li key={action}>{action}</li>
                 ))}
               </ul>
             </section>

@@ -2,12 +2,17 @@ import "server-only";
 
 import type { SupabaseWorkspaceSession, WorkspaceSession } from "@/contracts/ano";
 import { isOpenMarketRecommendationIntent } from "@/lib/ano/autopilot";
+import { resolveSourceProvenance, type SourceEvidenceRole, type SourceProvenance } from "@/lib/ano/evidence-research";
 import {
+  buildStructuredSynthesisReport,
   evidenceAssessmentSchema,
+  evidenceGroupSummarySchema,
   lockTargetDecisionInputSchema,
   marketSynthesisSchema,
   recommendationModeSchema,
+  synthesisReportSchema,
   type EvidenceAssessment,
+  type EvidenceGroupSummary,
   type LockTargetDecisionInput,
   type MarketSynthesis,
   type MarketSynthesisDraft,
@@ -113,6 +118,7 @@ export function assessSourceLedger(sources: SynthesisSource[], missionCoverage?:
     // identify more gaps than the review card can use; retain a stable,
     // de-duplicated first six instead of rejecting the entire analysis.
     gaps: Array.from(new Set(gaps)).slice(0, 6),
+    sourcesAnalyzedCount: sourceCount,
     summary: sourceCount
       ? missionCoverage
         ? `Ano has ${missionCoverage.qualifyingSourceCount} decision-relevant excerpts across ${missionCoverage.sourceClassCount} source classes for a comparative market study.`
@@ -183,6 +189,81 @@ export function auditMarketSynthesisDraft(draft: MarketSynthesisDraft, sources: 
       throw new MarketSynthesisPersistenceError("Ano rejected an industry strength rating supported solely by vendor or workspace sources.", "CITATION_AUDIT_FAILED");
     }
   }
+  if (draft.groupSummaries?.length) {
+    const coveredSourceIds = new Set<string>();
+    for (const group of draft.groupSummaries) {
+      for (const sourceId of group.sourceIds) {
+        if (!sourceById.has(sourceId)) {
+          throw new MarketSynthesisPersistenceError("Ano rejected a group summary that cited a source outside the saved evidence ledger.", "CITATION_AUDIT_FAILED");
+        }
+        coveredSourceIds.add(sourceId);
+      }
+      for (const finding of group.findings) {
+        if (finding.sourceIds.some((sourceId) => !sourceById.has(sourceId))) {
+          throw new MarketSynthesisPersistenceError("Ano rejected a group finding that cited a source outside the saved evidence ledger.", "CITATION_AUDIT_FAILED");
+        }
+        if (finding.kind === "comparable" && !finding.comparisonBasis) {
+          throw new MarketSynthesisPersistenceError("Ano rejected comparable group evidence without a stated comparison basis.", "CITATION_AUDIT_FAILED");
+        }
+        const cited = finding.sourceIds.map((id) => sourceById.get(id)!);
+        const onlyVendor = cited.length > 0 && cited.every((s) => s.sourceClass === "vendor");
+        const onlyWorkspace =
+          cited.length > 0 && cited.every((s) => s.sourceProvenance === "workspace_supplied");
+        if (
+          onlyVendor &&
+          (finding.kind === "observation" ||
+            finding.kind === "comparable" ||
+            finding.evidenceStrength === "strong" ||
+            finding.evidenceStrength === "moderate")
+        ) {
+          throw new MarketSynthesisPersistenceError(
+            "Ano rejected vendor group findings acting as direct demand proof rather than contextual or counter-evidence.",
+            "CITATION_AUDIT_FAILED",
+          );
+        }
+        if (
+          onlyWorkspace &&
+          (finding.kind === "observation" ||
+            finding.evidenceStrength === "strong" ||
+            finding.evidenceStrength === "moderate")
+        ) {
+          throw new MarketSynthesisPersistenceError(
+            "Ano rejected workspace-supplied group findings labeled as direct public market evidence.",
+            "CITATION_AUDIT_FAILED",
+          );
+        }
+      }
+    }
+    if (sources.some((source) => !coveredSourceIds.has(source.id))) {
+      throw new MarketSynthesisPersistenceError(
+        "Ano rejected an incomplete map-reduce summary that omitted saved evidence sources.",
+        "CITATION_AUDIT_FAILED",
+      );
+    }
+  }
+  if (draft.report) {
+    for (const item of [...draft.report.evidence, ...draft.report.comparableEvidence]) {
+      if (item.sourceIds.some((sourceId) => !sourceById.has(sourceId))) {
+        throw new MarketSynthesisPersistenceError(
+          "Ano rejected a report citation outside the saved evidence ledger.",
+          "CITATION_AUDIT_FAILED",
+        );
+      }
+    }
+    for (const item of draft.report.evidence) {
+      const cited = item.sourceIds.map((id) => sourceById.get(id)!);
+      const onlyRestricted =
+        cited.length > 0 &&
+        (cited.every((s) => s.sourceClass === "vendor") ||
+          cited.every((s) => s.sourceProvenance === "workspace_supplied"));
+      if (onlyRestricted) {
+        throw new MarketSynthesisPersistenceError(
+          "Ano rejected vendor or workspace-only entries inside direct report evidence.",
+          "CITATION_AUDIT_FAILED",
+        );
+      }
+    }
+  }
 }
 
 async function runForConversation(session: SupabaseWorkspaceSession, conversationId: string) {
@@ -202,64 +283,136 @@ async function runForConversation(session: SupabaseWorkspaceSession, conversatio
 export async function loadSynthesisSources(session: WorkspaceSession, conversationId: string): Promise<{ researchRunId: string; graphRunId: string; sources: SynthesisSource[]; missionCoverage: ResearchCoverage | null }> {
   requireLiveSession(session);
   const run = await runForConversation(session, conversationId);
-  const { data, error } = await session.client
-    .from("research_sources")
-    .select("id, title, canonical_url, source_class, source_provenance, supporting_excerpt, published_at")
-    .eq("workspace_id", session.workspace.id)
-    .eq("ano_research_run_id", String(run.id))
-    .eq("status", "fetched")
-    .not("supporting_excerpt", "is", null)
-    .order("retrieved_at", { ascending: false })
-    .limit(100);
-  if (error) throw new MarketSynthesisPersistenceError("Ano could not read the stored source excerpts.");
-  const sourceRows = data ?? [];
-  const { data: assessments, error: assessmentsError } = await session.client
-    .from("research_source_assessments")
-    .select("research_source_id, overall_score")
-    .eq("workspace_id", session.workspace.id)
-    .eq("ano_research_run_id", String(run.id));
-  if (assessmentsError) throw new MarketSynthesisPersistenceError("Ano could not read evidence-quality assessments.");
-  const scoreBySource = new Map((assessments ?? []).map((assessment) => [String(assessment.research_source_id), Number(assessment.overall_score)]));
+  const runId = String(run.id);
+  const [sourcesResult, assessmentsResult, searchResultsResult, queriesResult] = await Promise.all([
+    session.client
+      .from("research_sources")
+      .select(
+        "id, search_result_id, title, canonical_url, source_class, source_provenance, root_domain, duplicate_of_source_id, supporting_excerpt, published_at",
+      )
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId)
+      .eq("status", "fetched")
+      .not("supporting_excerpt", "is", null)
+      .order("retrieved_at", { ascending: false })
+      .limit(100),
+    session.client
+      .from("research_source_assessments")
+      .select("research_source_id, overall_score, assessment_json")
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId),
+    session.client
+      .from("research_search_results")
+      .select("id, research_query_id")
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId),
+    session.client
+      .from("research_queries")
+      .select("id, candidate_market, comparison_dimension")
+      .eq("workspace_id", session.workspace.id)
+      .eq("ano_research_run_id", runId),
+  ]);
+  if (sourcesResult.error) throw new MarketSynthesisPersistenceError("Ano could not read the stored source excerpts.");
+  if (assessmentsResult.error) throw new MarketSynthesisPersistenceError("Ano could not read evidence-quality assessments.");
+
+  const allSourceRows = sourcesResult.data ?? [];
+  const nonDuplicateRows = allSourceRows.filter((row) => !row.duplicate_of_source_id);
+  const sourceRows = nonDuplicateRows.length > 0 ? nonDuplicateRows : allSourceRows;
+
+  const scoreBySource = new Map<string, number>();
+  const roleBySource = new Map<string, SourceEvidenceRole>();
+  for (const assessment of assessmentsResult.data ?? []) {
+    const srcId = String(assessment.research_source_id);
+    scoreBySource.set(srcId, Number(assessment.overall_score));
+    const json = (assessment.assessment_json ?? {}) as Record<string, unknown>;
+    const rawRole = typeof json.evidenceRole === "string" ? json.evidenceRole : null;
+    if (
+      rawRole === "direct_evidence" ||
+      rawRole === "comparable_evidence" ||
+      rawRole === "contextual_counter_only" ||
+      rawRole === "non_qualifying"
+    ) {
+      roleBySource.set(srcId, rawRole);
+    }
+  }
+
+  const queryIdBySearchResultId = new Map<string, string>();
+  if (!searchResultsResult.error) {
+    for (const row of searchResultsResult.data ?? []) {
+      if (row.research_query_id) {
+        queryIdBySearchResultId.set(String(row.id), String(row.research_query_id));
+      }
+    }
+  }
+
+  const queryMetaById = new Map<string, { candidateMarket: string | null; comparisonDimension: string | null }>();
+  if (!queriesResult.error) {
+    for (const row of queriesResult.data ?? []) {
+      queryMetaById.set(String(row.id), {
+        candidateMarket: row.candidate_market ? text(row.candidate_market, 140) : null,
+        comparisonDimension: row.comparison_dimension ? String(row.comparison_dimension) : null,
+      });
+    }
+  }
+
   const ranked = sourceRows
     .map((source) => {
-      const provenance = (source.source_provenance
-        ? String(source.source_provenance)
-        : String(source.canonical_url ?? "").startsWith("https://product-brief.ano.local/")
-          ? "workspace_supplied"
-          : "public_web") as NonNullable<SynthesisSource["sourceProvenance"]>;
+      const url = String(source.canonical_url ?? "");
+      const provenance = resolveSourceProvenance({
+        url,
+        sourceProvenance:
+          typeof source.source_provenance === "string"
+            ? (source.source_provenance as SourceProvenance)
+            : undefined,
+      });
       const provenanceBoost = provenance === "workspace_supplied" ? -100 : provenance === "comparable_evidence" ? -10 : 0;
       const vendorPenalty = String(source.source_class) === "vendor" ? -30 : 0;
+      const score = scoreBySource.get(String(source.id)) ?? 0;
+      const queryId = source.search_result_id
+        ? queryIdBySearchResultId.get(String(source.search_result_id))
+        : undefined;
+      const queryMeta = queryId ? queryMetaById.get(queryId) : undefined;
       return {
         source,
         provenance,
-        score: scoreBySource.get(String(source.id)) ?? 0,
-        rankScore: (scoreBySource.get(String(source.id)) ?? 0) + provenanceBoost + vendorPenalty,
+        evidenceRole: roleBySource.get(String(source.id)),
+        candidateMarket: queryMeta?.candidateMarket ?? null,
+        comparisonDimension: queryMeta?.comparisonDimension ?? null,
+        rootDomain: source.root_domain ? String(source.root_domain) : null,
+        score,
+        rankScore: score + provenanceBoost + vendorPenalty,
       };
     })
     .sort((left, right) => right.rankScore - left.rankScore);
-  const selected = [...new Map(ranked.map((item) => [String(item.source.source_class), item])).values(), ...ranked]
-    .filter((item, index, all) => all.findIndex((candidate) => String(candidate.source.id) === String(item.source.id)) === index)
-    .slice(0, 24);
-  const sources = selected.map(({ source, provenance, score }) => ({
-    id: String(source.id),
-    title: text(source.title, 500) ?? "Untitled source",
-    sourceClass: source.source_class as SynthesisSource["sourceClass"],
-    sourceProvenance: provenance,
-    excerpt: text(source.supporting_excerpt, 1_200) ?? "",
-    publishedAt: source.published_at ? iso(source.published_at) : null,
-    evidenceScore: score,
-  })).filter((source) => Boolean(source.excerpt));
+
+  // Retain ALL non-duplicate fetched sources so map-reduce synthesis never silently drops evidence.
+  const sources: SynthesisSource[] = ranked
+    .map(({ source, provenance, evidenceRole, candidateMarket, comparisonDimension, rootDomain, score }) => ({
+      id: String(source.id),
+      title: text(source.title, 500) ?? "Untitled source",
+      sourceClass: source.source_class as SynthesisSource["sourceClass"],
+      sourceProvenance: provenance,
+      ...(evidenceRole ? { evidenceRole } : {}),
+      candidateMarket,
+      comparisonDimension,
+      rootDomain,
+      excerpt: text(source.supporting_excerpt, 1_200) ?? "",
+      publishedAt: source.published_at ? iso(source.published_at) : null,
+      evidenceScore: score,
+    }))
+    .filter((source) => Boolean(source.excerpt));
+
   const rawCoverage = run.coverage_json;
   const missionCoverage = rawCoverage && typeof rawCoverage === "object" && Array.isArray((rawCoverage as Record<string, unknown>).cells)
     ? rawCoverage as ResearchCoverage
     : null;
-  return { researchRunId: String(run.id), graphRunId: String(run.graph_run_id), sources, missionCoverage };
+  return { researchRunId: runId, graphRunId: String(run.graph_run_id), sources, missionCoverage };
 }
 
 async function synthesisRow(session: SupabaseWorkspaceSession, conversationId: string) {
   const { data, error } = await session.client
     .from("ano_research_syntheses")
-    .select("id, conversation_id, ano_research_run_id, status, recommendation_mode, assessment_json, failure_message, heartbeat_at, created_at, updated_at")
+    .select("id, conversation_id, ano_research_run_id, status, recommendation_mode, assessment_json, group_summaries_json, report_json, failure_message, heartbeat_at, created_at, updated_at")
     .eq("workspace_id", session.workspace.id)
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: false })
@@ -317,18 +470,59 @@ export async function readMarketSynthesis(session: WorkspaceSession, conversatio
     session.client.from("target_decisions").select("id, status, market_profile_id, industry_profile_id, rationale, selected_at").eq("workspace_id", session.workspace.id).eq("synthesis_id", synthesisId).maybeSingle(),
   ]);
   if (claimsResult.error || marketsResult.error || industriesResult.error || decisionResult.error) throw new MarketSynthesisPersistenceError("Ano could not read the saved market findings.");
+  const recommendationMode = recommendationModeSchema.parse(synthesis.recommendation_mode ?? "pending");
+  const parsedAssessment = evidenceAssessmentSchema.parse(synthesis.assessment_json);
+  const claims = (claimsResult.data ?? []).map((claim) => ({ id: claim.id, kind: claim.claim_kind, statement: claim.statement, sourceIds: strings(claim.source_ids, 6), comparisonBasis: claim.comparison_basis ? text(claim.comparison_basis, 280) : null, evidenceStrength: claim.evidence_strength, citationStatus: claim.citation_status }));
+  const markets = (marketsResult.data ?? []).map((market) => ({ id: market.id, name: market.name, summary: market.summary, evidenceStrength: market.evidence_strength, claimIds: strings(market.claim_ids, 8), unknowns: strings(market.unknowns_json, 5), nextResearchActions: strings(market.next_research_actions_json, 4) }));
+  const industries = (industriesResult.data ?? []).map((industry) => ({ id: industry.id, marketProfileId: industry.market_profile_id, name: industry.name, summary: industry.summary, operationalProblems: strings(industry.operational_problems_json, 5), solutionFit: strings(industry.solution_fit_json, 4), buyerRoleHypotheses: strings(industry.buyer_role_hypotheses_json, 5), evidenceStrength: industry.evidence_strength, claimIds: strings(industry.claim_ids, 8), unknowns: strings(industry.unknowns_json, 5) }));
+  const groupSummaries: EvidenceGroupSummary[] = Array.isArray(synthesis.group_summaries_json)
+    ? synthesis.group_summaries_json.flatMap((entry) => {
+        const parsed = evidenceGroupSummarySchema.safeParse(entry);
+        return parsed.success ? [parsed.data] : [];
+      })
+    : [];
+  const rawReport = synthesis.report_json;
+  const parsedPersistedReport =
+    rawReport && typeof rawReport === "object" && !Array.isArray(rawReport) && Object.keys(rawReport).length > 0
+      ? synthesisReportSchema.safeParse(rawReport)
+      : null;
+  const resolvedReport = parsedPersistedReport?.success
+    ? parsedPersistedReport.data
+    : synthesis.status === "ready_for_decision" ||
+        synthesis.status === "ready_for_review" ||
+        synthesis.status === "insufficient_evidence" ||
+        claims.length > 0
+      ? buildStructuredSynthesisReport({
+          draft:
+            claims.length > 0
+              ? {
+                  claims,
+                  markets,
+                  industries,
+                  contradictions: parsedAssessment.contradictions,
+                  gaps: parsedAssessment.gaps,
+                  summary: parsedAssessment.summary,
+                }
+              : null,
+          assessment: parsedAssessment,
+          recommendationMode,
+          groupSummaries,
+        })
+      : undefined;
   return marketSynthesisSchema.parse({
     id: synthesis.id,
     conversationId: synthesis.conversation_id,
     researchRunId: synthesis.ano_research_run_id,
     status: synthesis.status,
-    recommendationMode: recommendationModeSchema.parse(synthesis.recommendation_mode ?? "pending"),
-    assessment: synthesis.assessment_json,
-    claims: (claimsResult.data ?? []).map((claim) => ({ id: claim.id, kind: claim.claim_kind, statement: claim.statement, sourceIds: strings(claim.source_ids, 6), comparisonBasis: claim.comparison_basis ? text(claim.comparison_basis, 280) : null, evidenceStrength: claim.evidence_strength, citationStatus: claim.citation_status })),
-    markets: (marketsResult.data ?? []).map((market) => ({ id: market.id, name: market.name, summary: market.summary, evidenceStrength: market.evidence_strength, claimIds: strings(market.claim_ids, 8), unknowns: strings(market.unknowns_json, 5), nextResearchActions: strings(market.next_research_actions_json, 4) })),
-    industries: (industriesResult.data ?? []).map((industry) => ({ id: industry.id, marketProfileId: industry.market_profile_id, name: industry.name, summary: industry.summary, operationalProblems: strings(industry.operational_problems_json, 5), solutionFit: strings(industry.solution_fit_json, 4), buyerRoleHypotheses: strings(industry.buyer_role_hypotheses_json, 5), evidenceStrength: industry.evidence_strength, claimIds: strings(industry.claim_ids, 8), unknowns: strings(industry.unknowns_json, 5) })),
+    recommendationMode,
+    assessment: parsedAssessment,
+    claims,
+    markets,
+    industries,
     decision: decisionResult.data ? { id: decisionResult.data.id, status: decisionResult.data.status, marketProfileId: decisionResult.data.market_profile_id, industryProfileId: decisionResult.data.industry_profile_id, rationale: decisionResult.data.rationale ? text(decisionResult.data.rationale) : null, selectedAt: decisionResult.data.selected_at ? iso(decisionResult.data.selected_at) : null } : null,
     failureMessage: synthesis.failure_message ? text(synthesis.failure_message, 700) : null,
+    groupSummaries,
+    ...(resolvedReport ? { report: resolvedReport } : {}),
     createdAt: iso(synthesis.created_at),
     updatedAt: iso(synthesis.updated_at),
   });
@@ -385,12 +579,25 @@ export async function saveNoUsableEvidence(session: WorkspaceSession, synthesisI
   const completedAt = new Date().toISOString();
   const noEvidenceAssessment = evidenceAssessmentSchema.parse({
     ...assessment,
+    sourcesAnalyzedCount: 0,
+    evidenceGroupCount: 0,
     summary: "Ano could not retrieve usable public evidence for this question. It has not invented a market recommendation.",
+  });
+  const noEvidenceReport = buildStructuredSynthesisReport({
+    draft: null,
+    assessment: noEvidenceAssessment,
+    recommendationMode: "no_usable_evidence",
+    groupSummaries: [],
+    totalSourcesAnalyzed: 0,
+    directEvidenceCount: 0,
+    comparableEvidenceCount: 0,
   });
   const { data, error } = await session.client.from("ano_research_syntheses").update({
     status: "ready_for_review",
     recommendation_mode: "no_usable_evidence",
     assessment_json: noEvidenceAssessment,
+    group_summaries_json: [],
+    report_json: noEvidenceReport,
     failure_message: null,
     completed_at: completedAt,
     heartbeat_at: null,
@@ -401,14 +608,41 @@ export async function saveNoUsableEvidence(session: WorkspaceSession, synthesisI
 
 export async function saveMarketSynthesis(session: WorkspaceSession, synthesisId: string, graphRunId: string, baseline: EvidenceAssessment, draft: MarketSynthesisDraft, sources: SynthesisSource[]): Promise<{ status: SynthesisStatus }> {
   requireLiveSession(session);
-  auditMarketSynthesisDraft(draft, sources);
+  const groupSummaries = draft.groupSummaries ?? [];
+  const directEvidenceCount = sources.filter(
+    (source) =>
+      (source.sourceProvenance ?? "public_web") === "public_web" &&
+      source.sourceClass !== "vendor" &&
+      source.evidenceRole !== "comparable_evidence" &&
+      source.evidenceRole !== "contextual_counter_only" &&
+      source.sourceClass !== "other",
+  ).length;
+  const comparableEvidenceCount = sources.filter(
+    (source) =>
+      source.sourceProvenance === "comparable_evidence" ||
+      source.evidenceRole === "comparable_evidence",
+  ).length;
   const assessment = evidenceAssessmentSchema.parse({
     ...baseline,
+    sourcesAnalyzedCount: sources.length,
+    evidenceGroupCount: groupSummaries.length,
     contradictions: draft.contradictions,
     gaps: Array.from(new Set([...baseline.gaps, ...draft.gaps])).slice(0, 6),
     summary: draft.summary,
   });
   const recommendationMode = recommendationModeFor(assessment, draft, sources);
+  const report =
+    draft.report ??
+    buildStructuredSynthesisReport({
+      draft,
+      assessment,
+      recommendationMode,
+      groupSummaries,
+      totalSourcesAnalyzed: sources.length,
+      directEvidenceCount,
+      comparableEvidenceCount,
+    });
+  auditMarketSynthesisDraft({ ...draft, report }, sources);
   const decisionReady = hasLockableRoute(draft);
   const status: SynthesisStatus = decisionReady ? "ready_for_decision" : "ready_for_review";
   const completedAt = new Date().toISOString();
@@ -436,7 +670,16 @@ export async function saveMarketSynthesis(session: WorkspaceSession, synthesisId
     const { error: decisionError } = await session.client.from("target_decisions").insert({ workspace_id: session.workspace.id, conversation_id: synthesis.conversation_id, synthesis_id: synthesisId, status: "awaiting_selection" });
     if (decisionError) throw new MarketSynthesisPersistenceError("Ano could not save the target-decision checkpoint.");
   }
-  const { data: completed, error: updateError } = await session.client.from("ano_research_syntheses").update({ status, recommendation_mode: recommendationMode, assessment_json: assessment, completed_at: completedAt, failure_message: null, heartbeat_at: null }).eq("workspace_id", session.workspace.id).eq("id", synthesisId).eq("status", "running").select("id").maybeSingle();
+  const { data: completed, error: updateError } = await session.client.from("ano_research_syntheses").update({
+    status,
+    recommendation_mode: recommendationMode,
+    assessment_json: assessment,
+    group_summaries_json: groupSummaries,
+    report_json: report,
+    completed_at: completedAt,
+    failure_message: null,
+    heartbeat_at: null,
+  }).eq("workspace_id", session.workspace.id).eq("id", synthesisId).eq("status", "running").select("id").maybeSingle();
   if (updateError || !completed) throw new MarketSynthesisPersistenceError("Ano could not complete the reviewed evidence synthesis.");
   await session.client.from("run_events").upsert({ workspace_id: session.workspace.id, graph_run_id: graphRunId, event_key: `phase-c-synthesis:${synthesisId}`, label: status === "ready_for_decision" ? "Market recommendation ready" : "Research insight report ready", detail: status === "ready_for_decision" ? `Ano produced a ${recommendationMode.replaceAll("_", " ")} market and industry route. A human target decision is still required before any company discovery.` : `Ano produced a ${recommendationMode.replaceAll("_", " ")} evidence report and retained the material unknowns. It did not create a route for company discovery.` }, { onConflict: "graph_run_id,event_key" });
   return { status };
@@ -743,6 +986,16 @@ export async function ensureAutopilotFallbackSynthesis(
     });
   }
 
+  const fallbackReport = buildStructuredSynthesisReport({
+    draft,
+    assessment,
+    recommendationMode: "exploratory",
+    groupSummaries: [],
+    totalSourcesAnalyzed: input.sources.length,
+    directEvidenceCount: 0,
+    comparableEvidenceCount: 0,
+  });
+
   await session.client
     .from("ano_research_syntheses")
     .update({
@@ -750,8 +1003,12 @@ export async function ensureAutopilotFallbackSynthesis(
       recommendation_mode: "exploratory",
       assessment_json: {
         ...assessment,
+        sourcesAnalyzedCount: input.sources.length,
+        evidenceGroupCount: 0,
         summary: draft.summary,
       },
+      group_summaries_json: [],
+      report_json: fallbackReport,
       failure_message: null,
       completed_at: now,
       heartbeat_at: null,

@@ -64,6 +64,7 @@ export const accountCandidateDossierSchema = z.object({
   description: z.string().trim().min(1).max(1_200).nullable(),
   lifecycleState: accountLifecycleStateSchema,
   fit: accountFitBreakdownSchema,
+  matchReasons: z.array(shortText).min(1).max(6).optional(),
   signals: z.array(accountSignalSchema).max(12),
   claimIds: z.array(identifier).max(16),
   evidenceUrls: z.array(z.string().trim().min(1).max(500)).max(8),
@@ -1152,6 +1153,40 @@ export function scoreAndBuildAccountDossier(
       }
     })() : null);
 
+  const rawMatchReasons: string[] = [];
+  if (locationScore > 0 && formattedLocation) {
+    rawMatchReasons.push(
+      `Location matches locked target geography ${context.targetMarketName} (${formattedLocation}, ${locationScore}/40 fit).`,
+    );
+  }
+  if (industryScore > 0) {
+    const industryDetail =
+      matchedKeywords.length > 0
+        ? `keyword alignment (${matchedKeywords.slice(0, 3).join(", ")})`
+        : company.industry
+          ? `industry classification "${company.industry}"`
+          : "business profile attributes";
+    rawMatchReasons.push(
+      `Segment fit for ${context.targetIndustryName} via ${industryDetail} (${industryScore}/35 alignment).`,
+    );
+  }
+  if (domainVal || websiteUrl) {
+    rawMatchReasons.push(
+      `Verified public web domain (${domainVal ?? websiteUrl}) available for named decision-maker lookup.`,
+    );
+  }
+  if (company.employeeRange || typeof company.employeeCount === "number") {
+    rawMatchReasons.push(
+      `Operating scale reported (${company.employeeRange ?? `${company.employeeCount} employees`}) to qualify outreach fit.`,
+    );
+  }
+  if (rawMatchReasons.length === 0) {
+    rawMatchReasons.push(
+      `Candidate surfaced under locked route ${context.targetMarketName} · ${context.targetIndustryName}; verify segment fit directly.`,
+    );
+  }
+  const matchReasons = uniqueClean(rawMatchReasons, 6);
+
   return accountCandidateDossierSchema.parse({
     id: context.dossierId,
     conversationId: context.conversationId,
@@ -1179,6 +1214,7 @@ export function scoreAndBuildAccountDossier(
         : `Scored ${totalScore}/100 from company profile signals (${locationScore}/40 location, ${industryScore}/35 industry match, ${signalScore}/25 profile completeness).`,
       industryHypothesisNote: `Research findings explain why ${context.targetIndustryName} in ${context.targetMarketName} was targeted; individual company details are verified separately.`,
     },
+    matchReasons,
     signals,
     claimIds: context.linkedClaimIds,
     evidenceUrls,

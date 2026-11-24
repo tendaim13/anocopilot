@@ -58,6 +58,7 @@ import {
 import {
   approveContactVerificationForConversation,
   approvePersonSearchForConversation,
+  generateAccountPlaybooksForConversation,
   getPeopleDiscoveryForConversation,
   prepareContactVerificationForConversation,
   proposeBuyerRolesForConversation,
@@ -252,6 +253,10 @@ export interface AutopilotOrchestratorDeps {
     conversationId: string,
     verificationRunId: string,
   ) => Promise<PeopleDiscoveryView>;
+  generateAccountPlaybooks?: (
+    session: WorkspaceSession,
+    conversationId: string,
+  ) => Promise<PeopleDiscoveryView>;
   getTemplatePack: (
     session: WorkspaceSession,
     conversationId: string,
@@ -399,6 +404,8 @@ export function createDefaultAutopilotDeps(): AutopilotOrchestratorDeps {
     approveContactVerification: async (session, conversationId, verificationRunId) =>
       (await approveContactVerificationForConversation(session, conversationId, verificationRunId))
         .peopleDiscovery,
+    generateAccountPlaybooks: async (session, conversationId) =>
+      (await generateAccountPlaybooksForConversation(session, conversationId)).peopleDiscovery,
     getTemplatePack: async (session, conversationId) =>
       (await getOutreachTemplatePackForConversation(session, conversationId)).templatePack,
     generateTemplatePack: async (session, conversationId, options) =>
@@ -743,18 +750,34 @@ async function runStageCompanyDiscovery(
   deps: AutopilotOrchestratorDeps,
   authorityScope: AutopilotAuthorityScope,
 ): Promise<AutopilotStageSummary> {
-  const existing = await deps.getCompanySearch(session, conversationId).catch(() => null);
+  const [existing, conversation, synthesis] = await Promise.all([
+    deps.getCompanySearch(session, conversationId).catch(() => null),
+    deps.getConversation(session, conversationId),
+    deps.getMarketSynthesis(session, conversationId),
+  ]);
   const warnings: string[] = [];
   let companySearch: CompanySearchView | null = null;
+
+  if (!synthesis?.decision || synthesis.decision.status !== "locked") {
+    const msg = "Lock a target market and industry route before searching for matching companies.";
+    return {
+      stage: "company_discovery",
+      status: "skipped",
+      headline: "Skipped company search (target route not locked)",
+      detail: msg,
+      metrics: {
+        discoveredCount: 0,
+        shortlistedCount: 0,
+      },
+      warnings: [msg],
+      completedAt: nowIso(),
+    };
+  }
 
   if (existing?.status === "completed" && existing.accounts.length > 0) {
     companySearch = existing;
   } else {
-    const [conversation, synthesis] = await Promise.all([
-      deps.getConversation(session, conversationId),
-      deps.getMarketSynthesis(session, conversationId),
-    ]);
-    const lockedIndustry = synthesis?.industries.find(
+    const lockedIndustry = synthesis.industries.find(
       (item) => item.id === synthesis.decision?.industryProfileId,
     );
     const keywords = lockedIndustry
@@ -1036,6 +1059,16 @@ async function runStagePeopleAndEmails(
     Boolean(c.verifiedDetails?.phone || c.publicPhone),
   ).length;
 
+  if (deps.generateAccountPlaybooks) {
+    try {
+      peopleView = await deps.generateAccountPlaybooks(session, conversationId);
+    } catch {
+      warnings.push("Factual account and industry playbooks can be generated after reviewing shortlisted buyers.");
+    }
+  }
+
+  const playbooksGenerated = peopleView?.playbooks.length ?? 0;
+
   return {
     stage: "people_and_emails",
     status: warnings.length > 0 ? "completed_with_warnings" : "completed",
@@ -1048,6 +1081,7 @@ async function runStagePeopleAndEmails(
       publicSharedEmails,
       withAnyEmail,
       withPhone,
+      playbooksGenerated,
       tiersAttempted: tiersAttempted.join(","),
     },
     warnings,

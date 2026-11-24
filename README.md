@@ -21,8 +21,8 @@ Its workflow turns a workspace member's product description and sales goal into 
 
 ## Current status
 
-- **Core Pipeline & Schema:** Implemented and verified across SQL migrations `000001`–`000028` and `ano_langgraph` Postgres checkpoints.
-- **Public Release & Material Web 3 UI:** Implemented and verified (`next@16.4.6`, `zod@4.6.7`, `@material/web@2.4.1`, Material 3 Roboto light/dark UI, public homepage `/`, full backend vendor masking, fail-closed paid usage ledger, explicit Autopilot authority scope, and inline artifact drawers).
+- **Current-State Architecture:** See [Architecture overview](docs/ARCHITECTURE.md) as the single source of truth covering intake, bounded Autopilot execution, iterative research, map-reduce synthesis, downstream sales research, draft-only outreach, multi-workspace RLS (`53/53` tables), and SQL migrations `000001`–`000031`.
+- **Verification & Release Hardening:** Offline CI checks (`npm run check:migrations`, `npm run typecheck`, `npm run test:phase4b`, `npm test`, `npm run test:phase12`, `npm run build`), Chromium E2E & WCAG 2.1 AA accessibility checks (`npm run test:e2e`), strict deploy-secret validation (`npm run check:deploy-env`), live two-workspace RLS probe (`npm run test:rls:live`), private SearXNG smoke (`npm run smoke:searxng`), and authenticated production smoke checks (`npm run smoke:production`).
 
 ## Server configuration
 

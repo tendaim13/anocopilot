@@ -30,6 +30,7 @@ import {
 import { getResearchCheckpointer } from "@/server/langgraph/checkpointer";
 import { createTargetToAccountGraph } from "@/server/langgraph/target-to-account-graph";
 import {
+  batchUpdateAccountCandidateLifecycleStates,
   executeApprovedProspeoSearch,
   listWorkspaceAccounts,
   loadLockedTargetContext,
@@ -270,8 +271,11 @@ export async function approveCompanySearchForConversation(
   companySearch: CompanySearchView;
   prospeo: ReturnType<typeof prospeoConfiguration>;
 }> {
+  // Always enforce the locked market/industry precondition before inspecting or billing any provider call.
+  const context = await loadLockedTargetContext(session, conversationId);
   const existingSearch = await readCompanySearchForConversation(session, conversationId);
-  const providerKey = existingSearch?.providerKey ?? "prospeo";
+  const providerKey =
+    existingSearch?.id === searchId ? existingSearch.providerKey : "prospeo";
   if (providerKey === "prospeo") {
     const budgetOk = await canExecutePaidProviderCall(session, "prospeo");
     if (!budgetOk) {
@@ -282,7 +286,6 @@ export async function approveCompanySearchForConversation(
     }
   }
 
-  const context = await loadLockedTargetContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
 
   const graph = createTargetToAccountGraph(
@@ -365,6 +368,15 @@ export async function updateAccountStateForConversation(
   state: Exclude<AccountLifecycleState, "discovered" | "review">,
 ): Promise<CompanySearchView> {
   return updateAccountCandidateLifecycleState(session, conversationId, accountId, state);
+}
+
+export async function batchUpdateAccountStatesForConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+  accountIds: string[],
+  state: Exclude<AccountLifecycleState, "discovered" | "review">,
+): Promise<CompanySearchView> {
+  return batchUpdateAccountCandidateLifecycleStates(session, conversationId, accountIds, state);
 }
 
 export async function listWorkspaceDiscoveredAccounts(
