@@ -3,11 +3,83 @@
 import {
   AUTOPILOT_STAGE_METADATA,
   AUTOPILOT_STAGES,
+  DEFAULT_AUTOPILOT_AUTHORITY_SCOPE,
+  resolveAutopilotAuthorityScope,
+  type AutopilotAuthorityScope,
   type AutopilotRunView,
   type AutopilotStatus,
 } from "@/lib/ano/autopilot";
 import { MaterialButton } from "@/components/material/material-button";
 import { useMaterialWeb } from "@/components/material/register";
+
+export interface AutopilotAuthorityCardProps {
+  authorityScope?: AutopilotAuthorityScope;
+  isWorking?: boolean;
+  onStartAutopilot?: () => void;
+}
+
+export function AutopilotAuthorityCard({
+  authorityScope = DEFAULT_AUTOPILOT_AUTHORITY_SCOPE,
+  isWorking = false,
+  onStartAutopilot,
+}: AutopilotAuthorityCardProps) {
+  useMaterialWeb();
+  const scope = resolveAutopilotAuthorityScope(authorityScope);
+
+  return (
+    <article
+      className="m3-artifact-card m3-autopilot-card"
+      aria-label="Autopilot bounded authority scope"
+    >
+      <header className="m3-artifact-header">
+        <div>
+          <p className="m3-artifact-kicker">Autopilot authority</p>
+          <h2>Approve bounded Autopilot run</h2>
+        </div>
+        <span className="m3-status-badge status-awaiting_approval">Awaiting start approval</span>
+      </header>
+
+      <p className="m3-artifact-lead">
+        Ano runs public market research, company matching, buyer discovery, selected work-email
+        verification, and plain-text outreach drafting within one explicit scope.
+      </p>
+
+      <div className="m3-scope-strip">
+        <div>
+          <span>Public searches</span>
+          <strong>Up to {scope.maxPublicSearches}</strong>
+        </div>
+        <div>
+          <span>Source excerpts</span>
+          <strong>Up to {scope.maxSourceFetches}</strong>
+        </div>
+        <div>
+          <span>Company candidates</span>
+          <strong>Up to {scope.maxCompanyCandidates}</strong>
+        </div>
+        <div>
+          <span>Email verifications</span>
+          <strong>Up to {scope.maxNamedContactEnrichments}</strong>
+        </div>
+      </div>
+
+      <p className="m3-helper-note">
+        Ano drafts outreach only and never sends email, places calls, or writes to a CRM without a
+        separate later approval.
+      </p>
+
+      {onStartAutopilot && (
+        <footer className="m3-artifact-footer">
+          <div className="m3-action-row">
+            <MaterialButton variant="filled" disabled={isWorking} onClick={onStartAutopilot}>
+              {isWorking ? "Starting…" : "Approve & start autopilot"}
+            </MaterialButton>
+          </div>
+        </footer>
+      )}
+    </article>
+  );
+}
 
 export interface AutopilotProgressCardProps {
   autopilotRun: AutopilotRunView;
@@ -76,6 +148,8 @@ export function AutopilotProgressCard({
     autopilotRun.status === "failed" ||
     autopilotRun.status === "idle";
 
+  const activeScope = resolveAutopilotAuthorityScope(autopilotRun.authorityScope);
+
   return (
     <article className="m3-artifact-card m3-autopilot-card" aria-label="Autopilot pipeline progress">
       <header className="m3-artifact-header">
@@ -106,7 +180,10 @@ export function AutopilotProgressCard({
           aria-label="Autopilot pipeline progress"
         />
         <p className="m3-helper-note">
-          {completedCount} of {totalCount} stages finished
+          {completedCount} of {totalCount} stages finished · Authority scope: up to{" "}
+          {activeScope.maxPublicSearches} searches · {activeScope.maxSourceFetches} excerpts ·{" "}
+          {activeScope.maxCompanyCandidates} companies · {activeScope.maxNamedContactEnrichments}{" "}
+          named verifications · Drafts only
         </p>
       </div>
 

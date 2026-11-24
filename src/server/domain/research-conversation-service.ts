@@ -118,7 +118,7 @@ import {
   syncResearchGraphSnapshot,
 } from "@/server/persistence/research-conversation-store";
 import { prospeoConfiguration } from "@/server/persistence/target-account-discovery-store";
-import { checkInternalUsageBudget } from "@/server/telemetry/internal-api-usage";
+import { canExecutePaidProviderCall } from "@/server/telemetry/internal-api-usage";
 
 export class ResearchConversationServiceError extends Error {
   constructor(message: string) {
@@ -582,13 +582,13 @@ async function resolveBudgetAllowedVerificationProvider(
 ): Promise<"prospeo" | "dropcontact" | null> {
   const primary = selectNextVerificationProvider(input);
   if (!primary) return null;
-  if (await checkInternalUsageBudget(session, primary)) {
+  if (await canExecutePaidProviderCall(session, primary)) {
     return primary;
   }
   const alternate = primary === "prospeo" ? "dropcontact" : "prospeo";
   const alternateAvailable =
     alternate === "prospeo" ? input.prospeoAvailable : input.dropcontactAvailable;
-  if (!input.requestedProvider && alternateAvailable && (await checkInternalUsageBudget(session, alternate))) {
+  if (!input.requestedProvider && alternateAvailable && (await canExecutePaidProviderCall(session, alternate))) {
     return alternate;
   }
   return null;
@@ -938,7 +938,7 @@ export async function continueResearchConversation(
       try {
         if (isAutopilotMode) {
           const prospeoAllowed =
-            updatedProspeo.available && (await checkInternalUsageBudget(session, "prospeo"));
+            updatedProspeo.available && (await canExecutePaidProviderCall(session, "prospeo"));
           const providerOrder: Array<"openstreetmap" | "prospeo"> =
             targetProvider === "prospeo" && prospeoAllowed
               ? ["prospeo", "openstreetmap"]
@@ -1372,7 +1372,7 @@ export async function continueResearchConversation(
         try {
           if (isAutopilotMode) {
             const prospeoAllowed =
-              updatedProspeo.available && (await checkInternalUsageBudget(session, "prospeo"));
+              updatedProspeo.available && (await canExecutePaidProviderCall(session, "prospeo"));
             const runWebsiteFirst = targetProvider === "website_team" || !prospeoAllowed;
             let executedPeopleProvider: "website_team" | "prospeo" = runWebsiteFirst
               ? "website_team"

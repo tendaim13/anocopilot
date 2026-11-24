@@ -51,6 +51,7 @@ const requiredMigrations = [
   "20261124_000025_product_sources_and_intake",
   "20261124_000026_autopilot_runs",
   "20261124_000027_workspace_invite_links",
+  "20261124_000028_autopilot_explicit_authority",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
@@ -203,8 +204,13 @@ try {
   `, [["is_ano_workspace_admin", "ensure_personal_ano_workspace", "preview_workspace_invite", "accept_workspace_invite"]]);
   const phase11WorkspaceInvitesReady =
     present.has("workspace_invites") && Number(inviteRpcResult.rows[0]?.rpc_count ?? 0) === 4;
+  const phase13bAuthorityColumns = await client.query(
+    "select column_name from information_schema.columns where table_schema = 'public' and table_name = 'autopilot_runs' and column_name = any($1::text[])",
+    [["authority_scope_json", "authorized_at", "authorized_by"]],
+  );
+  const phase13bAuthorityReady = phase13bAuthorityColumns.rows.length === 3;
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady && phase13bAuthorityReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -224,8 +230,9 @@ try {
     phase10bProductIntakeReady,
     phase10cAutopilotReady,
     phase11WorkspaceInvitesReady,
+    phase13bAuthorityReady,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady || !phase13bAuthorityReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

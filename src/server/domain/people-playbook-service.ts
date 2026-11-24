@@ -29,7 +29,7 @@ import {
   saveRoleProposalAndPersonSearchPreview,
 } from "@/server/persistence/people-playbook-store";
 import { prospeoConfiguration } from "@/server/persistence/target-account-discovery-store";
-import { checkInternalUsageBudget } from "@/server/telemetry/internal-api-usage";
+import { canExecutePaidProviderCall } from "@/server/telemetry/internal-api-usage";
 
 export class PeoplePlaybookServiceError extends Error {
   constructor(message: string, readonly code: string = "PEOPLE_DISCOVERY_UNAVAILABLE") {
@@ -169,7 +169,7 @@ export async function approvePersonSearchForConversation(
     );
   }
   if (targetProvider === "prospeo") {
-    const budgetOk = await checkInternalUsageBudget(session, "prospeo");
+    const budgetOk = await canExecutePaidProviderCall(session, "prospeo");
     if (!budgetOk) {
       throw new PeoplePlaybookServiceError(
         "Decision-maker lookup is temporarily paused because workspace usage safeguards could not be verified.",
@@ -315,7 +315,7 @@ export async function approveContactVerificationForConversation(
       "DROPCONTACT_NOT_CONFIGURED",
     );
   }
-  const budgetOk = await checkInternalUsageBudget(session, providerKey);
+  const budgetOk = await canExecutePaidProviderCall(session, providerKey);
   if (!budgetOk) {
     throw new PeoplePlaybookServiceError(
       "Work email verification is temporarily paused because workspace usage safeguards could not be verified.",

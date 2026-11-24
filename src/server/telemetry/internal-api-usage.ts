@@ -185,14 +185,17 @@ export async function runWithInternalUsageContext<T>(
   });
 }
 
-export function recordInternalApiUsage(
+function buildInternalUsageRecord(
   entry: InternalApiUsageEntry,
   explicitCtx?: {
     session?: WorkspaceSession;
     conversationId?: string | null;
     autopilotRunId?: string | null;
   },
-): void {
+): {
+  record: InternalApiUsageRecord;
+  session: WorkspaceSession | undefined;
+} {
   const store = usageStorage.getStore();
   const session = explicitCtx?.session ?? store?.session;
   const conversationId = optionalUuid(explicitCtx?.conversationId ?? store?.conversationId);
@@ -236,37 +239,83 @@ export function recordInternalApiUsage(
     }
   }
 
+  return { record, session };
+}
+
+function buildRecordUsageRpcPayload(record: InternalApiUsageRecord, workspaceId: string) {
+  return {
+    p_workspace_id: workspaceId,
+    p_provider: record.provider,
+    p_operation: record.operation,
+    p_status: record.status,
+    p_conversation_id: record.conversationId,
+    p_autopilot_run_id: record.autopilotRunId,
+    p_model_or_endpoint: record.modelOrEndpoint,
+    p_http_status: record.httpStatus,
+    p_request_count: record.requestCount,
+    p_credits_used: record.creditsUsed,
+    p_credits_remaining: record.creditsRemaining,
+    p_input_tokens: record.inputTokens,
+    p_output_tokens: record.outputTokens,
+    p_estimated_cost_usd: record.estimatedCostUsd,
+    p_duration_ms: record.durationMs,
+    p_metadata_json: record.metadata,
+  };
+}
+
+export function recordInternalApiUsage(
+  entry: InternalApiUsageEntry,
+  explicitCtx?: {
+    session?: WorkspaceSession;
+    conversationId?: string | null;
+    autopilotRunId?: string | null;
+  },
+): void {
+  const store = usageStorage.getStore();
+  const { record, session } = buildInternalUsageRecord(entry, explicitCtx);
+
   if (!session || session.kind !== "supabase" || !UUID_REGEX.test(session.workspace.id)) {
     return;
   }
 
   const persistTask = (async () => {
     try {
-      await session.client.rpc("record_internal_api_usage", {
-        p_workspace_id: session.workspace.id,
-        p_provider: record.provider,
-        p_operation: record.operation,
-        p_status: record.status,
-        p_conversation_id: record.conversationId,
-        p_autopilot_run_id: record.autopilotRunId,
-        p_model_or_endpoint: record.modelOrEndpoint,
-        p_http_status: record.httpStatus,
-        p_request_count: record.requestCount,
-        p_credits_used: record.creditsUsed,
-        p_credits_remaining: record.creditsRemaining,
-        p_input_tokens: record.inputTokens,
-        p_output_tokens: record.outputTokens,
-        p_estimated_cost_usd: record.estimatedCostUsd,
-        p_duration_ms: record.durationMs,
-        p_metadata_json: record.metadata,
-      });
+      await session.client.rpc(
+        "record_internal_api_usage",
+        buildRecordUsageRpcPayload(record, session.workspace.id),
+      );
     } catch {
-      // Usage telemetry never fails or blocks product workflows.
+      // Usage telemetry never fails or blocks non-paid product workflows.
     }
   })();
 
   if (store) {
     store.pending.push(persistTask);
+  }
+}
+
+export async function recordInternalApiUsageStrict(
+  entry: InternalApiUsageEntry,
+  explicitCtx?: {
+    session?: WorkspaceSession;
+    conversationId?: string | null;
+    autopilotRunId?: string | null;
+  },
+): Promise<boolean> {
+  const { record, session } = buildInternalUsageRecord(entry, explicitCtx);
+
+  if (!session || session.kind !== "supabase" || !UUID_REGEX.test(session.workspace.id)) {
+    return false;
+  }
+
+  try {
+    const { error } = await session.client.rpc(
+      "record_internal_api_usage",
+      buildRecordUsageRpcPayload(record, session.workspace.id),
+    );
+    return !error;
+  } catch {
+    return false;
   }
 }
 
@@ -329,6 +378,94 @@ export function validateProductionPaidProviderBudgetConfig(
     }
   }
   return { ok: missing.length === 0, missing };
+}
+
+export function isPaidProviderConfigured(
+  provider: "prospeo" | "dropcontact",
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (provider === "prospeo") {
+    return Boolean(env.PROSPEO_KEY?.trim());
+  }
+  return Boolean(env.DROPCONTACT_API_KEY?.trim());
+}
+
+/**
+ * Full fail-closed authority & telemetry preflight for paid provider calls.
+ * Blocks execution if provider credentials, daily budget limits, the usage
+ * budget ledger check, OR strict usage logging is unavailable.
+ */
+export async function canExecutePaidProviderCall(
+  session: WorkspaceSession,
+  provider: "prospeo" | "dropcontact",
+  options?: {
+    dailyLimit?: number;
+    metric?: "credits" | "requests";
+    providerConfigured?: boolean;
+  },
+): Promise<boolean> {
+  const configured = options?.providerConfigured ?? isPaidProviderConfigured(provider);
+  if (!configured) {
+    return false;
+  }
+
+  const defaults = defaultBudgetConfig(provider);
+  const dailyLimit =
+    typeof options?.dailyLimit === "number" && Number.isFinite(options.dailyLimit)
+      ? options.dailyLimit
+      : defaults.limit;
+  const metric = options?.metric ?? defaults.metric;
+
+  if (!dailyLimit || dailyLimit <= 0) {
+    return false;
+  }
+
+  if (session.kind !== "supabase" || !UUID_REGEX.test(session.workspace.id)) {
+    return false;
+  }
+
+  let budgetAllowed = false;
+  try {
+    const { data, error } = await session.client.rpc("check_internal_usage_budget", {
+      p_workspace_id: session.workspace.id,
+      p_provider: provider,
+      p_daily_limit: dailyLimit,
+      p_metric: metric,
+    });
+    if (error || typeof data !== "boolean") {
+      return false;
+    }
+    budgetAllowed = data;
+  } catch {
+    return false;
+  }
+
+  if (!budgetAllowed) {
+    await recordInternalApiUsageStrict(
+      {
+        provider,
+        operation: "budget_guard",
+        status: "skipped_budget",
+        requestCount: 0,
+        creditsUsed: 0,
+        metadata: { metric, reason: "daily_limit_exceeded" },
+      },
+      { session },
+    );
+    return false;
+  }
+
+  return await recordInternalApiUsageStrict(
+    {
+      provider,
+      operation: "authority_preflight",
+      status: "success",
+      requestCount: 0,
+      creditsUsed: 0,
+      metadata: { metric },
+    },
+    { session },
+  );
 }
 
 /**

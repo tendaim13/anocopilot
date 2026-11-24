@@ -11,7 +11,7 @@ import {
   prepareProspeoCompanySearch,
   ProspeoDiscoveryError,
 } from "@/server/persistence/prospeo-company-discovery-store";
-import { checkInternalUsageBudget } from "@/server/telemetry/internal-api-usage";
+import { canExecutePaidProviderCall } from "@/server/telemetry/internal-api-usage";
 
 export async function createMarketBriefForWorkspace(session: WorkspaceSession, input: ProductBriefInput, idempotencyKey: string): Promise<MarketBriefResult> {
   try {
@@ -53,7 +53,7 @@ export async function prepareProspeoCompanySearchForWorkspace(session: Workspace
 }
 
 export async function approveProspeoCompanySearchForWorkspace(session: WorkspaceSession, searchId: string) {
-  const budgetOk = await checkInternalUsageBudget(session, "prospeo");
+  const budgetOk = await canExecutePaidProviderCall(session, "prospeo");
   if (!budgetOk) {
     throw new ProspeoDiscoveryError(
       "Company search is temporarily paused because workspace usage safeguards could not be verified.",

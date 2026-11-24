@@ -626,9 +626,9 @@ export function evaluateTwoQuestionIntake(input: {
   let question: string;
   let purpose: string;
   if (!hasLocation && !hasTargets) {
-    question = `Got it — I understand your offer (${shortOffer}). Before I run market research and gather decision-maker emails: 1. Where is your business located? 2. Where do you want to sell (or should I recommend the best market)?`;
+    question = `Got it — I understand your offer (${shortOffer}). Before I prepare your bounded research scope: 1. Where is your business located? 2. Where do you want to sell (or should I recommend the best market)?`;
     purpose =
-      "These two answers let Ano automatically run market research, pick the right companies, find decision-maker emails, and draft your outreach templates.";
+      "These two answers let Ano prepare a bounded Autopilot research scope (up to 50 public searches, 100 source excerpts, 25 companies, and 10 named email verifications) for you to approve and start.";
   } else if (!hasLocation) {
     const onlyOpenRecommendation =
       targetMarkets.length === 0 ||
@@ -641,7 +641,7 @@ export function evaluateTwoQuestionIntake(input: {
   } else {
     question = `Got it — based in ${businessLocation} (${shortOffer}). Where do you want to sell (specific countries/regions, or tell me to recommend the best market)?`;
     purpose =
-      "Once I know your target market (or that you want me to choose), Ano runs the full pipeline automatically.";
+      "Once I know your target market (or that you want me to choose), Ano prepares your bounded Autopilot scope for your explicit approval before running research.";
   }
 
   return {

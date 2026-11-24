@@ -52,7 +52,7 @@ Wants visibility into account quality, rep focus, research quality, and the reas
 
 ### Revenue operations or workspace administrator
 
-Wants to configure provider connections, budgets, workspace rules, roles, and approved integration actions without exposing one customer's data to another.
+Wants to enforce bounded provider limits, fail-closed usage logging, workspace rules, roles, and approved integration actions without exposing internal provider costs or one customer's data to another.
 
 ## Core jobs Ano must perform
 
@@ -72,9 +72,9 @@ Ano calculates an explainable score from deterministic factors such as ICP fit, 
 
 Ano turns ranked accounts and Mercury activity into `Today` and `This week` work: reply, call, research, follow up, nurture, or dismiss.
 
-### 5. Propose, never silently perform, consequential work
+### 5. Draft, never silently perform, consequential external actions
 
-Ano can draft an email, prepare a task, shortlist contacts, or propose a Mercury update. A human approves, edits, rejects, or dismisses any external write until a deliberately authorized autonomy policy exists.
+A user explicitly starts Autopilot under one bounded authority scope (up to 50 public searches, 100 source fetches, 25 company candidates, and 10 named contact enrichments). Ano drafts outreach only and never sends emails, places calls, or writes CRM records without a separate later explicit approval.
 
 ## First experience
 
@@ -121,18 +121,18 @@ Workspace administrator area for Mercury connection status, customer-owned provi
 
 ## Data-provider stance
 
-Ano treats providers as workspace-scoped connectors. A provider search, reveal, or enrichment request must be validated against the workspace's permissions and budget before execution. Provider data and terms must be revalidated before live commercial use.
+Ano treats providers as workspace-scoped server capabilities. Paid company and contact enrichment requests must pass fail-closed configuration, daily budget limit, and `ano_internal` usage-logging checks before execution. Internal credit costs are never disclosed to end users.
 
 Initial provider roles are:
 
-- **Mock discovery:** validate product flow with zero credit use.
-- **Prospeo:** candidate company/person discovery when the workspace has an approved connection.
-- **Dropcontact:** selective enrichment or verification after a candidate has been prioritized, rather than automatic enrichment of every result.
+- **Mock discovery:** validate product flow locally without live provider calls.
+- **Public web research:** bounded SearXNG discovery + SSRF-safe excerpt retrieval.
+- **Company & contact discovery:** B2B company matching, named buyer identification, and selective email verification within the explicitly approved Autopilot scope.
 
 ## Trust model
 
 Ano's trust model is simple:
 
-> The model can reason and propose. The application verifies, records, limits, and authorizes.
+> The model can reason and draft. The application verifies, records, limits, and enforces explicit authority.
 
-Every user-facing recommendation must retain the tool/evidence trail that produced it. Every decision to spend credits, store data, or write through a connector must be attributable to a workspace user or an explicit policy.
+Every user-facing recommendation must retain the evidence trail that produced it, and paid provider execution fails closed if configuration, daily limits, or internal usage logging are unavailable.

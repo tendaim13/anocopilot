@@ -8,7 +8,9 @@ import {
   autopilotStageSummarySchema,
   computePartialRerunState,
   nextPendingAutopilotStage,
+  resolveAutopilotAuthorityScope,
   stagesBefore,
+  type AutopilotAuthorityScope,
   type AutopilotExecutableStage,
   type AutopilotRunView,
   type AutopilotStage,
@@ -106,6 +108,13 @@ function isLeaseActive(row: Row, now = Date.now()): boolean {
   return now - ms < AUTOPILOT_STAGE_LEASE_TIMEOUT_MS;
 }
 
+function parseAuthorityScope(value: unknown): AutopilotAuthorityScope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return resolveAutopilotAuthorityScope(null);
+  }
+  return resolveAutopilotAuthorityScope(value as Partial<AutopilotAuthorityScope>);
+}
+
 function mapAutopilotRow(row: Row): AutopilotRunView {
   return autopilotRunViewSchema.parse({
     id: String(row.id),
@@ -120,6 +129,9 @@ function mapAutopilotRow(row: Row): AutopilotRunView {
         ? row.last_error.trim().slice(0, 600)
         : null,
     stageInFlight: isLeaseActive(row),
+    authorityScope: parseAuthorityScope(row.authority_scope_json),
+    authorizedAt: optionalIso(row.authorized_at),
+    authorizedBy: typeof row.authorized_by === "string" ? row.authorized_by : null,
     heartbeatAt: optionalIso(row.heartbeat_at),
     startedAt: optionalIso(row.started_at),
     completedAt: optionalIso(row.completed_at),
@@ -161,11 +173,26 @@ export async function readAutopilotRun(
 export async function startOrResumeAutopilotRun(
   session: WorkspaceSession,
   conversationId: string,
-  options?: { fromStage?: AutopilotExecutableStage },
+  options?: {
+    fromStage?: AutopilotExecutableStage;
+    explicitApproval?: boolean;
+    authorityScope?: Partial<AutopilotAuthorityScope>;
+  },
 ): Promise<AutopilotRunView> {
   requireLiveSession(session);
+  if (options?.explicitApproval !== true) {
+    throw new AutopilotPersistenceError(
+      "Explicit user approval is required before starting Autopilot.",
+      "EXPLICIT_APPROVAL_REQUIRED",
+    );
+  }
   const existing = await fetchAutopilotRow(session, conversationId);
   const now = new Date().toISOString();
+  const authorityScope = resolveAutopilotAuthorityScope(
+    options.authorityScope ?? parseAuthorityScope(existing?.authority_scope_json),
+  );
+  const authorizedAt = existing?.authorized_at ? String(existing.authorized_at) : now;
+  const authorizedBy = existing?.authorized_by ? String(existing.authorized_by) : session.actorId;
 
   let completedStages = existing ? parseCompletedStages(existing.completed_stages_json) : [];
   let stageSummaries = existing ? parseStageSummaries(existing.stage_summaries_json) : {};
@@ -207,6 +234,9 @@ export async function startOrResumeAutopilotRun(
         stage_lease_token: null,
         stage_started_at: null,
         last_error: null,
+        authority_scope_json: authorityScope,
+        authorized_at: authorizedAt,
+        authorized_by: authorizedBy,
         heartbeat_at: now,
         started_at: existing?.started_at ? String(existing.started_at) : now,
         completed_at: nextStage === "done" ? now : null,
@@ -233,6 +263,7 @@ export async function startOrResumeAutopilotRun(
       conversation_id: conversationId,
       from_stage: options?.fromStage ?? null,
       next_stage: nextStage,
+      authority_scope: authorityScope,
     },
   });
 
@@ -546,7 +577,7 @@ export async function scheduleAutopilotPartialRerun(
     return null;
   }
   const existing = await fetchAutopilotRow(session, conversationId);
-  if (!existing) {
+  if (!existing || !(existing.authorized_at || existing.started_at)) {
     return null;
   }
 
@@ -610,7 +641,7 @@ export async function recordAutopilotStageSummary(
     return null;
   }
   const existing = await fetchAutopilotRow(session, conversationId);
-  if (!existing) {
+  if (!existing || !(existing.authorized_at || existing.started_at)) {
     return null;
   }
 

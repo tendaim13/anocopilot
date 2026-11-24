@@ -1068,8 +1068,8 @@ function assistantMessage(state: ResearchGraphStateValue, graphRunId: string) {
         dedupeKey: `plan-approved:${graphRunId}:${state.plan.version}`,
         type: "decision",
         text: openRecommendation
-          ? `Understood — your business is in ${loc}, and I'll recommend the best target market based on research. Your product brief is ready.`
-          : `Understood — your business is in ${loc}, selling to ${rawMarkets.join(", ")}. Your product brief is ready.`,
+          ? `Understood — your business is in ${loc}, and I'll recommend the best target market based on research. Your product brief is ready — review and start the bounded Autopilot run below when ready.`
+          : `Understood — your business is in ${loc}, selling to ${rawMarkets.join(", ")}. Your product brief is ready — review and start the bounded Autopilot run below when ready.`,
       };
     }
     return { dedupeKey: `plan-approved:${graphRunId}:${state.plan.version}`, type: "decision", text: "Research plan approved. Research itself remains locked until Phase B." };

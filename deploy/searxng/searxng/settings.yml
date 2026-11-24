@@ -1,7 +1,7 @@
 use_default_settings:
   engines:
-    # Ano begins with an explicit engine allow-list using authenticated Brave
-    # Search API plus Bing, Mojeek, and Wikipedia. DuckDuckGo is excluded.
+    # Ano uses an explicit allow-list led by authenticated Brave Search API
+    # plus Bing, Mojeek, and Wikipedia.
     keep_only:
       - braveapi
       - bing

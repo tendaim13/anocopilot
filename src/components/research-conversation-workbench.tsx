@@ -3,7 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { AutopilotExecutableStage, AutopilotRunView } from "@/lib/ano/autopilot";
+import {
+  DEFAULT_AUTOPILOT_AUTHORITY_SCOPE,
+  type AutopilotExecutableStage,
+  type AutopilotRunView,
+} from "@/lib/ano/autopilot";
 import type {
   CompanySearchView,
   ProspeoProviderState,
@@ -79,7 +83,6 @@ export function ResearchConversationWorkbench({
   const [isWorking, setIsWorking] = useState(false);
   const [marketChoice, setMarketChoice] = useState("");
   const [industryChoice, setIndustryChoice] = useState("");
-  const autoStartedConversationRef = useRef<string | null>(null);
   const lastRetryActionRef = useRef<(() => Promise<void>) | null>(null);
 
   async function loadResearch(targetConversationId: string) {
@@ -183,7 +186,6 @@ export function ResearchConversationWorkbench({
     setMercury(null);
     setTemplatePack(null);
     setAutopilotRun(null);
-    autoStartedConversationRef.current = null;
     lastRetryActionRef.current = null;
     setPendingUserMessage(null);
     setError(null);
@@ -351,7 +353,11 @@ export function ResearchConversationWorkbench({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(fromStage ? { fromStage } : {}),
+            body: JSON.stringify({
+              explicitApproval: true,
+              authorityScope: DEFAULT_AUTOPILOT_AUTHORITY_SCOPE,
+              ...(fromStage ? { fromStage } : {}),
+            }),
           },
         );
         const payload = await response.json().catch(() => ({}));
@@ -407,33 +413,6 @@ export function ResearchConversationWorkbench({
       activeMode === "demo" ||
       activeMode === "unauthenticated",
   );
-
-  useEffect(() => {
-    const activeId = conversation?.conversation.id;
-    if (
-      !activeId ||
-      needsSignIn ||
-      autopilotRun ||
-      research ||
-      synthesis ||
-      !conversation?.brief?.intakeComplete ||
-      conversation?.plan?.approvalStatus !== "approved" ||
-      autoStartedConversationRef.current === activeId
-    ) {
-      return;
-    }
-    autoStartedConversationRef.current = activeId;
-    void startAutopilot(activeId);
-  }, [
-    conversation?.conversation.id,
-    conversation?.brief?.intakeComplete,
-    conversation?.plan?.approvalStatus,
-    autopilotRun,
-    research,
-    synthesis,
-    needsSignIn,
-    startAutopilot,
-  ]);
 
   useEffect(() => {
     const activeId = conversation?.conversation.id;
@@ -586,10 +565,6 @@ export function ResearchConversationWorkbench({
       setPendingUserMessage(null);
       setConversation(created);
       lastRetryActionRef.current = null;
-      if (created.brief?.intakeComplete && created.plan?.approvalStatus === "approved") {
-        autoStartedConversationRef.current = created.conversation.id;
-        await startAutopilot(created.conversation.id);
-      }
       if (embeddedInShell) {
         void refreshShellConversations?.();
         router.push(`/research/${created.conversation.id}`);
@@ -751,14 +726,6 @@ export function ResearchConversationWorkbench({
       setPendingUserMessage(null);
       setConversation(next);
       lastRetryActionRef.current = null;
-      if (
-        next.brief?.intakeComplete &&
-        next.plan?.approvalStatus === "approved" &&
-        !autopilotRun
-      ) {
-        autoStartedConversationRef.current = next.conversation.id;
-        await startAutopilot(next.conversation.id);
-      }
       if (embeddedInShell) void refreshShellConversations?.();
     } catch (requestError) {
       setPendingUserMessage(null);
@@ -1290,7 +1257,6 @@ export function ResearchConversationWorkbench({
     setMercury(null);
     setTemplatePack(null);
     setAutopilotRun(null);
-    autoStartedConversationRef.current = null;
     lastRetryActionRef.current = null;
     setPendingUserMessage(null);
     setDraft("");
@@ -1324,6 +1290,9 @@ export function ResearchConversationWorkbench({
           error={error}
           needsSignIn={needsSignIn}
           isWorking={isWorking}
+          onStartAutopilot={() =>
+            conversation && void startAutopilot(conversation.conversation.id)
+          }
           onPauseAutopilot={() => void pauseAutopilot()}
           onResumeAutopilot={() => void resumeAutopilot()}
           onRetry={() => void handleRetry()}

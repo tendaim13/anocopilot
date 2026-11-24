@@ -37,7 +37,10 @@ import {
 import { useMaterialWeb } from "@/components/material/register";
 import { MaterialButton } from "@/components/material/material-button";
 import { AccountCohortCard } from "@/components/artifacts/account-cohort-card";
-import { AutopilotProgressCard } from "@/components/artifacts/autopilot-progress-card";
+import {
+  AutopilotAuthorityCard,
+  AutopilotProgressCard,
+} from "@/components/artifacts/autopilot-progress-card";
 import { CompanyCohortArtifactDrawer } from "@/components/artifacts/company-cohort-artifact-drawer";
 import { CompanySearchPreviewCard } from "@/components/artifacts/company-search-preview-card";
 import { ContactVerificationCard } from "@/components/artifacts/contact-verification-card";
@@ -167,6 +170,7 @@ export interface ConversationThreadProps {
   ) => void;
   onOpenContextRail: () => void;
   onStartNewResearch: () => void;
+  onStartAutopilot?: () => void;
   onPauseAutopilot?: () => void;
   onResumeAutopilot?: () => void;
   onRetry?: () => void;
@@ -228,6 +232,7 @@ export function ConversationThread({
   onDecideExecutionProposal,
   onOpenContextRail,
   onStartNewResearch,
+  onStartAutopilot,
   onPauseAutopilot,
   onResumeAutopilot,
   onRetry,
@@ -310,7 +315,10 @@ export function ConversationThread({
     [synthesis?.industries, synthesis?.decision?.industryProfileId],
   );
 
-  const isAutopilotMode = Boolean(autopilotRun);
+  const readyToStartAutopilot = Boolean(
+    conversation?.brief?.intakeComplete && !autopilotRun && !research && !synthesis,
+  );
+  const isAutopilotMode = Boolean(autopilotRun || readyToStartAutopilot);
 
   const timelineEntries = useMemo(() => {
     const entries: TimelineRenderEntry[] = [];
@@ -331,6 +339,24 @@ export function ConversationThread({
               isWorking={isWorking}
               onPause={onPauseAutopilot}
               onResume={onResumeAutopilot}
+            />
+          </ArtifactMessage>
+        ),
+      });
+    } else if (readyToStartAutopilot && conversation) {
+      entries.push({
+        id: `artifact:autopilot-authority:${conversation.conversation.id}`,
+        timestamp: conversation.plan?.createdAt ?? conversation.conversation.updatedAt,
+        orderHint: 95,
+        render: () => (
+          <ArtifactMessage
+            key={`autopilot-authority-${conversation.conversation.id}`}
+            label="Autopilot authority"
+            timestamp={conversation.plan?.createdAt ?? conversation.conversation.updatedAt}
+          >
+            <AutopilotAuthorityCard
+              isWorking={isWorking}
+              onStartAutopilot={onStartAutopilot}
             />
           </ArtifactMessage>
         ),
@@ -947,7 +973,9 @@ export function ConversationThread({
     effectiveSelectedContactIds,
     handleToggleContact,
     isAutopilotMode,
+    readyToStartAutopilot,
     autopilotRun,
+    onStartAutopilot,
     onPauseAutopilot,
     onResumeAutopilot,
   ]);
@@ -976,7 +1004,8 @@ export function ConversationThread({
           <p className="m3-welcome-copy">
             Paste a website URL, upload a PDF, Word doc (.docx), or text file, or describe what you
             sell below. Ano confirms where your business is located and where you want to sell, then
-            runs market research, company matching, email discovery, and template drafting.
+            presents one bounded Autopilot scope for your explicit approval before running research,
+            company matching, contact verification, and outreach drafting.
           </p>
 
           <div className="m3-starter-chips">

@@ -115,6 +115,10 @@ const migrations = [
     id: "20261124_000027_workspace_invite_links",
     file: path.join(projectRoot, "supabase/migrations/20261124_000027_workspace_invite_links.sql"),
   },
+  {
+    id: "20261124_000028_autopilot_explicit_authority",
+    file: path.join(projectRoot, "supabase/migrations/20261124_000028_autopilot_explicit_authority.sql"),
+  },
 ];
 
 function requireAnoDatabaseUrl() {

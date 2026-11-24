@@ -5,8 +5,10 @@ import {
   buildAutopilotExecutiveSummaryMarkdown,
   isOpenMarketRecommendationIntent,
   rankAccountsForAutopilotShortlist,
+  resolveAutopilotAuthorityScope,
   selectAutopilotTargetRoute,
   selectPriorityContactsForWaterfall,
+  type AutopilotAuthorityScope,
   type AutopilotExecutableStage,
   type AutopilotRunView,
   type AutopilotStageSummary,
@@ -83,6 +85,7 @@ import {
 import { prospeoConfiguration } from "@/server/persistence/target-account-discovery-store";
 import { searxngConfiguration } from "@/server/research/searxng-provider";
 import {
+  canExecutePaidProviderCall,
   checkInternalUsageBudget,
   runWithInternalUsageContext,
   type InternalApiProvider,
@@ -112,7 +115,11 @@ export interface AutopilotOrchestratorDeps {
   startOrResumeAutopilotRun: (
     session: WorkspaceSession,
     conversationId: string,
-    options?: { fromStage?: AutopilotExecutableStage },
+    options?: {
+      fromStage?: AutopilotExecutableStage;
+      explicitApproval?: boolean;
+      authorityScope?: Partial<AutopilotAuthorityScope>;
+    },
   ) => Promise<AutopilotRunView>;
   claimAutopilotStageLease: typeof claimAutopilotStageLease;
   completeAutopilotStageLease: typeof completeAutopilotStageLease;
@@ -315,7 +322,10 @@ export function createDefaultAutopilotDeps(): AutopilotOrchestratorDeps {
     completeAutopilotStageLease,
     failAutopilotStageLease,
     cancelAutopilotRun,
-    checkBudget: (session, provider) => checkInternalUsageBudget(session, provider),
+    checkBudget: (session, provider) =>
+      provider === "prospeo" || provider === "dropcontact"
+        ? canExecutePaidProviderCall(session, provider)
+        : checkInternalUsageBudget(session, provider),
     runWithUsageContext: runWithInternalUsageContext,
     getConversation: getResearchConversation,
     readProductSources: async (session, conversationId) => {
@@ -452,6 +462,7 @@ async function runStageMarketResearch(
   session: WorkspaceSession,
   conversationId: string,
   deps: AutopilotOrchestratorDeps,
+  authorityScope: AutopilotAuthorityScope,
 ): Promise<AutopilotStageSummary> {
   const existing = await deps.getEvidenceResearch(session, conversationId).catch(() => null);
   if (existing && existing.run.status === "sources_ready" && existing.run.sourceCount > 0) {
@@ -480,8 +491,8 @@ async function runStageMarketResearch(
   if (searxngAllowed) {
     try {
       const prepared = await deps.prepareEvidenceResearch(session, conversationId, {
-        maximumSearches: 15,
-        maximumFetches: 20,
+        maximumSearches: authorityScope.maxPublicSearches,
+        maximumFetches: authorityScope.maxSourceFetches,
       });
       if (prepared) {
         if (
@@ -655,6 +666,7 @@ async function runStageCompanyDiscovery(
   session: WorkspaceSession,
   conversationId: string,
   deps: AutopilotOrchestratorDeps,
+  authorityScope: AutopilotAuthorityScope,
 ): Promise<AutopilotStageSummary> {
   const existing = await deps.getCompanySearch(session, conversationId).catch(() => null);
   const warnings: string[] = [];
@@ -724,7 +736,10 @@ async function runStageCompanyDiscovery(
     }
   }
 
-  const allAccounts = companySearch?.accounts ?? [];
+  const allAccounts = (companySearch?.accounts ?? []).slice(
+    0,
+    authorityScope.maxCompanyCandidates,
+  );
   const topAccounts = rankAccountsForAutopilotShortlist(allAccounts, 10);
 
   for (const account of topAccounts) {
@@ -737,7 +752,10 @@ async function runStageCompanyDiscovery(
     }
   }
 
-  const finalAccounts = companySearch?.accounts ?? allAccounts;
+  const finalAccounts = (companySearch?.accounts ?? allAccounts).slice(
+    0,
+    authorityScope.maxCompanyCandidates,
+  );
   const shortlistedCount = finalAccounts.filter(
     (account) => account.lifecycleState === "shortlisted",
   ).length;
@@ -781,6 +799,7 @@ async function runStagePeopleAndEmails(
   session: WorkspaceSession,
   conversationId: string,
   deps: AutopilotOrchestratorDeps,
+  authorityScope: AutopilotAuthorityScope,
 ): Promise<AutopilotStageSummary> {
   const companySearch = await deps.getCompanySearch(session, conversationId).catch(() => null);
   const shortlistedCount =
@@ -828,6 +847,7 @@ async function runStagePeopleAndEmails(
   ).length;
 
   // Tier 2: Prospeo directory search + selective enrichment under silent budget.
+  let enrichmentsAttempted = 0;
   const prospeoAvailable = deps.isProspeoAvailable();
   const prospeoBudgetForSearch = prospeoAvailable && (await deps.checkBudget(session, "prospeo"));
 
@@ -852,9 +872,13 @@ async function runStagePeopleAndEmails(
       contacts = peopleView?.contacts ?? [];
     }
 
-    const prospeoVerifyTargets = selectPriorityContactsForWaterfall(contacts, 10);
+    const prospeoVerifyTargets = selectPriorityContactsForWaterfall(
+      contacts,
+      authorityScope.maxNamedContactEnrichments,
+    );
     if (prospeoVerifyTargets.length > 0 && (await deps.checkBudget(session, "prospeo"))) {
       tiersAttempted.push("prospeo_verify");
+      enrichmentsAttempted += prospeoVerifyTargets.length;
       try {
         const verifyPreview = await deps.prepareContactVerification(
           session,
@@ -880,7 +904,12 @@ async function runStagePeopleAndEmails(
   }
 
   // Tier 3: Dropcontact async verification fallback on remaining unverified named decision-makers.
-  const dropcontactTargets = selectPriorityContactsForWaterfall(contacts, 10);
+  const remainingEnrichments = Math.max(
+    0,
+    authorityScope.maxNamedContactEnrichments - enrichmentsAttempted,
+  );
+  const dropcontactTargets =
+    remainingEnrichments > 0 ? selectPriorityContactsForWaterfall(contacts, remainingEnrichments) : [];
   if (
     dropcontactTargets.length > 0 &&
     deps.isDropcontactAvailable() &&
@@ -1075,6 +1104,7 @@ export async function executeAutopilotStepWithDeps(
   const stage = claim.stage;
   const run = claim.run;
   const leaseToken = claim.leaseToken;
+  const authorityScope = resolveAutopilotAuthorityScope(run.authorityScope);
 
   try {
     const summary = await deps.runWithUsageContext(
@@ -1084,13 +1114,13 @@ export async function executeAutopilotStepWithDeps(
           case "brief_and_plan":
             return runStageBriefAndPlan(session, conversationId, deps);
           case "market_research":
-            return runStageMarketResearch(session, conversationId, deps);
+            return runStageMarketResearch(session, conversationId, deps, authorityScope);
           case "synthesis_and_lock":
             return runStageSynthesisAndLock(session, conversationId, deps);
           case "company_discovery":
-            return runStageCompanyDiscovery(session, conversationId, deps);
+            return runStageCompanyDiscovery(session, conversationId, deps, authorityScope);
           case "people_and_emails":
-            return runStagePeopleAndEmails(session, conversationId, deps);
+            return runStagePeopleAndEmails(session, conversationId, deps, authorityScope);
           case "outreach_templates":
             return runStageOutreachTemplates(session, conversationId, run, deps);
         }
@@ -1145,8 +1175,18 @@ export async function getAutopilotRunForConversation(
 export async function startAutopilotForConversation(
   session: WorkspaceSession,
   conversationId: string,
-  options?: { fromStage?: AutopilotExecutableStage },
+  options?: {
+    fromStage?: AutopilotExecutableStage;
+    explicitApproval?: boolean;
+    authorityScope?: Partial<AutopilotAuthorityScope>;
+  },
 ): Promise<AutopilotRunView> {
+  if (options?.explicitApproval !== true) {
+    throw new AutopilotOrchestratorError(
+      "Explicit user approval is required before starting Autopilot.",
+      "EXPLICIT_APPROVAL_REQUIRED",
+    );
+  }
   const conversation = await getResearchConversation(session, conversationId);
   if (!conversation.brief || conversation.run.status === "awaiting_context") {
     throw new AutopilotOrchestratorError(
@@ -1154,7 +1194,12 @@ export async function startAutopilotForConversation(
       "INTAKE_INCOMPLETE",
     );
   }
-  return startOrResumeAutopilotRun(session, conversationId, options);
+  const authorityScope = resolveAutopilotAuthorityScope(options.authorityScope);
+  return startOrResumeAutopilotRun(session, conversationId, {
+    fromStage: options.fromStage,
+    explicitApproval: true,
+    authorityScope,
+  });
 }
 
 export async function stepAutopilotForConversation(

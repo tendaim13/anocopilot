@@ -44,11 +44,14 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ conversationId: string }> },
 ) {
-  const rawBody = await request.json().catch(() => ({}));
+  const rawBody = await request.json().catch(() => null);
   const parsed = autopilotStartRequestSchema.safeParse(rawBody ?? {});
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Provide a valid autopilot start payload." },
+      {
+        error: "Explicit approval is required before starting Autopilot.",
+        code: "EXPLICIT_APPROVAL_REQUIRED",
+      },
       { status: 400 },
     );
   }
@@ -58,6 +61,8 @@ export async function POST(
     const { conversationId } = await context.params;
     const autopilotRun = await startAutopilotForConversation(session, conversationId, {
       fromStage: parsed.data.fromStage,
+      explicitApproval: parsed.data.explicitApproval,
+      authorityScope: parsed.data.authorityScope,
     });
     return NextResponse.json({ autopilotRun });
   } catch (error) {

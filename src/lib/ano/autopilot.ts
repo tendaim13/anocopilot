@@ -50,6 +50,42 @@ export const autopilotStageSummarySchema = z.object({
 });
 export type AutopilotStageSummary = z.infer<typeof autopilotStageSummarySchema>;
 
+export const DEFAULT_AUTOPILOT_AUTHORITY_SCOPE = {
+  maxPublicSearches: 50,
+  maxSourceFetches: 100,
+  maxCompanyCandidates: 25,
+  maxNamedContactEnrichments: 10,
+  allowOutboundEmailSend: false,
+  allowPhoneCalls: false,
+  allowCrmWrites: false,
+} as const;
+
+export const autopilotAuthorityScopeSchema = z.object({
+  maxPublicSearches: z.number().int().min(1).max(50).default(DEFAULT_AUTOPILOT_AUTHORITY_SCOPE.maxPublicSearches),
+  maxSourceFetches: z.number().int().min(1).max(100).default(DEFAULT_AUTOPILOT_AUTHORITY_SCOPE.maxSourceFetches),
+  maxCompanyCandidates: z.number().int().min(1).max(25).default(DEFAULT_AUTOPILOT_AUTHORITY_SCOPE.maxCompanyCandidates),
+  maxNamedContactEnrichments: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .default(DEFAULT_AUTOPILOT_AUTHORITY_SCOPE.maxNamedContactEnrichments),
+  allowOutboundEmailSend: z.literal(false).default(false),
+  allowPhoneCalls: z.literal(false).default(false),
+  allowCrmWrites: z.literal(false).default(false),
+});
+export type AutopilotAuthorityScope = z.infer<typeof autopilotAuthorityScopeSchema>;
+
+export function resolveAutopilotAuthorityScope(
+  raw?: Partial<AutopilotAuthorityScope> | null,
+): AutopilotAuthorityScope {
+  const parsed = autopilotAuthorityScopeSchema.safeParse(raw ?? {});
+  if (parsed.success) {
+    return parsed.data;
+  }
+  return { ...DEFAULT_AUTOPILOT_AUTHORITY_SCOPE };
+}
+
 export const autopilotRunViewSchema = z.object({
   id: z.string().uuid(),
   conversationId: z.string().uuid(),
@@ -57,11 +93,14 @@ export const autopilotRunViewSchema = z.object({
   currentStage: autopilotStageSchema,
   completedStages: z.array(autopilotExecutableStageSchema),
   stageSummaries: z
-    .record(autopilotExecutableStageSchema, autopilotStageSummarySchema)
+    .partialRecord(autopilotExecutableStageSchema, autopilotStageSummarySchema)
     .default({}),
   warnings: z.array(z.string().trim().min(1).max(400)).max(20).default([]),
   lastError: z.string().trim().max(600).nullable(),
   stageInFlight: z.boolean().default(false),
+  authorityScope: autopilotAuthorityScopeSchema.optional(),
+  authorizedAt: z.string().datetime().nullable().optional(),
+  authorizedBy: z.string().uuid().nullable().optional(),
   heartbeatAt: z.string().datetime().nullable(),
   startedAt: z.string().datetime().nullable(),
   completedAt: z.string().datetime().nullable(),
@@ -72,6 +111,8 @@ export type AutopilotRunView = z.infer<typeof autopilotRunViewSchema>;
 
 export const autopilotStartRequestSchema = z.object({
   fromStage: autopilotExecutableStageSchema.optional(),
+  explicitApproval: z.literal(true),
+  authorityScope: autopilotAuthorityScopeSchema.optional(),
 });
 export type AutopilotStartRequest = z.infer<typeof autopilotStartRequestSchema>;
 
