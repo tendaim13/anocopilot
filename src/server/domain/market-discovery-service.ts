@@ -5,7 +5,13 @@ import { runMarketHypothesis } from "@/server/agents/market-hypothesis-runtime";
 import { createCheckpoint } from "@/server/agents/resume";
 import { AgentRuntimeError } from "@/server/agents/runtime";
 import { persistMarketBrief, readLatestMarketBrief, readMarketBrief, saveManualMarketScope, saveMarketDecision, updateMarketHypotheses } from "@/server/persistence/market-discovery-store";
-import { approveProspeoCompanySearch, checkProspeoConnection, prepareProspeoCompanySearch } from "@/server/persistence/prospeo-company-discovery-store";
+import {
+  approveProspeoCompanySearch,
+  checkProspeoConnection,
+  prepareProspeoCompanySearch,
+  ProspeoDiscoveryError,
+} from "@/server/persistence/prospeo-company-discovery-store";
+import { checkInternalUsageBudget } from "@/server/telemetry/internal-api-usage";
 
 export async function createMarketBriefForWorkspace(session: WorkspaceSession, input: ProductBriefInput, idempotencyKey: string): Promise<MarketBriefResult> {
   try {
@@ -47,5 +53,12 @@ export async function prepareProspeoCompanySearchForWorkspace(session: Workspace
 }
 
 export async function approveProspeoCompanySearchForWorkspace(session: WorkspaceSession, searchId: string) {
+  const budgetOk = await checkInternalUsageBudget(session, "prospeo");
+  if (!budgetOk) {
+    throw new ProspeoDiscoveryError(
+      "Company search is temporarily paused because workspace usage safeguards could not be verified.",
+      "BUDGET_GUARD_BLOCKED",
+    );
+  }
   return approveProspeoCompanySearch(session, searchId);
 }

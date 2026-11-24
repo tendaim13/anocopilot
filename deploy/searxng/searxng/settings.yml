@@ -1,12 +1,20 @@
 use_default_settings:
   engines:
-    # Ano begins with a small, explicit allow-list. We can change this only
-    # after a documented reliability/terms review and a separate deployment.
+    # Ano begins with an explicit engine allow-list using authenticated Brave
+    # Search API plus Bing, Mojeek, and Wikipedia. DuckDuckGo is excluded.
     keep_only:
+      - braveapi
       - bing
-      - duckduckgo
       - mojeek
       - wikipedia
+
+engines:
+  - name: braveapi
+    engine: braveapi
+    shortcut: br
+    api_key: "__BRAVE_API_KEY__"
+    results_per_page: 20
+    disabled: false
 
 general:
   debug: false
@@ -23,7 +31,7 @@ server:
   # The public SearXNG API limiter blocks JSON clients after four requests per
   # hour and classifies normal machine-to-machine headers as bots. This is a
   # private service: Caddy requires Ano's gateway token and Ano independently
-  # enforces explicit approval, a 12-search ceiling, and no automatic replay.
+  # enforces explicit approval, bounded search ceilings, and no automatic replay.
   limiter: false
   public_instance: false
   image_proxy: false

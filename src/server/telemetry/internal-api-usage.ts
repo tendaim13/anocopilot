@@ -301,9 +301,40 @@ function defaultBudgetConfig(provider: InternalApiProvider): {
   return { limit: undefined, metric: "requests" };
 }
 
+export const PAID_INTERNAL_PROVIDERS = new Set<InternalApiProvider>([
+  "prospeo",
+  "dropcontact",
+]);
+
+export function isPaidInternalProvider(provider: InternalApiProvider): boolean {
+  return PAID_INTERNAL_PROVIDERS.has(provider);
+}
+
+export function validateProductionPaidProviderBudgetConfig(
+  env: Record<string, string | undefined> = process.env,
+): { ok: boolean; missing: string[] } {
+  if (env.NODE_ENV !== "production") {
+    return { ok: true, missing: [] };
+  }
+  const required = [
+    "ANO_INTERNAL_DAILY_PROSPEO_LIMIT",
+    "ANO_INTERNAL_DAILY_DROPCONTACT_LIMIT",
+  ];
+  const missing: string[] = [];
+  for (const name of required) {
+    const raw = env[name]?.trim();
+    const parsed = raw ? Number(raw) : NaN;
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      missing.push(name);
+    }
+  }
+  return { ok: missing.length === 0, missing };
+}
+
 /**
  * Checks whether a provider call remains inside the silent daily server budget.
- * Never returns usage numbers or dollar costs; logs `skipped_budget` internally if capped.
+ * Paid providers (Prospeo, Dropcontact) MUST fail closed if production daily
+ * limits are unconfigured or the internal usage ledger RPC is unavailable.
  */
 export async function checkInternalUsageBudget(
   session: WorkspaceSession,
@@ -311,8 +342,11 @@ export async function checkInternalUsageBudget(
   options?: {
     dailyLimit?: number;
     metric?: "credits" | "requests";
+    isProduction?: boolean;
   },
 ): Promise<boolean> {
+  const paid = isPaidInternalProvider(provider);
+  const isProd = options?.isProduction ?? process.env.NODE_ENV === "production";
   const defaults = defaultBudgetConfig(provider);
   const dailyLimit =
     typeof options?.dailyLimit === "number" && Number.isFinite(options.dailyLimit)
@@ -320,22 +354,58 @@ export async function checkInternalUsageBudget(
       : defaults.limit;
   const metric = options?.metric ?? defaults.metric;
 
-  if (!dailyLimit || dailyLimit <= 0) {
+  if (paid && isProd && (!dailyLimit || dailyLimit <= 0)) {
+    recordInternalApiUsage(
+      {
+        provider,
+        operation: "budget_guard",
+        status: "skipped_budget",
+        requestCount: 0,
+        creditsUsed: 0,
+        metadata: { metric, reason: "missing_production_limit" },
+      },
+      { session },
+    );
+    return false;
+  }
+
+  if (!paid && (!dailyLimit || dailyLimit <= 0)) {
     return true;
   }
+
   if (session.kind !== "supabase" || !UUID_REGEX.test(session.workspace.id)) {
+    if (paid && isProd) {
+      return false;
+    }
     return true;
   }
+
+  const effectiveLimit =
+    dailyLimit && dailyLimit > 0 ? dailyLimit : 1_000_000;
 
   try {
     const { data, error } = await session.client.rpc("check_internal_usage_budget", {
       p_workspace_id: session.workspace.id,
       p_provider: provider,
-      p_daily_limit: dailyLimit,
+      p_daily_limit: effectiveLimit,
       p_metric: metric,
     });
 
     if (error || typeof data !== "boolean") {
+      if (paid) {
+        recordInternalApiUsage(
+          {
+            provider,
+            operation: "budget_guard",
+            status: "skipped_budget",
+            requestCount: 0,
+            creditsUsed: 0,
+            metadata: { metric, reason: "usage_ledger_unavailable" },
+          },
+          { session },
+        );
+        return false;
+      }
       return true;
     }
 
@@ -347,7 +417,7 @@ export async function checkInternalUsageBudget(
           status: "skipped_budget",
           requestCount: 0,
           creditsUsed: 0,
-          metadata: { metric },
+          metadata: { metric, reason: "daily_limit_exceeded" },
         },
         { session },
       );
@@ -356,6 +426,20 @@ export async function checkInternalUsageBudget(
 
     return true;
   } catch {
+    if (paid) {
+      recordInternalApiUsage(
+        {
+          provider,
+          operation: "budget_guard",
+          status: "skipped_budget",
+          requestCount: 0,
+          creditsUsed: 0,
+          metadata: { metric, reason: "usage_ledger_unavailable" },
+        },
+        { session },
+      );
+      return false;
+    }
     return true;
   }
 }

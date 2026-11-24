@@ -177,10 +177,10 @@ export const interpretationOutputSchema = z.object({
 /** Application-level validation adds the outcome/clarification dependency. */
 export const interpretationSchema = interpretationOutputSchema.superRefine((value, context) => {
   if (value.outcome === "needs_context" && !value.clarification) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "A clarification is required when the brief is not ready." });
+    context.addIssue({ code: "custom", message: "A clarification is required when the brief is not ready." });
   }
   if (value.outcome === "ready" && value.clarification) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Do not ask a clarification when the brief is ready." });
+    context.addIssue({ code: "custom", message: "Do not ask a clarification when the brief is ready." });
   }
 });
 

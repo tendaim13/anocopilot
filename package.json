@@ -28,6 +28,8 @@
     "test:tavily-contract": "node --conditions=react-server --import tsx --test tests/tavily-extract-contract.test.ts",
     "test:searxng-contract": "node --conditions=react-server --import tsx --test tests/searxng-provider.test.ts tests/evidence-source-retriever.test.ts",
     "smoke:research-phase-a": "node --env-file=.env.local --conditions=react-server --import tsx scripts/smoke-research-phase-a.ts",
+    "smoke:searxng": "node --env-file=.env.local scripts/smoke-searxng-gateway.mjs",
+    "smoke:searxng:ci": "node scripts/smoke-searxng-gateway.mjs",
     "db:apply": "node --env-file=.env.local scripts/apply-ano-schema.mjs",
     "db:apply:ci": "node scripts/apply-ano-schema.mjs",
     "db:status": "node --env-file=.env.local scripts/check-ano-schema.mjs",

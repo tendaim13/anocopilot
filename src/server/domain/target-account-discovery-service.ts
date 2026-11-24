@@ -39,6 +39,7 @@ import {
   TargetAccountDiscoveryPersistenceError,
   updateAccountCandidateLifecycleState,
 } from "@/server/persistence/target-account-discovery-store";
+import { checkInternalUsageBudget } from "@/server/telemetry/internal-api-usage";
 
 export class TargetAccountDiscoveryServiceError extends Error {
   constructor(message: string, readonly code: string = "COMPANY_DISCOVERY_UNAVAILABLE") {
@@ -269,6 +270,18 @@ export async function approveCompanySearchForConversation(
   companySearch: CompanySearchView;
   prospeo: ReturnType<typeof prospeoConfiguration>;
 }> {
+  const existingSearch = await readCompanySearchForConversation(session, conversationId);
+  const providerKey = existingSearch?.providerKey ?? "prospeo";
+  if (providerKey === "prospeo") {
+    const budgetOk = await checkInternalUsageBudget(session, "prospeo");
+    if (!budgetOk) {
+      throw new TargetAccountDiscoveryServiceError(
+        "Company search is temporarily paused because workspace usage safeguards could not be verified.",
+        "BUDGET_GUARD_BLOCKED",
+      );
+    }
+  }
+
   const context = await loadLockedTargetContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
 

@@ -4,7 +4,10 @@ services:
   caddy:
     image: ${CADDY_IMAGE:?Set CADDY_IMAGE to an immutable image digest in .env}
     restart: unless-stopped
-    env_file: .env
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+      SEARXNG_DOMAIN: ${SEARXNG_DOMAIN:?Set SEARXNG_DOMAIN in .env}
+      SEARXNG_GATEWAY_TOKEN: ${SEARXNG_GATEWAY_TOKEN:?Set SEARXNG_GATEWAY_TOKEN in .env}
     ports:
       - "80:80"
       - "443:443"
@@ -24,11 +27,13 @@ services:
   searxng:
     image: ${SEARXNG_IMAGE:?Set SEARXNG_IMAGE to an immutable image digest in .env}
     restart: unless-stopped
-    env_file: .env
+    entrypoint: ["/bin/sh", "/usr/local/bin/ano-searxng-entrypoint.sh"]
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET in .env}
       SEARXNG_BASE_URL: https://${SEARXNG_DOMAIN:?Set SEARXNG_DOMAIN in .env}/
       SEARXNG_VALKEY_URL: valkey://valkey:6379/0
+      SEARXNG_SETTINGS_PATH: /tmp/searxng/settings.yml
+      BRAVE_API_KEY: ${BRAVE_API_KEY:?Set BRAVE_API_KEY in .env}
       # Caddy's private gateway credential and Ano's durable run limits are the
       # applicable control plane; do not apply SearXNG's public JSON API quota.
       SEARXNG_LIMITER: "false"
@@ -37,8 +42,11 @@ services:
       # the only SearXNG path that needs container write access.
       FORCE_OWNERSHIP: "false"
     volumes:
-      - ./searxng:/etc/searxng:ro
+      - ./searxng:/etc/searxng-template:ro
+      - ./render-settings-entrypoint.sh:/usr/local/bin/ano-searxng-entrypoint.sh:ro
       - searxng_cache:/var/cache/searxng
+    tmpfs:
+      - /tmp/searxng:mode=0700
     depends_on:
       valkey:
         condition: service_started

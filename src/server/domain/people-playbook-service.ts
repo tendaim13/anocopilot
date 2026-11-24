@@ -29,6 +29,7 @@ import {
   saveRoleProposalAndPersonSearchPreview,
 } from "@/server/persistence/people-playbook-store";
 import { prospeoConfiguration } from "@/server/persistence/target-account-discovery-store";
+import { checkInternalUsageBudget } from "@/server/telemetry/internal-api-usage";
 
 export class PeoplePlaybookServiceError extends Error {
   constructor(message: string, readonly code: string = "PEOPLE_DISCOVERY_UNAVAILABLE") {
@@ -167,6 +168,15 @@ export async function approvePersonSearchForConversation(
       "PROSPEO_NOT_CONFIGURED",
     );
   }
+  if (targetProvider === "prospeo") {
+    const budgetOk = await checkInternalUsageBudget(session, "prospeo");
+    if (!budgetOk) {
+      throw new PeoplePlaybookServiceError(
+        "Decision-maker lookup is temporarily paused because workspace usage safeguards could not be verified.",
+        "BUDGET_GUARD_BLOCKED",
+      );
+    }
+  }
 
   const context = await loadShortlistedContext(session, conversationId);
   const checkpointer = await getResearchCheckpointer();
@@ -301,8 +311,15 @@ export async function approveContactVerificationForConversation(
   }
   if (providerKey === "dropcontact" && !dropcontactConfiguration().available) {
     throw new PeoplePlaybookServiceError(
-      "Work email verification is not configured on this server.",
+      "Work email verification is temporarily paused because this capability is not configured on this server.",
       "DROPCONTACT_NOT_CONFIGURED",
+    );
+  }
+  const budgetOk = await checkInternalUsageBudget(session, providerKey);
+  if (!budgetOk) {
+    throw new PeoplePlaybookServiceError(
+      "Work email verification is temporarily paused because workspace usage safeguards could not be verified.",
+      "BUDGET_GUARD_BLOCKED",
     );
   }
 
