@@ -42,6 +42,14 @@ export async function GET(request: Request) {
       listResearchConversations(session, { cursor, limit }),
       session.kind === "supabase" && !cursor ? getCurrentResearchConversation(session) : Promise.resolve(null),
     ]);
+    if (conversation) {
+      const matched = listResult.conversations.find(
+        (item) => item.id === conversation.conversation.id,
+      );
+      if (matched) {
+        conversation.conversation.title = matched.title;
+      }
+    }
     return NextResponse.json({
       conversation,
       conversations: listResult.conversations,

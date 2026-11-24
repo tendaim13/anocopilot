@@ -24,8 +24,10 @@ import {
   type PeopleDiscoveryView,
 } from "@/lib/ano/people-playbooks";
 import {
+  buildFriendlyConversationTitle,
   conversationPatchSchema,
   graphResumeSchema,
+  needsFriendlyTitleRefresh,
   type ConversationMessageMetadata,
   type GraphResume,
   type ResearchBrief,
@@ -101,6 +103,7 @@ import {
   appendAssistantMessage,
   appendUserMessage,
   archiveResearchConversation,
+  backfillFriendlyConversationTitles,
   createResearchConversation,
   failResearchConversation,
   listResearchConversationSummaries,
@@ -296,7 +299,19 @@ export async function startResearchConversation(
     );
   }
 
-  const created = await createResearchConversation(session, effectiveMessage);
+  const initialTitle = buildFriendlyConversationTitle({
+    openingMessage: rawMessage || effectiveMessage,
+    productSourceLabels: ingestedSources.map((s) => s.label),
+    productSourceSummaries: ingestedSources
+      .map((s) => s.summaryText)
+      .filter((v): v is string => Boolean(v)),
+  });
+
+  const created = await createResearchConversation(
+    session,
+    effectiveMessage,
+    initialTitle,
+  );
   for (const ingested of ingestedSources) {
     await saveConversationProductSource(session, created.conversationId, ingested);
   }
@@ -2053,7 +2068,32 @@ export async function listResearchConversations(
   session: WorkspaceSession,
   options: { cursor?: string | null; limit?: number } = {},
 ) {
-  return listResearchConversationSummaries(session, options);
+  const result = await listResearchConversationSummaries(session, options);
+  if (
+    !options.cursor &&
+    session.kind === "supabase" &&
+    result.conversations.length > 0 &&
+    result.conversations.some(
+      (conv) => needsFriendlyTitleRefresh(conv.title) || !conv.title.includes(" — "),
+    )
+  ) {
+    const backfill = await backfillFriendlyConversationTitles(session, {
+      conversationIds: result.conversations.map((conv) => conv.id),
+    }).catch(() => null);
+    if (backfill && backfill.updatedCount > 0) {
+      return {
+        ...result,
+        conversations: result.conversations.map((conv) =>
+          backfill.titles[conv.id] ? { ...conv, title: backfill.titles[conv.id] } : conv,
+        ),
+      };
+    }
+  }
+  return result;
+}
+
+export async function autoRenameWorkspaceConversations(session: WorkspaceSession) {
+  return backfillFriendlyConversationTitles(session);
 }
 
 export async function getWorkspaceWorkQueue(session: WorkspaceSession) {

@@ -2,11 +2,13 @@ import "server-only";
 
 import type { WorkspaceSession } from "@/contracts/ano";
 import type { LockTargetDecisionInput } from "@/lib/ano/market-synthesis";
+import { buildFriendlyConversationTitle } from "@/lib/ano/research-conversation";
 import { BedrockConfigurationError, getActivePlannerConfig } from "@/server/agents/bedrock";
 import { createMarketSynthesisModel, MarketSynthesisModelError } from "@/server/agents/market-synthesis-model";
 import { getResearchConversation } from "@/server/domain/research-conversation-service";
 import { getResearchCheckpointer } from "@/server/langgraph/checkpointer";
 import { createMarketSynthesisGraph } from "@/server/langgraph/market-synthesis-graph";
+import { autoUpdateConversationTitle } from "@/server/persistence/research-conversation-store";
 import {
   assessSourceLedger,
   claimMarketSynthesis,
@@ -88,5 +90,37 @@ export async function analyseMarketSynthesisForConversation(session: WorkspaceSe
 }
 
 export async function lockMarketRouteForConversation(session: WorkspaceSession, conversationId: string, input: LockTargetDecisionInput) {
-  return lockTargetDecision(session, conversationId, input);
+  const synthesis = await lockTargetDecision(session, conversationId, input);
+  if (synthesis.decision?.status === "locked") {
+    try {
+      const lockedMarket = synthesis.markets.find(
+        (m) => m.id === synthesis.decision?.marketProfileId,
+      );
+      const lockedIndustry = synthesis.industries.find(
+        (i) => i.id === synthesis.decision?.industryProfileId,
+      );
+      if (lockedMarket) {
+        const view = await getResearchConversation(session, conversationId);
+        const firstUserMessage =
+          view.messages.find((msg) => msg.role === "user")?.text ?? null;
+        const friendlyTitle = buildFriendlyConversationTitle({
+          openingMessage: firstUserMessage,
+          brief: view.brief,
+          lockedMarketName: lockedMarket.name,
+          lockedIndustryName: lockedIndustry?.name ?? null,
+          productSourceLabels: (view.productSources ?? []).map((s) => s.label),
+          productSourceSummaries: (view.productSources ?? [])
+            .map((s) => s.summaryText)
+            .filter((v): v is string => Boolean(v)),
+        });
+        await autoUpdateConversationTitle(session, conversationId, friendlyTitle, {
+          preserveUpdatedAt: true,
+          forceUpgrade: true,
+        });
+      }
+    } catch {
+      // Never block target-route locking if automatic title refinement cannot run.
+    }
+  }
+  return synthesis;
 }

@@ -13,8 +13,11 @@ import type {
   ResearchPlan,
 } from "@/lib/ano/research-conversation";
 import {
+  buildFriendlyConversationTitle,
   conversationMessageMetadataSchema,
   conversationTitle,
+  DEFAULT_CONVERSATION_TITLE,
+  needsFriendlyTitleRefresh,
   researchConversationSummarySchema,
   researchConversationViewSchema,
   type ConversationMessageMetadata,
@@ -171,17 +174,25 @@ async function readConversationRow(session: LiveSession, conversationId: string)
   return data as ConversationRow;
 }
 
-export async function createResearchConversation(session: WorkspaceSession, openingMessage: string) {
+export async function createResearchConversation(
+  session: WorkspaceSession,
+  openingMessage: string,
+  initialTitle?: string,
+) {
   requireLiveSession(session);
   const conversationId = crypto.randomUUID();
   const threadId = `ano:${session.workspace.id}:${conversationId}`;
   const runId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const resolvedTitle =
+    initialTitle && initialTitle.trim()
+      ? initialTitle.trim().slice(0, 160)
+      : conversationTitle(openingMessage);
   const { error: conversationError } = await session.client.from("ano_conversations").insert({
     id: conversationId,
     workspace_id: session.workspace.id,
     created_by: session.actorId,
-    title: conversationTitle(openingMessage),
+    title: resolvedTitle,
     active_graph: RESEARCH_GRAPH_NAME,
     active_thread_id: threadId,
     status: "draft",
@@ -366,21 +377,312 @@ export async function readResearchConversation(session: WorkspaceSession, conver
   });
 }
 
-async function archivedConversationIds(session: LiveSession): Promise<Set<string>> {
+async function conversationIdsFromAuditEvent(
+  session: LiveSession,
+  eventType: "conversation_archived" | "conversation_renamed",
+): Promise<Set<string>> {
   const { data, error } = await session.client
     .from("audit_logs")
     .select("details_json")
     .eq("workspace_id", session.workspace.id)
-    .eq("event_type", "conversation_archived");
+    .eq("event_type", eventType);
   if (error) throw new ResearchConversationPersistenceError(failure());
-  const archived = new Set<string>();
+  const ids = new Set<string>();
   for (const row of data ?? []) {
     const details = record(row.details_json);
     if (typeof details.conversationId === "string" && details.conversationId) {
-      archived.add(details.conversationId);
+      ids.add(details.conversationId);
     }
   }
-  return archived;
+  return ids;
+}
+
+async function archivedConversationIds(session: LiveSession): Promise<Set<string>> {
+  return conversationIdsFromAuditEvent(session, "conversation_archived");
+}
+
+async function manuallyRenamedConversationIds(session: LiveSession): Promise<Set<string>> {
+  return conversationIdsFromAuditEvent(session, "conversation_renamed");
+}
+
+/**
+ * Updates a conversation's title automatically without writing a
+ * `conversation_renamed` audit event, so subsequent lifecycle refinements
+ * (such as locking a target market in Phase C / Stage 3) continue to work while
+ * explicit user renames always take precedence.
+ */
+export async function autoUpdateConversationTitle(
+  session: WorkspaceSession,
+  conversationId: string,
+  candidateTitle: string,
+  options?: { preserveUpdatedAt?: boolean; forceUpgrade?: boolean },
+): Promise<string | null> {
+  if (session.kind === "demo") return null;
+  const normalized = candidateTitle.trim().replace(/\s+/g, " ").slice(0, 160);
+  if (!normalized || normalized === DEFAULT_CONVERSATION_TITLE) return null;
+
+  const [manuallyRenamed, current] = await Promise.all([
+    manuallyRenamedConversationIds(session),
+    readConversationRow(session, conversationId),
+  ]);
+  if (manuallyRenamed.has(conversationId)) return null;
+  if (current.title === normalized) return null;
+  if (!options?.forceUpgrade && !needsFriendlyTitleRefresh(current.title, normalized)) {
+    return null;
+  }
+
+  const updatePayload: Record<string, unknown> = { title: normalized };
+  if (!options?.preserveUpdatedAt) {
+    updatePayload.updated_at = new Date().toISOString();
+  }
+
+  const { error } = await session.client
+    .from("ano_conversations")
+    .update(updatePayload)
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", conversationId);
+  if (error) throw new ResearchConversationPersistenceError(failure());
+  return normalized;
+}
+
+export async function backfillFriendlyConversationTitles(
+  session: WorkspaceSession,
+  options?: { conversationIds?: string[]; forceAll?: boolean },
+): Promise<{
+  scannedCount: number;
+  updatedCount: number;
+  titles: Record<string, string>;
+}> {
+  if (session.kind === "demo") {
+    return { scannedCount: 0, updatedCount: 0, titles: {} };
+  }
+
+  const [archived, manuallyRenamed] = await Promise.all([
+    archivedConversationIds(session),
+    manuallyRenamedConversationIds(session),
+  ]);
+
+  let convQuery = session.client
+    .from("ano_conversations")
+    .select("id, title")
+    .eq("workspace_id", session.workspace.id)
+    .eq("active_graph", RESEARCH_GRAPH_NAME)
+    .neq("status", "draft");
+
+  if (options?.conversationIds && options.conversationIds.length > 0) {
+    convQuery = convQuery.in("id", options.conversationIds);
+  } else {
+    convQuery = convQuery.order("updated_at", { ascending: false }).limit(100);
+  }
+
+  const { data: convRows, error: convError } = await convQuery;
+  if (convError) throw new ResearchConversationPersistenceError(failure());
+
+  const eligibleRows = (convRows ?? [])
+    .map((row) => ({
+      id: String(row.id),
+      title: String(row.title ?? ""),
+    }))
+    .filter((row) => !archived.has(row.id) && !manuallyRenamed.has(row.id));
+
+  const candidates = options?.forceAll
+    ? eligibleRows
+    : eligibleRows.filter(
+        (row) => needsFriendlyTitleRefresh(row.title) || !row.title.includes(" — "),
+      );
+
+  if (candidates.length === 0) {
+    return { scannedCount: eligibleRows.length, updatedCount: 0, titles: {} };
+  }
+
+  const candidateIds = candidates.map((row) => row.id);
+  const [briefsRes, decisionsRes, sourcesRes, messagesRes] = await Promise.all([
+    session.client
+      .from("research_briefs")
+      .select("conversation_id, content_json, business_location, target_markets_json, intake_complete")
+      .eq("workspace_id", session.workspace.id)
+      .in("conversation_id", candidateIds),
+    session.client
+      .from("target_decisions")
+      .select("conversation_id, status, market_profile_id, industry_profile_id")
+      .eq("workspace_id", session.workspace.id)
+      .eq("status", "locked")
+      .in("conversation_id", candidateIds),
+    session.client
+      .from("conversation_product_sources")
+      .select("conversation_id, label, summary_text, created_at")
+      .eq("workspace_id", session.workspace.id)
+      .in("conversation_id", candidateIds)
+      .order("created_at", { ascending: true }),
+    session.client
+      .from("ano_messages")
+      .select("conversation_id, content_json, created_at")
+      .eq("workspace_id", session.workspace.id)
+      .eq("role", "user")
+      .in("conversation_id", candidateIds)
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (briefsRes.error || decisionsRes.error || sourcesRes.error || messagesRes.error) {
+    throw new ResearchConversationPersistenceError(failure());
+  }
+
+  const lockedDecisions = (decisionsRes.data ?? []).map((row) => ({
+    conversationId: String(row.conversation_id),
+    marketProfileId:
+      typeof row.market_profile_id === "string" ? row.market_profile_id : null,
+    industryProfileId:
+      typeof row.industry_profile_id === "string" ? row.industry_profile_id : null,
+  }));
+
+  const marketIds = Array.from(
+    new Set(
+      lockedDecisions
+        .map((d) => d.marketProfileId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const industryIds = Array.from(
+    new Set(
+      lockedDecisions
+        .map((d) => d.industryProfileId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const [marketsRes, industriesRes] = await Promise.all([
+    marketIds.length > 0
+      ? session.client
+          .from("market_profiles")
+          .select("id, name")
+          .eq("workspace_id", session.workspace.id)
+          .in("id", marketIds)
+      : Promise.resolve({ data: [], error: null }),
+    industryIds.length > 0
+      ? session.client
+          .from("industry_profiles")
+          .select("id, name")
+          .eq("workspace_id", session.workspace.id)
+          .in("id", industryIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (marketsRes.error || industriesRes.error) {
+    throw new ResearchConversationPersistenceError(failure());
+  }
+
+  const marketNameById = new Map<string, string>();
+  for (const row of marketsRes.data ?? []) {
+    if (row.id && typeof row.name === "string") {
+      marketNameById.set(String(row.id), row.name);
+    }
+  }
+  const industryNameById = new Map<string, string>();
+  for (const row of industriesRes.data ?? []) {
+    if (row.id && typeof row.name === "string") {
+      industryNameById.set(String(row.id), row.name);
+    }
+  }
+
+  const briefByConversation = new Map<string, ResearchBrief>();
+  for (const row of briefsRes.data ?? []) {
+    const cid = String(row.conversation_id);
+    const parsed = asBrief(row as Record<string, unknown>);
+    if (parsed) briefByConversation.set(cid, parsed);
+  }
+
+  const decisionNamesByConversation = new Map<
+    string,
+    { marketName: string | null; industryName: string | null }
+  >();
+  for (const decision of lockedDecisions) {
+    decisionNamesByConversation.set(decision.conversationId, {
+      marketName: decision.marketProfileId
+        ? (marketNameById.get(decision.marketProfileId) ?? null)
+        : null,
+      industryName: decision.industryProfileId
+        ? (industryNameById.get(decision.industryProfileId) ?? null)
+        : null,
+    });
+  }
+
+  const sourcesByConversation = new Map<
+    string,
+    { labels: string[]; summaries: string[] }
+  >();
+  for (const row of sourcesRes.data ?? []) {
+    const cid = String(row.conversation_id);
+    const bucket = sourcesByConversation.get(cid) ?? { labels: [], summaries: [] };
+    if (typeof row.label === "string" && row.label.trim()) {
+      bucket.labels.push(row.label.trim());
+    }
+    if (typeof row.summary_text === "string" && row.summary_text.trim()) {
+      bucket.summaries.push(row.summary_text.trim());
+    }
+    sourcesByConversation.set(cid, bucket);
+  }
+
+  const firstMessageByConversation = new Map<string, string>();
+  for (const row of messagesRes.data ?? []) {
+    const cid = String(row.conversation_id);
+    if (firstMessageByConversation.has(cid)) continue;
+    const content = record(row.content_json);
+    if (typeof content.text === "string" && content.text.trim()) {
+      firstMessageByConversation.set(cid, content.text.trim());
+    }
+  }
+
+  const titles: Record<string, string> = {};
+  let updatedCount = 0;
+
+  for (const candidate of candidates) {
+    const brief = briefByConversation.get(candidate.id) ?? null;
+    const decision = decisionNamesByConversation.get(candidate.id);
+    const sources = sourcesByConversation.get(candidate.id) ?? {
+      labels: [],
+      summaries: [],
+    };
+    const firstUserMessage = firstMessageByConversation.get(candidate.id) ?? null;
+    const fallbackTitleAsPrompt =
+      !firstUserMessage && !brief && sources.labels.length === 0 && needsFriendlyTitleRefresh(candidate.title)
+        ? candidate.title
+        : null;
+
+    const nextTitle = buildFriendlyConversationTitle({
+      openingMessage: firstUserMessage ?? fallbackTitleAsPrompt,
+      brief,
+      lockedMarketName: decision?.marketName ?? null,
+      lockedIndustryName: decision?.industryName ?? null,
+      productSourceLabels: sources.labels,
+      productSourceSummaries: sources.summaries,
+    });
+
+    if (!nextTitle || nextTitle === candidate.title) continue;
+    if (
+      !options?.forceAll &&
+      !needsFriendlyTitleRefresh(candidate.title, nextTitle)
+    ) {
+      continue;
+    }
+
+    // Preserve updated_at during background backfill so existing sidebar order stays intact.
+    const { error: updateError } = await session.client
+      .from("ano_conversations")
+      .update({ title: nextTitle })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", candidate.id);
+
+    if (!updateError) {
+      titles[candidate.id] = nextTitle;
+      updatedCount += 1;
+    }
+  }
+
+  return {
+    scannedCount: eligibleRows.length,
+    updatedCount,
+    titles,
+  };
 }
 
 export async function readLatestResearchConversation(session: WorkspaceSession) {
@@ -816,6 +1118,23 @@ export async function syncResearchGraphSnapshot(session: WorkspaceSession, conve
       status: state.status === "awaiting_context" ? "awaiting_context" : "ready",
     }, { onConflict: "conversation_id" });
     if (error) throw new ResearchConversationPersistenceError(failure());
+
+    const productSources = await readConversationProductSources(session, conversationId).catch(
+      () => ({ summaries: [], fullSources: [] }),
+    );
+    const openingContext =
+      state.contextMessages?.[0]?.text ?? state.submittedMessage?.text ?? null;
+    const friendlyTitle = buildFriendlyConversationTitle({
+      openingMessage: openingContext,
+      brief: state.brief,
+      productSourceLabels: productSources.summaries.map((s) => s.label),
+      productSourceSummaries: productSources.summaries
+        .map((s) => s.summaryText)
+        .filter((v): v is string => Boolean(v)),
+    });
+    await autoUpdateConversationTitle(session, conversationId, friendlyTitle, {
+      preserveUpdatedAt: false,
+    }).catch(() => undefined);
   }
   if (state.pendingQuestion) {
     await session.client.from("research_questions").update({ status: "resolved", resolved_at: now }).eq("workspace_id", session.workspace.id).eq("conversation_id", conversationId).eq("status", "open");

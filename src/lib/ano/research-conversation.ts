@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+import {
+  buildFriendlyConversationTitle,
+  DEFAULT_CONVERSATION_TITLE,
+  needsFriendlyTitleRefresh,
+  type FriendlyConversationTitleInput,
+} from "./conversation-title";
 import type { CompanySearchView } from "./company-discovery";
 import type { EvidenceResearchView } from "./evidence-research";
 import type { MarketSynthesis } from "./market-synthesis";
@@ -449,7 +455,13 @@ export function buildConversationMessageParts(
   return parts;
 }
 
+export {
+  buildFriendlyConversationTitle,
+  DEFAULT_CONVERSATION_TITLE,
+  needsFriendlyTitleRefresh,
+  type FriendlyConversationTitleInput,
+};
+
 export function conversationTitle(message: string) {
-  const compact = message.trim().replace(/\s+/g, " ");
-  return compact.length <= 72 ? compact : `${compact.slice(0, 69)}…`;
+  return buildFriendlyConversationTitle({ openingMessage: message });
 }
