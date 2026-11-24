@@ -133,7 +133,7 @@ export function CompanyCohortArtifactDrawer({
         <header className="m3-artifact-drawer-header">
           <div>
             <p className="m3-artifact-kicker">
-              ARTIFACT · {companySearch.providerKey === "openstreetmap" ? "OPENSTREETMAP LOCAL COHORT" : "PROSPEO B2B COHORT"}
+              ARTIFACT · {companySearch.providerKey === "openstreetmap" ? "LOCAL BUSINESS COHORT" : "B2B DIRECTORY COHORT"}
             </p>
             <h2>
               {companySearch.targetMarketName} · {companySearch.accounts.length} companies

@@ -17,6 +17,6 @@ export async function POST() {
   } catch (error) {
     if (error instanceof WorkspaceSessionError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof ProspeoDiscoveryError) return NextResponse.json({ error: error.message, code: error.code }, { status: 422 });
-    return NextResponse.json({ error: "Ano could not check Prospeo. No company search was attempted." }, { status: 500 });
+    return NextResponse.json({ error: "Ano could not check the B2B company directory service. No company search was attempted." }, { status: 500 });
   }
 }

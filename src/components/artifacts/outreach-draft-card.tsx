@@ -60,7 +60,6 @@ function eligibilityBadgeClass(status: OutreachDraftView["eligibility"]["status"
 export function OutreachDraftCard({
   playbooks,
   outreachExecution,
-  mercury,
   isWorking,
   onGenerateDrafts,
   onEditDraft,
@@ -101,7 +100,7 @@ export function OutreachDraftCard({
     >
       <header className="m3-artifact-header">
         <div>
-          <p className="m3-artifact-kicker">PHASE F · OUTREACH DRAFTS & MERCURY PROPOSALS</p>
+          <p className="m3-artifact-kicker">PHASE F · OUTREACH DRAFTS &amp; APPROVALS</p>
           <h2>
             {drafts.length === 0
               ? "Compile versioned outreach drafts from approved playbooks"
@@ -124,8 +123,8 @@ export function OutreachDraftCard({
       </header>
 
       <p className="m3-artifact-lead">
-        {mercury?.note ??
-          "Every draft runs deterministic suppression and verified-email eligibility checks before staging. Emails, calendar invites, call tasks, and Mercury updates require individual explicit approvals."}
+        Every draft runs deterministic suppression and verified-email eligibility checks before
+        staging. Emails, calendar invites, and call tasks require individual explicit approvals.
       </p>
 
       <div className="m3-metric-strip">
@@ -269,14 +268,6 @@ export function OutreachDraftCard({
                             Propose call task
                           </MaterialButton>
                         )}
-
-                        <MaterialButton
-                          variant="text"
-                          disabled={isWorking || !draft.eligibility.canProposeMercurySync}
-                          onClick={() => onCreateProposal(draft.id, "mercury_draft")}
-                        >
-                          Propose Mercury draft
-                        </MaterialButton>
                       </div>
                     </>
                   )}
@@ -300,12 +291,16 @@ export function OutreachDraftCard({
 
       {proposals.length > 0 && (
         <section className="m3-artifact-section">
-          <h3>Execution & Mercury proposals ({proposals.length})</h3>
+          <h3>Outbound action proposals ({proposals.length})</h3>
           <div className="m3-person-list">
             {proposals.map((proposal) => (
               <article key={proposal.id} className="m3-evidence-source-item">
                 <div className="m3-person-title-row">
-                  <span className="m3-claim-pill">{proposal.proposalType.replaceAll("_", " ")}</span>
+                  <span className="m3-claim-pill">
+                    {proposal.proposalType.startsWith("mercury_")
+                      ? "CRM sync"
+                      : proposal.proposalType.replaceAll("_", " ")}
+                  </span>
                   <span className={`m3-status-badge status-${proposal.status}`}>
                     {proposal.status.replaceAll("_", " ")}
                   </span>
@@ -366,8 +361,8 @@ export function OutreachDraftCard({
       {confirmProposal && (
         <ApprovalCard
           open={Boolean(confirmProposal)}
-          title="Approve this outbound / Mercury action?"
-          body={`${confirmProposal.summary}. Approval records an immutable decision in approval_decisions and an audit receipt.`}
+          title="Approve this outbound action?"
+          body={`${confirmProposal.summary}. Approval records an immutable decision and audit receipt.`}
           confirmLabel="Approve action"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}

@@ -59,7 +59,7 @@ export async function POST(
   );
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Specify whether to prepare a free Prospeo preview or approve a saved preview." },
+      { error: "Specify whether to prepare a company search preview or approve a saved preview." },
       { status: 400 },
     );
   }

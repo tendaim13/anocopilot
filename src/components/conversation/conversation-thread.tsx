@@ -353,7 +353,7 @@ export function ConversationThread({
               disabled={isWorking}
               onClick={() => setConfirmProspeoApprovalOpen(true)}
             >
-              Run Prospeo company search
+              Run B2B company search
             </MaterialButton>,
           );
         } else if (
@@ -385,7 +385,7 @@ export function ConversationThread({
               disabled={isWorking}
               onClick={() => setConfirmProspeoPersonApprovalOpen(true)}
             >
-              Run Prospeo people search
+              Run decision-maker search
             </MaterialButton>,
           );
         } else if (peopleDiscovery && peopleDiscovery.contacts.length > 0) {
@@ -424,8 +424,6 @@ export function ConversationThread({
           meta.awaitingVerificationApproval &&
           peopleDiscovery?.verificationRun?.status === "awaiting_approval"
         ) {
-          const providerLabel =
-            peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact";
           actionNodes.push(
             <MaterialButton
               key="approve-email-verification"
@@ -433,7 +431,7 @@ export function ConversationThread({
               disabled={isWorking}
               onClick={() => setConfirmVerificationApprovalOpen(true)}
             >
-              Approve {providerLabel} email verification
+              Approve email verification
             </MaterialButton>,
           );
         } else if (
@@ -642,7 +640,7 @@ export function ConversationThread({
             key="company-search-preview"
             label={
               companySearch?.providerKey === "openstreetmap"
-                ? "OpenStreetMap company discovery"
+                ? "Local business discovery"
                 : "Company discovery"
             }
             timestamp={
@@ -749,11 +747,7 @@ export function ConversationThread({
         render: () => (
           <ArtifactMessage
             key={`verification-${verification.id}`}
-            label={
-              verification.providerKey === "prospeo"
-                ? "Prospeo email verification"
-                : "Dropcontact verification"
-            }
+            label="Work email verification"
             timestamp={verification.updatedAt}
           >
             <ContactVerificationCard
@@ -966,7 +960,7 @@ export function ConversationThread({
             <strong>Sign in required for durable research</strong>
             <p>
               Authenticate with your Ano workspace account to create research plans, run bounded
-              SearXNG evidence discovery, and save recommendations.
+              public web evidence discovery, and save recommendations.
             </p>
           </div>
           <Link href="/login" className="m3-alert-link">
@@ -1128,7 +1122,7 @@ export function ConversationThread({
       {companySearch && companySearch.providerKey === "prospeo" && (
         <ApprovalCard
           open={confirmProspeoApprovalOpen}
-          title="Run Prospeo company search?"
+          title="Run B2B company search?"
           body={`Searches up to 25 matching companies in ${companySearch.canonicalLocations.join(", ")} using your verified filters.`}
           confirmLabel="Run company search"
           cancelLabel="Keep reviewing"
@@ -1144,7 +1138,7 @@ export function ConversationThread({
       {peopleDiscovery?.personSearch && peopleDiscovery.personSearch.providerKey === "prospeo" && (
         <ApprovalCard
           open={confirmProspeoPersonApprovalOpen}
-          title="Run Prospeo decision-maker search?"
+          title="Run decision-maker search?"
           body={`Searches up to 25 named buyers matching [${peopleDiscovery.personSearch.approvedRoles.join(", ")}] across ${peopleDiscovery.personSearch.shortlistedAccountNames.join(", ")}.`}
           confirmLabel="Run people search"
           cancelLabel="Keep reviewing"
@@ -1161,7 +1155,7 @@ export function ConversationThread({
         <ApprovalCard
           open={confirmVerificationApprovalOpen}
           title="Run email verification?"
-          body={`Verifies work emails for ${peopleDiscovery.verificationRun.selectedContactIds.length} selected contact${peopleDiscovery.verificationRun.selectedContactIds.length === 1 ? "" : "s"} via ${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact"}.`}
+          body={`Verifies work emails for ${peopleDiscovery.verificationRun.selectedContactIds.length} selected contact${peopleDiscovery.verificationRun.selectedContactIds.length === 1 ? "" : "s"}.`}
           confirmLabel="Verify emails"
           cancelLabel="Keep reviewing"
           isWorking={isWorking}

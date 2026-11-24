@@ -221,7 +221,7 @@ export default function SettingsPage() {
             <strong>Role:</strong> {workspace?.role ?? "—"}
           </p>
           <p>
-            <strong>Persistence mode:</strong> {mode === "supabase" ? "Supabase (durable RLS)" : "Demo / unauthenticated"}
+            <strong>Workspace mode:</strong> {mode === "supabase" ? "Cloud workspace (saved)" : "Demo / signed out"}
           </p>
 
           {mode === "supabase" ? (
@@ -400,22 +400,6 @@ export default function SettingsPage() {
               )}
             </>
           )}
-        </article>
-
-        <article className="ano-surface-card">
-          <h2>Provider & safety boundaries</h2>
-          <p>
-            <strong>Reasoning LLM (Google AI Studio Gemini, Ollama, or Amazon Bedrock):</strong> Reasoning, planning, and citation-bound synthesis only; no direct tool or DB credentials. Configured on server via <code>ANO_AGENT_MODE</code>.
-          </p>
-          <p>
-            <strong>Private SearXNG:</strong> Bounded public market discovery with SSRF/content-type/size validation and safe fallback to uploaded product materials.
-          </p>
-          <p>
-            <strong>Company & decision-maker discovery:</strong> Combines OpenStreetMap local business lookup, company website scans, and Prospeo/Dropcontact B2B verification under server-enforced limits.
-          </p>
-          <p>
-            <strong>Outreach & Mercury (Phase F):</strong> Every external email send, calendar invite, call task, and Mercury CRM proposal enforces contact eligibility checks and requires explicit per-action human approval.
-          </p>
         </article>
       </div>
     </section>

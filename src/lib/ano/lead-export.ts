@@ -87,8 +87,7 @@ export type LeadEmailProvenance = {
   email: string;
   emailStatus: "verified" | "unverified_public" | "missing";
   emailSource:
-    | "prospeo_verified"
-    | "dropcontact_verified"
+    | "verified_work_email"
     | "public_website_direct"
     | "public_website_shared_inbox"
     | "none";
@@ -101,10 +100,7 @@ export function resolveLeadEmailProvenance(contact: ContactCandidateView): LeadE
     return {
       email: verifiedEmail,
       emailStatus: "verified",
-      emailSource:
-        contact.verifiedDetails?.provider === "prospeo"
-          ? "prospeo_verified"
-          : "dropcontact_verified",
+      emailSource: "verified_work_email",
       leadStatus: "verified",
     };
   }

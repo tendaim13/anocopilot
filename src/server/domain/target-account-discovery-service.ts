@@ -97,7 +97,7 @@ export async function prepareCompanySearchPreviewForConversation(
 
   if (providerKey === "prospeo" && !prospeoConfiguration().available) {
     throw new TargetAccountDiscoveryServiceError(
-      "Add PROSPEO_KEY on the server before preparing Prospeo company discovery previews.",
+      "B2B company directory discovery is not configured on this server.",
       "PROSPEO_NOT_CONFIGURED",
     );
   }
@@ -108,7 +108,7 @@ export async function prepareCompanySearchPreviewForConversation(
       : [];
   if (providerKey === "openstreetmap" && osmTags.length === 0) {
     throw new TargetAccountDiscoveryServiceError(
-      "OpenStreetMap local discovery needs a physical business category (for example: dentist, medical clinic, veterinary, plumber, restaurant, or salon). Add a local category keyword or switch to Prospeo B2B database search.",
+      "Local business discovery needs a physical business category (for example: dentist, medical clinic, veterinary, plumber, restaurant, or salon). Add a local category keyword or switch to B2B company directory search.",
       "OSM_TAGS_UNRESOLVED",
     );
   }
@@ -130,7 +130,7 @@ export async function prepareCompanySearchPreviewForConversation(
               const canonical = selectCanonicalLocation(normalizedLocation, suggestions);
               if (!canonical) {
                 throw new CompanyDiscoveryBoundaryError(
-                  `Prospeo could not verify "${location}" as a geographic location. Enter a country, state, or city (for example, Australia, United Kingdom, or United States).`,
+                  `Could not verify "${location}" as a geographic location. Enter a country, state, or city (for example, Australia, United Kingdom, or United States).`,
                 );
               }
               return canonical;
@@ -162,7 +162,7 @@ export async function prepareCompanySearchPreviewForConversation(
             if (!match) {
               if (explicitIndustries) {
                 throw new CompanyDiscoveryBoundaryError(
-                  `Prospeo could not verify "${entry}" in its industry taxonomy. Leave Prospeo industry blank to search using company keywords instead, or try a standard category like "Medical Practices".`,
+                  `Could not verify "${entry}" in the B2B industry taxonomy. Leave the industry field blank to search using company keywords instead, or try a standard category like "Medical Practices".`,
                 );
               }
               continue;
@@ -244,7 +244,7 @@ export async function prepareCompanySearchPreviewForConversation(
 
   if (!result.search) {
     throw new TargetAccountDiscoveryServiceError(
-      `Ano could not prepare the ${providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} company-search preview.`,
+      `Ano could not prepare the ${providerKey === "openstreetmap" ? "local business" : "B2B directory"} company-search preview.`,
     );
   }
 
@@ -304,7 +304,7 @@ export async function approveCompanySearchForConversation(
 
   if (!result.search) {
     throw new TargetAccountDiscoveryServiceError(
-      "Ano could not retrieve the Prospeo company cohort.",
+      "Ano could not retrieve the matching company cohort.",
     );
   }
 

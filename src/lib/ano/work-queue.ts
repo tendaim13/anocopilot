@@ -121,8 +121,8 @@ export function classifyConversationWorkItem(
         conversationTitle: conversation.title,
         category: "provider_scope_approval_required",
         bucket: "needs_review",
-        label: "Approve outreach / Mercury proposal",
-        detail: `${pendingProposals.count} staged outreach, call, scheduling, or Mercury CRM proposal${pendingProposals.count === 1 ? "" : "s"} awaiting explicit approval.`,
+        label: "Approve outbound proposal",
+        detail: `${pendingProposals.count} staged outreach, call, scheduling, or CRM proposal${pendingProposals.count === 1 ? "" : "s"} awaiting explicit approval.`,
         updatedAt,
       });
     }
@@ -133,8 +133,8 @@ export function classifyConversationWorkItem(
         conversationTitle: conversation.title,
         category: "provider_scope_approval_required",
         bucket: "needs_review",
-        label: "Approve Dropcontact verification",
-        detail: `Selective Dropcontact verification preview (${verificationRun.estimatedCredits ?? 1} estimated credits) awaits approval.`,
+        label: "Approve email verification",
+        detail: "Selective work email verification preview awaits approval.",
         updatedAt,
       });
     }
@@ -146,7 +146,7 @@ export function classifyConversationWorkItem(
         category: "active_running",
         bucket: "active_research",
         label: "Verifying selected contacts",
-        detail: "Ano is running the approved selective Dropcontact verification batch.",
+        detail: "Ano is running the approved work email verification batch.",
         updatedAt,
       });
     }
@@ -163,7 +163,7 @@ export function classifyConversationWorkItem(
         label: "Verification review required",
         detail:
           verificationRun.failureMessage ??
-          "Dropcontact verification paused without automatic retry and requires review.",
+          "Email verification paused safely and requires review.",
         updatedAt,
       });
     }
@@ -176,7 +176,7 @@ export function classifyConversationWorkItem(
         category: "provider_scope_approval_required",
         bucket: "needs_review",
         label: "Approve person search",
-        detail: "1-page Prospeo buyer person search preview (max 25 people, max 1 credit) awaits approval.",
+        detail: "Decision-maker search preview awaits approval.",
         updatedAt,
       });
     }
@@ -188,7 +188,7 @@ export function classifyConversationWorkItem(
         category: "active_running",
         bucket: "active_research",
         label: "Person search running",
-        detail: "Ano is running the approved 1-page Prospeo buyer-role search.",
+        detail: "Ano is running the approved decision-maker search.",
         updatedAt,
       });
     }
@@ -205,7 +205,7 @@ export function classifyConversationWorkItem(
         label: "Person search review required",
         detail:
           personSearch.failureMessage ??
-          "Prospeo person search paused without automatic retry and requires review.",
+          "Decision-maker search paused safely and requires review.",
         updatedAt,
       });
     }
@@ -336,8 +336,8 @@ export function classifyConversationWorkItem(
       conversationTitle: conversation.title,
       category: "provider_scope_approval_required",
       bucket: "needs_review",
-      label: "Approve provider scope",
-      detail: `Bounded SearXNG scope (${researchRun.maximumSearches ?? 50} searches / ${researchRun.maximumFetches ?? 100} fetches) awaits approval.`,
+      label: "Approve research scope",
+      detail: "Market research scope awaits your approval.",
       updatedAt,
     });
   }
@@ -421,8 +421,8 @@ export function classifyConversationWorkItem(
       conversationTitle: conversation.title,
       category: "provider_scope_approval_required",
       bucket: "needs_review",
-      label: "Prepare provider scope",
-      detail: "Research plan approved; prepare a bounded SearXNG scope when ready.",
+      label: "Start market research",
+      detail: "Research plan approved; start market research when ready.",
       updatedAt,
     });
   }

@@ -506,5 +506,5 @@ test("Phase E message parts and work queue reflect pending verification and play
     verificationRun: { status: "awaiting_approval", estimatedCredits: 2, updatedAt: now },
   });
   assert.equal(workQueueItem?.category, "provider_scope_approval_required");
-  assert.equal(workQueueItem?.label, "Approve Dropcontact verification");
+  assert.equal(workQueueItem?.label, "Approve email verification");
 });

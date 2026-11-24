@@ -7,6 +7,7 @@ import type {
   ContactVerificationRunView,
   DropcontactProviderState,
 } from "@/lib/ano/people-playbooks";
+import { maskVendorNamesForDisplay } from "@/lib/ano/research-conversation";
 import { ApprovalCard } from "@/components/conversation/approval-card";
 import { MaterialButton } from "@/components/material/material-button";
 
@@ -27,7 +28,6 @@ export function ContactVerificationCard({
 }: ContactVerificationCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const isProspeo = verificationRun.providerKey === "prospeo";
-  const providerLabel = isProspeo ? "Prospeo" : "Dropcontact";
   const providerAvailable = isProspeo
     ? (prospeo?.available ?? false)
     : (dropcontact?.available ?? false);
@@ -35,21 +35,21 @@ export function ContactVerificationCard({
   return (
     <article
       className="m3-artifact-card"
-      aria-label={`Selective ${providerLabel} verification`}
+      aria-label="Work email verification"
     >
       <header className="m3-artifact-header">
         <div>
           <p className="m3-artifact-kicker">
-            STAGE B · SELECTIVE {providerLabel.toUpperCase()} VERIFICATION
+            EMAIL VERIFICATION · SELECTIVE BATCH
           </p>
           <h2>
             {verificationRun.status === "awaiting_approval"
-              ? `Verify ${verificationRun.previewPairs.length} selected contact pair${verificationRun.previewPairs.length === 1 ? "" : "s"} (${providerLabel})`
+              ? `Verify ${verificationRun.previewPairs.length} selected contact pair${verificationRun.previewPairs.length === 1 ? "" : "s"}`
               : verificationRun.status === "running"
-                ? `Running selective ${providerLabel} verification…`
+                ? "Verifying selected work emails…"
                 : verificationRun.status === "completed"
-                  ? `${providerLabel} verified ${verificationRun.verifiedCount ?? 0} of ${verificationRun.previewPairs.length} selected contacts`
-                  : `${providerLabel} verification paused for review`}
+                  ? `Verified ${verificationRun.verifiedCount ?? 0} of ${verificationRun.previewPairs.length} selected contacts`
+                  : "Email verification paused for review"}
           </h2>
         </div>
         <span className={`m3-status-badge status-${verificationRun.status}`}>
@@ -58,17 +58,13 @@ export function ContactVerificationCard({
       </header>
 
       <p className="m3-artifact-lead">
-        {`${providerLabel} email verification runs selectively on the ${verificationRun.previewPairs.length} contact${verificationRun.previewPairs.length === 1 ? "" : "s"} you selected.`}
+        {`Work email verification runs selectively on the ${verificationRun.previewPairs.length} contact${verificationRun.previewPairs.length === 1 ? "" : "s"} you selected.`}
       </p>
 
       <div className="m3-metric-strip">
         <div>
-          <span>Provider</span>
-          <strong>
-            {isProspeo
-              ? "Prospeo bulk verification"
-              : "Dropcontact (selective batch)"}
-          </strong>
+          <span>Verification mode</span>
+          <strong>Selective work email check</strong>
         </div>
         <div>
           <span>Pairs submitted</span>
@@ -102,18 +98,18 @@ export function ContactVerificationCard({
         verificationRun.status === "requires_manual_review" && (
           <div className="m3-warning-callout" role="status">
             <strong>No automatic retry attempted</strong>
-            <p>{verificationRun.failureMessage}</p>
+            <p>{maskVendorNamesForDisplay(verificationRun.failureMessage)}</p>
           </div>
         )}
 
       {verificationRun.status === "awaiting_approval" && (
         <footer className="m3-artifact-footer">
           <div className="m3-decision-copy">
-            <strong>No {providerLabel} request has been sent yet.</strong>
+            <strong>No external verification request has been sent yet.</strong>
             <p>
               {providerAvailable
                 ? "Only the listed pairs above will be submitted. Unselected people are untouched."
-                : `Add ${isProspeo ? "PROSPEO_KEY" : "DROPCONTACT_API_KEY"} on the server before approving verification.`}
+                : "Email verification is currently unavailable on this server."}
             </p>
           </div>
           <div className="m3-action-row">
@@ -130,8 +126,8 @@ export function ContactVerificationCard({
 
       <ApprovalCard
         open={confirmOpen}
-        title={`Run ${providerLabel} email verification?`}
-        body={`Submits ${verificationRun.previewPairs.length} selected contact${verificationRun.previewPairs.length === 1 ? "" : "s"} to ${providerLabel} for work email lookup and verification.`}
+        title="Verify selected work emails?"
+        body={`Checks and verifies work emails for ${verificationRun.previewPairs.length} selected contact${verificationRun.previewPairs.length === 1 ? "" : "s"}.`}
         confirmLabel="Verify contacts"
         cancelLabel="Cancel"
         isWorking={isWorking}

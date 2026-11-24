@@ -212,13 +212,13 @@ test("target-to-account execute stage scores signals separately from claims and 
   assert.equal(dossier.fit.confidence, "high");
   assert.deepEqual(dossier.claimIds, [claimId]);
   assert.ok(dossier.signals.length >= 4);
-  assert.ok(dossier.signals.every((s) => s.sourceAttribution === "Prospeo company search"));
-  assert.match(dossier.fit.industryHypothesisNote, /not confirmed facts/i);
+  assert.ok(dossier.signals.every((s) => s.sourceAttribution === "B2B company directory"));
+  assert.match(dossier.fit.industryHypothesisNote, /verified separately/i);
 
   const cohort = summarizeAccountCohort([dossier], market.name, industry.name, 42);
   assert.equal(cohort.shortlistedCount, 1);
   assert.equal(cohort.averageFitScore, 100);
-  assert.match(cohort.separationNote, /Industry-level claims/i);
+  assert.match(cohort.separationNote, /Market insights explain/i);
 
   const completedView: CompanySearchView = {
     ...makePreview(),

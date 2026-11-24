@@ -27,7 +27,10 @@ import {
   PROSPEO_SENIORITY_OPTIONS,
   type PeopleDiscoveryView,
 } from "@/lib/ano/people-playbooks";
-import type { ResearchConversationView } from "@/lib/ano/research-conversation";
+import {
+  maskVendorNamesForDisplay,
+  type ResearchConversationView,
+} from "@/lib/ano/research-conversation";
 import type { LlmPlannerConfig } from "@/server/agents/bedrock-contracts";
 import { createPlannerChatModel } from "@/server/agents/ollama-chat-model";
 
@@ -388,7 +391,8 @@ Use ONLY the workspace snapshot provided by the user message. Never invent compa
 HONESTY & EXECUTION RULE:
 - NEVER claim a company search, people search, shortlist change, email verification, or autopilot stage re-run has ALREADY finished or returned new contacts unless those exact results are already visible in the workspace snapshot above.
 - NEVER mention API credits, dollar costs, '$0', daily budgets, or billing to the user.
-- NEVER suggest or claim you are sending emails or pushing CRM proposals autonomously — outbound sends and Mercury writes remain confirmation-gated.
+- NEVER suggest or claim you are sending emails or pushing CRM proposals autonomously — outbound sends and CRM writes remain confirmation-gated.
+- WHITE-LABEL OUTPUT RULE: In your "reply" string, NEVER mention backend vendors, search engines, model providers, or infrastructure names (such as Prospeo, Dropcontact, SearXNG, OpenStreetMap, Nominatim, Overpass, Mercury, Google AI Studio, Gemini, Bedrock, Ollama, LangGraph, or Supabase) or internal environment variables/credits. Refer instead to "public web search", "local business directory", "B2B company directory", "work email verification", "company websites", or "your CRM".
 - POST-AUTOPILOT REFERENCE Q&A: When autopilot stages or saved artifacts are present and the user asks an explanatory or lookup question (e.g. "Why did you pick...?", "Show me emails/phones for...", "Which contacts should I prioritize?"), answer directly from the attached product sources, locked route rationale, Phase C claims/evidence sources, company rows, and people/email/phone rows without emitting any action directive.
 - When you emit an action object below, state concisely what you are updating or initiating; the server executes approved steps and downstream autopilot stages automatically.
 
@@ -1039,18 +1043,22 @@ export async function replyInResearchConversation(
         : String(response.content ?? "");
 
   const parsed = parseConversationChatResponse(rawContent);
+  const maskedParsed: ConversationChatOutput = {
+    ...parsed,
+    reply: maskVendorNamesForDisplay(parsed.reply),
+  };
   if (
     !userRequestedAction(userMessage) &&
-    (parsed.approveAction?.apply ||
-      parsed.filterUpdate?.apply ||
-      parsed.shortlistUpdate?.apply ||
-      parsed.peopleUpdate?.apply ||
-      parsed.verificationUpdate?.apply ||
-      parsed.templateUpdate?.apply ||
-      parsed.autopilotRerun?.apply)
+    (maskedParsed.approveAction?.apply ||
+      maskedParsed.filterUpdate?.apply ||
+      maskedParsed.shortlistUpdate?.apply ||
+      maskedParsed.peopleUpdate?.apply ||
+      maskedParsed.verificationUpdate?.apply ||
+      maskedParsed.templateUpdate?.apply ||
+      maskedParsed.autopilotRerun?.apply)
   ) {
     return {
-      ...parsed,
+      ...maskedParsed,
       approveAction: null,
       filterUpdate: null,
       shortlistUpdate: null,
@@ -1060,5 +1068,9 @@ export async function replyInResearchConversation(
       autopilotRerun: null,
     };
   }
-  return applyDeterministicChatFailsafes(userMessage, parsed, context);
+  const withFailsafes = applyDeterministicChatFailsafes(userMessage, maskedParsed, context);
+  return {
+    ...withFailsafes,
+    reply: maskVendorNamesForDisplay(withFailsafes.reply),
+  };
 }

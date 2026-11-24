@@ -70,7 +70,7 @@ function gatewayToken() {
 
 function configurationError() {
   return new ResearchProviderError(
-    "SearXNG is not configured. Add the private HTTPS gateway URL and gateway token to Ano’s server environment before preparing public research.",
+    "Public web research search is not configured on this server.",
     "NOT_CONFIGURED",
   );
 }
@@ -81,14 +81,14 @@ export function searxngConfiguration() {
     available: Boolean(baseUrl() && gatewayToken()),
     maximumSearches: 50,
     maximumFetches: 100,
-    pricingNote: "SearXNG is Ano’s private search service. Ano will show the mission’s 50-search and 100-source maximum before approval; individual public websites may still reject retrieval.",
+    pricingNote: "Ano runs bounded public web searches within the approved search and source limits; individual websites may still block automated retrieval.",
   };
 }
 
 async function readTextWithinLimit(response: Response, maximumBytes: number) {
   const headerLength = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(headerLength) && headerLength > maximumBytes) {
-    throw new ResearchProviderError("SearXNG returned a response larger than Ano’s safe processing limit.", "INVALID_RESPONSE", { contentLength: headerLength, maximumBytes });
+    throw new ResearchProviderError("The search service returned a response larger than Ano’s safe processing limit.", "INVALID_RESPONSE", { contentLength: headerLength, maximumBytes });
   }
   if (!response.body) return "";
   const reader = response.body.getReader();
@@ -102,7 +102,7 @@ async function readTextWithinLimit(response: Response, maximumBytes: number) {
       size += next.value.byteLength;
       if (size > maximumBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new ResearchProviderError("SearXNG returned a response larger than Ano’s safe processing limit.", "INVALID_RESPONSE", { responseBytes: size, maximumBytes });
+        throw new ResearchProviderError("The search service returned a response larger than Ano’s safe processing limit.", "INVALID_RESPONSE", { responseBytes: size, maximumBytes });
       }
       text += decoder.decode(next.value, { stream: true });
     }
@@ -130,7 +130,7 @@ async function searchRequest(query: string): Promise<unknown> {
     const response = await fetch(url, {
       headers: {
         // Ano is an authenticated application client, not a browser. Include
-        // text/html as an acceptable representation for SearXNG's standard
+        // text/html as an acceptable representation for the search gateway's
         // request classifier while retaining JSON as the requested response.
         Accept: "application/json, text/html;q=0.9",
         "Accept-Language": "en",
@@ -144,24 +144,24 @@ async function searchRequest(query: string): Promise<unknown> {
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     const text = await readTextWithinLimit(response, MAX_RESPONSE_BYTES);
     if (!response.ok) {
-      if (response.status === 429) throw new ResearchProviderError("The private SearXNG service rate-limited this run. Ano stopped without retrying.", "RATE_LIMITED", { responseStatus: response.status });
-      if (response.status >= 500) throw new ResearchProviderError("The private SearXNG service did not confirm a usable search response. Ano stopped for manual review and will not retry it automatically.", "UNCERTAIN_OUTCOME", { responseStatus: response.status });
-      throw new ResearchProviderError("The private SearXNG gateway rejected this bounded research request. No retry was attempted.", "REJECTED", { responseStatus: response.status });
+      if (response.status === 429) throw new ResearchProviderError("The web search service rate-limited this run. Ano stopped without retrying.", "RATE_LIMITED", { responseStatus: response.status });
+      if (response.status >= 500) throw new ResearchProviderError("The web search service did not confirm a usable search response. Ano stopped for manual review and will not retry it automatically.", "UNCERTAIN_OUTCOME", { responseStatus: response.status });
+      throw new ResearchProviderError("The web search service rejected this bounded research request. No retry was attempted.", "REJECTED", { responseStatus: response.status });
     }
     if (!contentType.includes("application/json")) {
-      throw new ResearchProviderError("SearXNG returned a response Ano could not validate. No follow-up request was attempted.", "INVALID_RESPONSE", { contentType, responseBytes: text.length });
+      throw new ResearchProviderError("The web search service returned a response Ano could not validate. No follow-up request was attempted.", "INVALID_RESPONSE", { contentType, responseBytes: text.length });
     }
     try {
       return JSON.parse(text) as unknown;
     } catch {
-      throw new ResearchProviderError("SearXNG returned malformed JSON. No follow-up request was attempted.", "INVALID_RESPONSE", { contentType, responseBytes: text.length });
+      throw new ResearchProviderError("The web search service returned malformed JSON. No follow-up request was attempted.", "INVALID_RESPONSE", { contentType, responseBytes: text.length });
     }
   } catch (error) {
     if (error instanceof ResearchProviderError) throw error;
     if (controller.signal.aborted) {
-      throw new ResearchProviderError("Ano could not confirm whether the private SearXNG search request completed. It stopped for manual review without retrying.", "UNCERTAIN_OUTCOME");
+      throw new ResearchProviderError("Ano could not confirm whether the web search request completed. It stopped for manual review without retrying.", "UNCERTAIN_OUTCOME");
     }
-    throw new ResearchProviderError("Ano could not confirm the private SearXNG search request outcome. It stopped for manual review without retrying.", "UNCERTAIN_OUTCOME");
+    throw new ResearchProviderError("Ano could not confirm the web search request outcome. It stopped for manual review without retrying.", "UNCERTAIN_OUTCOME");
   } finally {
     clearTimeout(timer);
   }
@@ -174,13 +174,13 @@ export const searxngResearchProvider = {
   async search(query: string): Promise<ProviderSearchResponse> {
     const value = query.trim();
     if (value.length < 3 || value.length > 380) {
-      throw new ResearchProviderError("Ano rejected an invalid research query before contacting SearXNG.", "INVALID_RESPONSE");
+      throw new ResearchProviderError("Ano rejected an invalid research query before sending it.", "INVALID_RESPONSE");
     }
     const startedAt = Date.now();
     try {
       const payload = searxngResponseSchema.safeParse(await searchRequest(value));
       if (!payload.success) {
-        throw new ResearchProviderError("SearXNG returned a search response Ano could not validate. No follow-up request was attempted.", "INVALID_RESPONSE", { issueCount: payload.error.issues.length });
+        throw new ResearchProviderError("The web search service returned a search response Ano could not validate. No follow-up request was attempted.", "INVALID_RESPONSE", { issueCount: payload.error.issues.length });
       }
       const uniqueUrls = new Set<string>();
       const results = payload.data.results.flatMap((result, index) => {

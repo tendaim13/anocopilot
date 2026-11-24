@@ -66,7 +66,7 @@ export async function POST(
   );
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Provide a valid people discovery, Dropcontact verification, or playbook action." },
+      { error: "Provide a valid people discovery, email verification, or playbook action." },
       { status: 400 },
     );
   }

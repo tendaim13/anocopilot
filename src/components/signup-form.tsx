@@ -20,13 +20,13 @@ function formatSignUpError(error: { message?: string; code?: string; status?: nu
   const lower = message.toLowerCase();
 
   if (code === "over_email_send_rate_limit" || error.status === 429 || lower.includes("rate limit")) {
-    return "Too many confirmation emails were requested recently. Wait a minute before trying again, or configure custom SMTP in Supabase Auth.";
+    return "Too many confirmation emails were requested recently. Wait a minute before trying again.";
   }
   if (code === "user_already_exists" || lower.includes("already registered")) {
     return "An account with this work email already exists. Sign in instead.";
   }
   if (code === "signup_disabled" || lower.includes("signups not allowed")) {
-    return "Email sign-ups are currently disabled in Supabase Auth settings.";
+    return "Email sign-ups are currently disabled.";
   }
   if (code === "weak_password" || lower.includes("password")) {
     return message || "Choose a stronger password (at least 8 characters).";
@@ -91,7 +91,7 @@ export function SignUpForm() {
     const client = getBrowserSupabaseClient();
     if (!client) {
       setIsError(true);
-      setMessage("Ano is missing its public Supabase configuration.");
+      setMessage("Authentication service is temporarily unavailable.");
       return;
     }
 

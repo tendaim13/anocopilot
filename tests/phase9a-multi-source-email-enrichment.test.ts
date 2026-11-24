@@ -381,7 +381,7 @@ test("multi-provider verification preview, cohort formatting, and outreach eligi
   assert.equal(prospeoPreview.providerKey, "prospeo");
   assert.equal(prospeoPreview.estimatedCredits, 1);
   assert.ok(prospeoPreview.previewPairs[0]?.fieldsSent.includes("linkedin_url"));
-  assert.match(prospeoPreview.estimateDetail, /Prospeo/);
+  assert.ok(prospeoPreview.estimateDetail.length > 0);
 
   const prospeoVerified = {
     ...namedPublicDirect,
@@ -398,13 +398,13 @@ test("multi-provider verification preview, cohort formatting, and outreach eligi
   };
 
   const rowVerified = formatContactForCohortTable(prospeoVerified);
-  assert.equal(rowVerified.emailSourceLabel, "Prospeo verified");
+  assert.equal(rowVerified.emailSourceLabel, "Verified work email");
   assert.equal(rowVerified.bestEmail, "mei.tan@harbourdental.example");
 
   const verifiedEligibility = evaluateContactEligibility(prospeoVerified, "email");
   assert.equal(verifiedEligibility.status, "eligible");
   assert.equal(verifiedEligibility.canProposeEmailSend, true);
-  assert.ok(verifiedEligibility.reasons.some((r) => r.includes("Prospeo-verified email")));
+  assert.ok(verifiedEligibility.reasons.some((r) => r.includes("Verified work email")));
 });
 
 test("Dropcontact async polling sends linkedin, prefers nominative@pro, falls back to mobile_phone, and rejects fail qualifications", async () => {

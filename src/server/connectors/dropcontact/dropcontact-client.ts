@@ -197,7 +197,7 @@ async function fetchDropcontactJson(
     if (response.status === 429) {
       throw new DropcontactClientError(
         "RATE_LIMITED",
-        "Dropcontact is rate-limiting requests. Ano did not retry automatically.",
+        "The email verification service is rate-limiting requests. Ano did not retry automatically.",
       );
     }
 
@@ -205,7 +205,7 @@ async function fetchDropcontactJson(
     if (!parsed.success) {
       throw new DropcontactClientError(
         "INVALID_RESPONSE",
-        "Dropcontact returned an unusable response. Ano stopped safely without retrying.",
+        "The email verification service returned an unusable response. Ano stopped safely without retrying.",
       );
     }
 
@@ -219,12 +219,12 @@ async function fetchDropcontactJson(
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new DropcontactClientError(
         "TIMEOUT_NO_RETRY",
-        "Dropcontact verification timed out before confirmation. Ano stopped for manual review without retrying.",
+        "Work email verification timed out before confirmation. Ano stopped for manual review without retrying.",
       );
     }
     throw new DropcontactClientError(
       "NETWORK_ERROR",
-      "Ano could not reach Dropcontact. No automatic retry was attempted.",
+      "Ano could not reach the email verification service. No automatic retry was attempted.",
     );
   } finally {
     clearTimeout(timer);
@@ -236,7 +236,7 @@ export function dropcontactConfiguration(): DropcontactProviderState {
     provider: "dropcontact",
     available: Boolean(process.env.DROPCONTACT_API_KEY?.trim()),
     pricingNote:
-      "Selective verification submits only the named people you check (no bulk enrichment). Each verified lookup discloses estimated credits upfront.",
+      "Selective verification checks only the named people you select (no bulk enrichment).",
   };
 }
 
@@ -245,7 +245,7 @@ function requireDropcontactKey() {
   if (!key) {
     throw new DropcontactClientError(
       "DROPCONTACT_KEY_UNCONFIGURED",
-      "Add DROPCONTACT_API_KEY on the server before verifying contacts with Dropcontact.",
+      "Work email verification is not configured on this server.",
     );
   }
   return key;
@@ -264,7 +264,7 @@ export async function verifyContactsWithDropcontact(
   if (pairs.length === 0 || pairs.length > 10) {
     throw new DropcontactClientError(
       "INVALID_REQUEST",
-      "Dropcontact requires between 1 and 10 selected contacts per verification batch.",
+      "Work email verification requires between 1 and 10 selected contacts per batch.",
     );
   }
 
@@ -309,8 +309,8 @@ export async function verifyContactsWithDropcontact(
       throw new DropcontactClientError(
         "INVALID_RESPONSE",
         postRes.parsed.reason
-          ? `Dropcontact error: ${postRes.parsed.reason}`
-          : "Dropcontact returned an unusable response. Ano stopped safely without retrying.",
+          ? `Email verification error: ${postRes.parsed.reason}`
+          : "The email verification service returned an unusable response. Ano stopped safely without retrying.",
       );
     }
 
@@ -328,7 +328,7 @@ export async function verifyContactsWithDropcontact(
       if (!requestId) {
         throw new DropcontactClientError(
           "INVALID_RESPONSE",
-          "Dropcontact did not return batch data or a request_id for polling.",
+          "The email verification service did not return batch data or a job handle for polling.",
         );
       }
 
@@ -358,8 +358,8 @@ export async function verifyContactsWithDropcontact(
           throw new DropcontactClientError(
             "INVALID_RESPONSE",
             pollRes.parsed.reason
-              ? `Dropcontact error: ${pollRes.parsed.reason}`
-              : "Dropcontact returned an unusable polling response. Ano stopped safely without retrying.",
+              ? `Email verification error: ${pollRes.parsed.reason}`
+              : "The email verification service returned an unusable polling response. Ano stopped safely without retrying.",
           );
         }
 
@@ -372,7 +372,7 @@ export async function verifyContactsWithDropcontact(
       if (!finalPayload) {
         throw new DropcontactClientError(
           "TIMEOUT_NO_RETRY",
-          `Dropcontact batch ${requestId} is still processing after polling. No extra credits were spent and Ano did not re-submit the batch.`,
+          `Verification batch ${requestId} is still processing after polling. Ano paused without re-submitting the batch.`,
         );
       }
     }

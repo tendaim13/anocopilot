@@ -17,7 +17,10 @@ import {
   type PeopleDiscoveryView,
   type PersonDiscoveryProvider,
 } from "@/lib/ano/people-playbooks";
-import type { ResearchBrief } from "@/lib/ano/research-conversation";
+import {
+  maskVendorNamesForDisplay,
+  type ResearchBrief,
+} from "@/lib/ano/research-conversation";
 import { ApprovalCard } from "@/components/conversation/approval-card";
 import { MaterialButton } from "@/components/material/material-button";
 import { MaterialTextField } from "@/components/material/material-text-field";
@@ -150,11 +153,9 @@ export function PeopleDiscoveryCard({
   const [localSelectedIds, setLocalSelectedIds] = useState<string[]>(() =>
     contacts.filter((c) => c.selectedForVerification).map((c) => c.id),
   );
-  const [verificationProvider, setVerificationProvider] = useState<ContactVerificationProvider>(
-    () =>
-      peopleDiscovery.verificationRun?.providerKey ??
-      (prospeo?.available || !dropcontact?.available ? "prospeo" : "dropcontact"),
-  );
+  const verificationProvider: ContactVerificationProvider =
+    peopleDiscovery.verificationRun?.providerKey ??
+    (prospeo?.available || !dropcontact?.available ? "prospeo" : "dropcontact");
   const [confirmApproveOpen, setConfirmApproveOpen] = useState(false);
 
   if (shortlistedAccounts.length === 0 && !personSearch) {
@@ -209,27 +210,6 @@ export function PeopleDiscoveryCard({
   const showCommitteeForm =
     !personSearch || personSearch.status === "awaiting_approval" || isEditingCommittee;
 
-  const liveProspeoFiltersPreview = useMemo(() => {
-    const domains = shortlistedAccounts.map((a) => a.domain).filter(Boolean);
-    const includeTitles = splitCommaList(roleInput);
-    const excludeTitles = splitCommaList(excludeInput);
-    return {
-      page: 1,
-      filters: {
-        company:
-          domains.length > 0
-            ? { websites: { include: domains } }
-            : { names: { include: shortlistedAccounts.map((a) => a.name) } },
-        ...(seniorities.length > 0 ? { person_seniority: { include: seniorities } } : {}),
-        ...(departments.length > 0 ? { person_department: { include: departments } } : {}),
-        person_job_title: {
-          include: includeTitles.length > 0 ? includeTitles : defaultCommittee.includeTitles,
-          ...(excludeTitles.length > 0 ? { exclude: excludeTitles } : {}),
-        },
-      },
-    };
-  }, [shortlistedAccounts, roleInput, excludeInput, seniorities, departments, defaultCommittee.includeTitles]);
-
   return (
     <article
       className="m3-artifact-card"
@@ -239,7 +219,7 @@ export function PeopleDiscoveryCard({
         <div>
           <p className="m3-artifact-kicker">
             PHASE E · BUYING COMMITTEE &amp; PEOPLE (
-            {isWebsiteSelected ? "WEBSITE TEAM" : "PROSPEO PEOPLE"})
+            {isWebsiteSelected ? "COMPANY WEBSITES" : "B2B DIRECTORY"})
           </p>
           <h2>
             {!personSearch
@@ -247,7 +227,7 @@ export function PeopleDiscoveryCard({
               : personSearch.status === "awaiting_approval"
                 ? personSearch.providerKey === "website_team"
                   ? "Ready to scan shortlisted company websites"
-                  : "Review buying committee & Prospeo people search"
+                  : "Review buying committee & decision-maker search"
                 : personSearch.status === "running"
                   ? "Discovering decision-makers…"
                   : personSearch.status === "completed"
@@ -271,7 +251,7 @@ export function PeopleDiscoveryCard({
           ? personSearch.providerKey === "website_team"
             ? "Scans shortlisted company websites (up to 3 pages per site) to extract named owners, directors, and managers with public emails."
             : "Returns up to 25 named decision-makers matching your Buying Committee filters across shortlisted companies."
-          : "Ano infers target departments, seniority bands, and job titles from your product and shortlisted company size. Run a website team scan first or query Prospeo with structured filters."}
+          : "Ano infers target departments, seniority bands, and job titles from your product and shortlisted company size. Run a website team scan first or query the B2B people directory."}
       </p>
 
       <div className="m3-metric-strip">
@@ -281,18 +261,14 @@ export function PeopleDiscoveryCard({
         </div>
         <div>
           <span>People source</span>
-          <strong>{isWebsiteSelected ? "Company websites" : "Prospeo directory"}</strong>
+          <strong>{isWebsiteSelected ? "Company websites" : "B2B people directory"}</strong>
         </div>
         <div>
           <span>Email verification</span>
           <strong>
-            {prospeo?.available && dropcontact?.available
-              ? "Prospeo or Dropcontact"
-              : prospeo?.available
-                ? "Prospeo Verify"
-                : dropcontact?.available
-                  ? "Dropcontact Verify"
-                  : "No verifier key configured"}
+            {prospeo?.available || dropcontact?.available
+              ? "Work email verifier ready"
+              : "Verification unavailable"}
           </strong>
         </div>
       </div>
@@ -314,7 +290,7 @@ export function PeopleDiscoveryCard({
                 disabled={isWorking}
                 onClick={() => setProviderKey("prospeo")}
               >
-                Prospeo People Directory
+                B2B People Directory
               </MaterialButton>
             </div>
           </div>
@@ -344,7 +320,7 @@ export function PeopleDiscoveryCard({
           </div>
 
           <div className="m3-chip-group">
-            <span className="m3-chip-group-label">Seniority band (Prospeo &amp; website scoring)</span>
+            <span className="m3-chip-group-label">Seniority band</span>
             <md-chip-set aria-label="Target seniority levels">
               {PROSPEO_SENIORITY_OPTIONS.map((option) => (
                 <md-filter-chip
@@ -378,7 +354,7 @@ export function PeopleDiscoveryCard({
             value={roleInput}
             onValueChange={setRoleInput}
             placeholder="e.g. Principal Dentist, Practice Manager, COO, CEO"
-            supportingText="Ordered priority titles matched on company pages and Prospeo person_job_title.include."
+            supportingText="Ordered priority titles matched across company pages and directory profiles."
             disabled={isWorking}
           />
 
@@ -387,36 +363,9 @@ export function PeopleDiscoveryCard({
             value={excludeInput}
             onValueChange={setExcludeInput}
             placeholder="e.g. Intern, Assistant, Receptionist, Hygienist"
-            supportingText="Filtered out during website extraction and sent in Prospeo person_job_title.exclude."
+            supportingText="Filtered out during website extraction and directory search."
             disabled={isWorking}
           />
-
-          <details className="m3-details-preview">
-            <summary>
-              {isWebsiteSelected
-                ? "Inspect website team crawl scope"
-                : "Inspect Prospeo /search-person JSON payload"}
-            </summary>
-            <pre className="m3-json-preview" aria-label="Person search query preview">
-              {JSON.stringify(
-                isWebsiteSelected
-                  ? {
-                      source: "website_team",
-                      target_websites: shortlistedAccounts
-                        .map((a) => a.website ?? (a.domain ? `https://${a.domain}` : null))
-                        .filter(Boolean),
-                      departments,
-                      seniorities,
-                      include_titles: splitCommaList(roleInput),
-                      exclude_titles: splitCommaList(excludeInput),
-                      max_pages_per_company: 3,
-                    }
-                  : liveProspeoFiltersPreview,
-                null,
-                2,
-              )}
-            </pre>
-          </details>
         </div>
       ) : (
         <section className="m3-artifact-section">
@@ -447,7 +396,7 @@ export function PeopleDiscoveryCard({
       {personSearch?.failureMessage && personSearch.status === "requires_manual_review" && (
         <div className="m3-warning-callout" role="status">
           <strong>No automatic retry attempted</strong>
-          <p>{personSearch.failureMessage}</p>
+          <p>{maskVendorNamesForDisplay(personSearch.failureMessage)}</p>
         </div>
       )}
 
@@ -565,14 +514,14 @@ export function PeopleDiscoveryCard({
               {isWorking
                 ? isWebsiteSelected
                   ? "Scanning company websites…"
-                  : "Preparing Prospeo preview…"
+                  : "Preparing directory preview…"
                 : isWebsiteSelected && onRunFreePeopleSearch
                   ? contacts.length > 0
                     ? "Refresh website people"
                     : "Find decision-makers on websites"
                   : personSearch
-                    ? "Refresh Prospeo preview"
-                    : "Prepare Prospeo people preview"}
+                    ? "Refresh preview"
+                    : "Prepare directory people preview"}
             </MaterialButton>
           )}
 
@@ -592,7 +541,7 @@ export function PeopleDiscoveryCard({
             >
               {personSearch.providerKey === "website_team"
                 ? "Run website team scan"
-                : "Run Prospeo people search"}
+                : "Run decision-maker search"}
             </MaterialButton>
           )}
 
@@ -609,31 +558,13 @@ export function PeopleDiscoveryCard({
           )}
 
           {contacts.length > 0 && (
-            <>
-              <div className="m3-action-row" role="group" aria-label="Email verification provider">
-                <MaterialButton
-                  variant={verificationProvider === "prospeo" ? "tonal" : "outlined"}
-                  disabled={isWorking}
-                  onClick={() => setVerificationProvider("prospeo")}
-                >
-                  Prospeo Verify
-                </MaterialButton>
-                <MaterialButton
-                  variant={verificationProvider === "dropcontact" ? "tonal" : "outlined"}
-                  disabled={isWorking}
-                  onClick={() => setVerificationProvider("dropcontact")}
-                >
-                  Dropcontact Verify
-                </MaterialButton>
-              </div>
-              <MaterialButton
-                variant="outlined"
-                disabled={isWorking || effectiveSelectedIds.length === 0}
-                onClick={() => onPrepareVerification(effectiveSelectedIds, verificationProvider)}
-              >
-                {`Find & verify emails (${effectiveSelectedIds.length})`}
-              </MaterialButton>
-            </>
+            <MaterialButton
+              variant="outlined"
+              disabled={isWorking || effectiveSelectedIds.length === 0}
+              onClick={() => onPrepareVerification(effectiveSelectedIds, verificationProvider)}
+            >
+              {`Verify selected emails (${effectiveSelectedIds.length})`}
+            </MaterialButton>
           )}
 
           {shortlistedAccounts.length > 0 && (
@@ -648,7 +579,7 @@ export function PeopleDiscoveryCard({
           personSearch.providerKey === "prospeo" &&
           !prospeoAvailable && (
             <p className="m3-helper-note">
-              Add PROSPEO_KEY on the server before running a Prospeo person search, or switch to Website Team Pages above.
+              Directory discovery is currently unavailable on this server. Switch to Company Website Team Pages above.
             </p>
           )}
       </footer>
@@ -656,7 +587,7 @@ export function PeopleDiscoveryCard({
       {personSearch && personSearch.providerKey === "prospeo" && (
         <ApprovalCard
           open={confirmApproveOpen}
-          title="Run Prospeo people search?"
+          title="Run decision-maker search?"
           body={`Searches up to 25 named buyers matching [${personSearch.approvedRoles.join(", ")}] across ${personSearch.shortlistedAccountNames.join(", ")}. Email verification runs separately.`}
           confirmLabel="Run people search"
           cancelLabel="Keep reviewing"

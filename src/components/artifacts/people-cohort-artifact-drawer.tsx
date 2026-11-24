@@ -65,11 +65,9 @@ export function PeopleCohortArtifactDrawer({
   useMaterialWeb();
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState<PeopleDrawerFilter>("all");
-  const [verificationProvider, setVerificationProvider] = useState<ContactVerificationProvider>(
-    () =>
-      peopleDiscovery?.verificationRun?.providerKey ??
-      (prospeo?.available || !dropcontact?.available ? "prospeo" : "dropcontact"),
-  );
+  const verificationProvider: ContactVerificationProvider =
+    peopleDiscovery?.verificationRun?.providerKey ??
+    (prospeo?.available || !dropcontact?.available ? "prospeo" : "dropcontact");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(
     initialSelectedContactId,
   );
@@ -282,9 +280,7 @@ export function PeopleCohortArtifactDrawer({
                   </div>
                   {activeContact.verifiedDetails?.email ? (
                     <p className="m3-verified-contact-line">
-                      {activeContact.verifiedDetails.provider === "prospeo"
-                        ? "Prospeo verified email:"
-                        : "Dropcontact verified email:"}{" "}
+                      Verified work email:{" "}
                       <strong>{activeContact.verifiedDetails.email}</strong>
                       {activeContact.verifiedDetails.emailQualification
                         ? ` (${activeContact.verifiedDetails.emailQualification})`
@@ -301,7 +297,7 @@ export function PeopleCohortArtifactDrawer({
                         : "office inbox"}
                       ): <strong>{activeContact.publicEmail}</strong>
                       {activeContact.publicPhone ? ` · Phone: ${activeContact.publicPhone}` : ""}
-                      {" "}— unverified until Prospeo or Dropcontact verification completes.
+                      {" "}— unverified until work email verification completes.
                     </p>
                   ) : (
                     <p className="m3-helper-note">
@@ -309,8 +305,8 @@ export function PeopleCohortArtifactDrawer({
                       {activeContact.publicPhone
                         ? ` (public website phone: ${activeContact.publicPhone})`
                         : ""}{" "}
-                      — no email has been verified until you select contacts and approve Prospeo or
-                      Dropcontact verification.
+                      — no email has been verified until you select contacts and run work email
+                      verification.
                     </p>
                   )}
                 </section>
@@ -353,7 +349,7 @@ export function PeopleCohortArtifactDrawer({
                     [
                       ["all", `All (${counts.all})`],
                       ["website_team", `Website (${counts.website_team})`],
-                      ["prospeo", `Prospeo (${counts.prospeo})`],
+                      ["prospeo", `Directory (${counts.prospeo})`],
                       ["selected", `Selected (${counts.selected})`],
                       ["verified", `Verified (${counts.verified})`],
                     ] as Array<[PeopleDrawerFilter, string]>
@@ -479,20 +475,6 @@ export function PeopleCohortArtifactDrawer({
               {selectedContactIds.length > 0 && (
                 <div className="m3-action-row">
                   <MaterialButton
-                    variant={verificationProvider === "prospeo" ? "tonal" : "outlined"}
-                    disabled={isWorking}
-                    onClick={() => setVerificationProvider("prospeo")}
-                  >
-                    Prospeo Verify
-                  </MaterialButton>
-                  <MaterialButton
-                    variant={verificationProvider === "dropcontact" ? "tonal" : "outlined"}
-                    disabled={isWorking}
-                    onClick={() => setVerificationProvider("dropcontact")}
-                  >
-                    Dropcontact Verify
-                  </MaterialButton>
-                  <MaterialButton
                     variant="filled"
                     disabled={isWorking}
                     onClick={() => {
@@ -500,7 +482,7 @@ export function PeopleCohortArtifactDrawer({
                       onPrepareVerification(selectedContactIds, verificationProvider);
                     }}
                   >
-                    {`Preview ${verificationProvider === "prospeo" ? "Prospeo" : "Dropcontact"} verification (${selectedContactIds.length} selected)`}
+                    {`Verify selected emails (${selectedContactIds.length})`}
                   </MaterialButton>
                 </div>
               )}

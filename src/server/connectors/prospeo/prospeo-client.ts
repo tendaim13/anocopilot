@@ -165,7 +165,7 @@ const personPayloadSchema = z.object({
 
 function requireProspeoKey() {
   const key = process.env.PROSPEO_KEY?.trim();
-  if (!key) throw new ProspeoClientError("PROSPEO_KEY_UNCONFIGURED", "Ano’s server does not have a Prospeo key configured.");
+  if (!key) throw new ProspeoClientError("PROSPEO_KEY_UNCONFIGURED", "B2B directory discovery is not configured on this server.");
   return key;
 }
 
@@ -187,14 +187,14 @@ function rateLimit(headers: Headers): ProspeoRateLimit {
 function errorFrom(status: number, payload: unknown) {
   const parsed = errorPayloadSchema.safeParse(payload);
   const code = parsed.success ? parsed.data.error_code : undefined;
-  if (status === 429) return new ProspeoClientError("RATE_LIMITED", "Prospeo is rate-limiting this request. Ano did not retry it.");
-  if (code === "INVALID_API_KEY") return new ProspeoClientError("INVALID_API_KEY", "Prospeo rejected the configured key.");
-  if (code === "INSUFFICIENT_CREDITS") return new ProspeoClientError("INSUFFICIENT_CREDITS", "Prospeo reports that this workspace does not have enough credits for this search.");
-  if (code === "INVALID_FILTERS") return new ProspeoClientError("INVALID_FILTERS", "Prospeo rejected Ano’s search filters. No automatic retry was attempted.");
-  if (code === "PLAN_REQUIRED") return new ProspeoClientError("PLAN_REQUIRED", "The proposed Prospeo filter requires a different plan. No automatic retry was attempted.");
-  if (code === "NO_RESULTS") return new ProspeoClientError("NO_RESULTS", "Prospeo found no companies for this approved search.");
-  if (code === "SERVICE_TEMPORARILY_UNAVAILABLE" || code === "INTERNAL_ERROR") return new ProspeoClientError("SERVICE_UNAVAILABLE", "Prospeo could not complete this request. Ano marked it for review instead of retrying it.");
-  return new ProspeoClientError("INVALID_RESPONSE", "Prospeo returned a response Ano could not safely use.");
+  if (status === 429) return new ProspeoClientError("RATE_LIMITED", "The directory service is rate-limiting this request. Ano did not retry it.");
+  if (code === "INVALID_API_KEY") return new ProspeoClientError("INVALID_API_KEY", "The directory service rejected server authentication.");
+  if (code === "INSUFFICIENT_CREDITS") return new ProspeoClientError("INSUFFICIENT_CREDITS", "The B2B directory quota has been exhausted for this request.");
+  if (code === "INVALID_FILTERS") return new ProspeoClientError("INVALID_FILTERS", "The directory service rejected Ano’s search filters. No automatic retry was attempted.");
+  if (code === "PLAN_REQUIRED") return new ProspeoClientError("PLAN_REQUIRED", "The proposed directory filter is not available on the current tier. No automatic retry was attempted.");
+  if (code === "NO_RESULTS") return new ProspeoClientError("NO_RESULTS", "No matching companies were found for this approved search.");
+  if (code === "SERVICE_TEMPORARILY_UNAVAILABLE" || code === "INTERNAL_ERROR") return new ProspeoClientError("SERVICE_UNAVAILABLE", "The directory service could not complete this request. Ano marked it for review instead of retrying it.");
+  return new ProspeoClientError("INVALID_RESPONSE", "The directory service returned a response Ano could not safely use.");
 }
 
 async function prospeoRequest(path: string, init: RequestInit, fetcher: ProspeoFetcher = fetch) {
@@ -218,8 +218,8 @@ async function prospeoRequest(path: string, init: RequestInit, fetcher: ProspeoF
     return { payload, rateLimit: rateLimit(response.headers) };
   } catch (error) {
     if (error instanceof ProspeoClientError) throw error;
-    if (error instanceof DOMException && error.name === "AbortError") throw new ProspeoClientError("NETWORK_ERROR", "Prospeo did not respond before Ano’s safe timeout.");
-    throw new ProspeoClientError("NETWORK_ERROR", "Ano could not reach Prospeo. No automatic retry was attempted.");
+    if (error instanceof DOMException && error.name === "AbortError") throw new ProspeoClientError("NETWORK_ERROR", "The directory service did not respond before Ano’s safe timeout.");
+    throw new ProspeoClientError("NETWORK_ERROR", "Ano could not reach the directory service. No automatic retry was attempted.");
   } finally {
     clearTimeout(timer);
   }

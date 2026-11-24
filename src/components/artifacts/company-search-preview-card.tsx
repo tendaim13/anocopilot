@@ -14,6 +14,7 @@ import {
   recommendDiscoveryProvider,
 } from "@/lib/ano/company-discovery";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
+import { maskVendorNamesForDisplay } from "@/lib/ano/research-conversation";
 import { ApprovalCard } from "@/components/conversation/approval-card";
 import { MaterialButton } from "@/components/material/material-button";
 import { MaterialTextField } from "@/components/material/material-text-field";
@@ -176,23 +177,23 @@ export function CompanySearchPreviewCard({
       <header className="m3-artifact-header">
         <div>
           <p className="m3-artifact-kicker">
-            PHASE D · {displayedProvider === "openstreetmap" ? "OPENSTREETMAP LOCAL DISCOVERY" : "PROSPEO COMPANY DISCOVERY"}
+            PHASE D · {displayedProvider === "openstreetmap" ? "LOCAL BUSINESS DISCOVERY" : "B2B COMPANY DISCOVERY"}
           </p>
           <h2>
             {!companySearch
               ? isOsmSelected
-                ? "Prepare an OpenStreetMap local business preview"
-                : "Prepare a Prospeo location & query preview"
+                ? "Prepare a local business discovery preview"
+                : "Prepare a B2B location & query preview"
               : companySearch.status === "awaiting_approval"
                 ? companySearch.providerKey === "openstreetmap"
-                  ? "Review OpenStreetMap area & category tags"
-                  : "Review verified Prospeo filters before searching"
+                  ? "Review target area & business category tags"
+                  : "Review verified filters before searching"
                 : isRunning
                   ? "Running approved bounded company search…"
                   : isCompleted
                     ? companySearch.providerKey === "openstreetmap"
-                      ? "Approved OpenStreetMap local search completed"
-                      : "Approved 1-page Prospeo search completed"
+                      ? "Approved local business search completed"
+                      : "Approved B2B company search completed"
                     : "Company search paused safely for review"}
           </h2>
         </div>
@@ -207,10 +208,10 @@ export function CompanySearchPreviewCard({
         >
           {!companySearch
             ? isOsmSelected
-              ? "OpenStreetMap ready"
+              ? "Local search ready"
               : prospeoAvailable
-                ? "Prospeo ready"
-                : "Prospeo key missing"
+                ? "Directory ready"
+                : "Directory unavailable"
             : companySearch.status.replaceAll("_", " ")}
         </span>
       </header>
@@ -218,7 +219,7 @@ export function CompanySearchPreviewCard({
       <p className="m3-artifact-lead">
         {!companySearch
           ? isOsmSelected
-            ? "OpenStreetMap finds real local physical businesses (like dental clinics) by area and map category tags, with optional official-website resolution."
+            ? "Finds real local physical businesses (like dental clinics) by area and category tags, with optional official-website resolution."
             : "Location and industry suggestions verify your query before returning up to 25 matching organizations using profile-only matching."
           : companySearch.providerKey === "openstreetmap"
             ? "Finds local physical businesses matching your area and category tags, with optional website resolution."
@@ -259,14 +260,14 @@ export function CompanySearchPreviewCard({
               disabled={isWorking}
               onClick={() => handleSelectProvider("openstreetmap")}
             >
-              OpenStreetMap Local Map
+              Local Business Map
             </MaterialButton>
             <MaterialButton
               variant={providerKey === "prospeo" ? "filled" : "outlined"}
               disabled={isWorking}
               onClick={() => handleSelectProvider("prospeo")}
             >
-              Prospeo B2B Directory
+              B2B Company Directory
             </MaterialButton>
           </div>
 
@@ -274,7 +275,7 @@ export function CompanySearchPreviewCard({
             <MaterialTextField
               label={
                 isOsmSelected
-                  ? "Target cities or regions (OpenStreetMap)"
+                  ? "Target cities or regions (local map)"
                   : "Target location(s) to canonicalize"
               }
               value={locationInput}
@@ -289,8 +290,8 @@ export function CompanySearchPreviewCard({
               }
               supportingText={
                 isOsmSelected
-                  ? "Separate multiple locations with semicolons (or commas). Specific cities/metros work fastest on OpenStreetMap."
-                  : "Comma-separated countries, states, or cities verified against Prospeo suggestions."
+                  ? "Separate multiple locations with semicolons (or commas). Specific cities/metros work fastest."
+                  : "Comma-separated countries, states, or cities verified against directory location suggestions."
               }
               error={Boolean(locationError)}
               errorText={locationError ?? undefined}
@@ -299,7 +300,7 @@ export function CompanySearchPreviewCard({
             <MaterialTextField
               label={
                 isOsmSelected
-                  ? "Business category keywords (maps to OSM tags)"
+                  ? "Business category keywords (category tags)"
                   : "Target company keywords (profile-only OR match)"
               }
               value={keywordInput}
@@ -307,23 +308,23 @@ export function CompanySearchPreviewCard({
               placeholder="e.g. dental clinic, dental practice, dentist"
               supportingText={
                 isOsmSelected
-                  ? "Maps your niche to structured OpenStreetMap POI tags (e.g. amenity=dentist, healthcare=dentist)."
-                  : "Searches company profiles & descriptions only (excludes blog/marketing webpages to prevent SaaS & insurer noise)."
+                  ? "Maps your niche to structured category tags (e.g. dentist, clinic)."
+                  : "Searches company profiles & descriptions only (excludes blog/marketing webpages to prevent noise)."
               }
               disabled={isWorking || formBlockedByMissingKey}
             />
             {!isOsmSelected && (
               <MaterialTextField
-                label="Prospeo industry category (recommended)"
+                label="B2B industry category (recommended)"
                 value={industryInput}
                 onValueChange={setIndustryInput}
                 placeholder="e.g. Medical Practices, Hospitals and Health Care"
-                supportingText="Verified against Prospeo taxonomy; defaults automatically when blank for healthcare/B2B routes."
+                supportingText="Verified against directory industry taxonomy; defaults automatically when blank for healthcare/B2B routes."
                 disabled={isWorking || formBlockedByMissingKey}
               />
             )}
             <MaterialTextField
-              label={isOsmSelected ? "Excluded name/category words" : "Excluded keywords (Prospeo exclude filter)"}
+              label={isOsmSelected ? "Excluded name/category words" : "Excluded keywords (exclude filter)"}
               value={excludeInput}
               onValueChange={setExcludeInput}
               placeholder="e.g. investment, capital, laboratory, supplier"
@@ -334,11 +335,11 @@ export function CompanySearchPreviewCard({
 
           {isOsmSelected && (
             <>
-              <md-chip-set aria-label="Mapped OpenStreetMap tags">
+              <md-chip-set aria-label="Mapped category tags">
                 {previewOsmTags.length > 0 ? (
                   previewOsmTags.map((tag) => (
                     <md-assist-chip key={`${tag.key}=${tag.value}`}>
-                      OSM tag: {tag.key}={tag.value}
+                      Category tag: {tag.key}={tag.value}
                     </md-assist-chip>
                   ))
                 ) : (
@@ -349,7 +350,7 @@ export function CompanySearchPreviewCard({
               <div className="m3-person-row">
                 <div className="m3-checkbox-wrap">
                   <md-checkbox
-                    aria-label="Resolve missing clinic websites via private SearXNG"
+                    aria-label="Resolve missing business websites automatically"
                     checked={resolveWebsites || undefined}
                     disabled={isWorking || undefined}
                     onChange={(event) => {
@@ -359,9 +360,9 @@ export function CompanySearchPreviewCard({
                   />
                 </div>
                 <div className="m3-person-meta">
-                  <strong>Resolve missing websites via SearXNG (up to 10)</strong>
+                  <strong>Resolve missing websites automatically (up to 10)</strong>
                   <p className="m3-helper-note">
-                    Looks up official clinic domains when OpenStreetMap lacks a website tag, unlocking Phase E decision-maker lookup.
+                    Looks up official domains when a local listing lacks a website URL, unlocking decision-maker lookup.
                   </p>
                 </div>
               </div>
@@ -370,8 +371,8 @@ export function CompanySearchPreviewCard({
 
           {formBlockedByMissingKey && (
             <p className="m3-helper-note">
-              Add PROSPEO_KEY to the server environment before preparing a live Prospeo preview, or
-              switch to OpenStreetMap Local Map above for local discovery.
+              B2B company directory discovery is not configured on this server. Switch to Local
+              Business Map above for local discovery.
             </p>
           )}
         </div>
@@ -382,7 +383,10 @@ export function CompanySearchPreviewCard({
           <h3>Canonical filters & provenance</h3>
           <md-chip-set aria-label="Canonical filters">
             <md-assist-chip>
-              Source: {companySearch.providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"}
+              Source:{" "}
+              {companySearch.providerKey === "openstreetmap"
+                ? "Local Business Map"
+                : "B2B Company Directory"}
             </md-assist-chip>
             {companySearch.canonicalLocations.map((location) => (
               <md-assist-chip key={location}>Location: {location}</md-assist-chip>
@@ -399,25 +403,16 @@ export function CompanySearchPreviewCard({
           </md-chip-set>
           <ul className="m3-bullet-list">
             {companySearch.criteria.map((criterion) => (
-              <li key={criterion}>{criterion}</li>
+              <li key={criterion}>{maskVendorNamesForDisplay(criterion)}</li>
             ))}
           </ul>
-          <pre className="m3-json-preview" aria-label="Canonical company search request filters">
-            {JSON.stringify(
-              companySearch.providerKey === "openstreetmap"
-                ? companySearch.providerFilters
-                : { page: 1, filters: companySearch.providerFilters },
-              null,
-              2,
-            )}
-          </pre>
         </section>
       )}
 
       {isManualReview && companySearch?.failureMessage && (
         <div className="m3-warning-callout" role="status">
           <strong>No automatic retry was attempted</strong>
-          <p>{companySearch.failureMessage}</p>
+          <p>{maskVendorNamesForDisplay(companySearch.failureMessage)}</p>
         </div>
       )}
 
@@ -429,13 +424,13 @@ export function CompanySearchPreviewCard({
                 ? companySearch && !isCompleted
                   ? "No search has run with these filters yet."
                   : isOsmSelected
-                    ? "Preparing a preview resolves your areas via OpenStreetMap Nominatim."
+                    ? "Preparing a preview resolves your target cities and metro regions."
                     : "Preparing a preview verifies your location and industry filters."
                 : "Want narrower, more relevant businesses for your product?"}
             </strong>
             <p>
-              People discovery, Dropcontact verification, CRM writes, and outreach remain strictly
-              off in Phase D.
+              People discovery, email verification, CRM writes, and outreach remain strictly off in
+              this step.
             </p>
           </div>
           <div className="m3-action-row">
@@ -505,16 +500,16 @@ export function CompanySearchPreviewCard({
                   {isWorking
                     ? isOsmSelected
                       ? "Finding local businesses…"
-                      : "Verifying with Prospeo…"
+                      : "Verifying filters…"
                     : isOsmSelected && onRunFreeSearch
                       ? companySearch
-                        ? "Update OpenStreetMap list"
+                        ? "Update local business list"
                         : "Find local businesses"
                       : companySearch
                         ? "Refresh preview"
                         : isOsmSelected
-                          ? "Prepare OpenStreetMap preview"
-                          : "Prepare Prospeo preview"}
+                          ? "Prepare local search preview"
+                          : "Prepare B2B search preview"}
                 </MaterialButton>
               </>
             )}
@@ -532,7 +527,7 @@ export function CompanySearchPreviewCard({
                 }}
               >
                 {companySearch.providerKey === "openstreetmap"
-                  ? "Run OpenStreetMap search"
+                  ? "Run local business search"
                   : "Discover companies"}
               </MaterialButton>
             )}
@@ -543,7 +538,7 @@ export function CompanySearchPreviewCard({
       {companySearch && companySearch.providerKey !== "openstreetmap" && (
         <ApprovalCard
           open={confirmApproveOpen}
-          title="Run Prospeo company search?"
+          title="Run B2B company search?"
           body={`Searches up to 25 matching companies in ${companySearch.canonicalLocations.join(", ")} using your verified filters.`}
           confirmLabel="Run company search"
           cancelLabel="Keep reviewing"

@@ -2,6 +2,7 @@
 
 import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
+import { maskVendorNamesForDisplay } from "@/lib/ano/research-conversation";
 import { MaterialButton } from "@/components/material/material-button";
 import { useMaterialWeb } from "@/components/material/register";
 
@@ -75,8 +76,10 @@ export function ResearchProgressMessage({
         </header>
         <p className="m3-artifact-lead">
           {canContinueApproved
-            ? `Ano could not confirm one ${interruptedAction?.kind === "search" ? "SearXNG search" : "source retrieval"}, so it excluded that request without retrying it. You can continue using the remaining approved budget.`
-            : research.run.failureMessage ?? "Ano paused and did not retry the provider request."}
+            ? `Ano could not confirm one ${interruptedAction?.kind === "search" ? "public web search" : "source retrieval"}, so it excluded that request without retrying it. You can continue using the remaining approved budget.`
+            : research.run.failureMessage
+              ? maskVendorNamesForDisplay(research.run.failureMessage)
+              : "Ano paused and did not retry the request."}
         </p>
         <div className="m3-action-row">
           {canContinueApproved && (
@@ -139,7 +142,7 @@ export function ResearchProgressMessage({
             <div className="m3-decision-copy">
               <strong>Turn saved sources into a cited market recommendation</strong>
               <p>
-                Uses only stored source excerpts in your workspace; makes no new search, Prospeo,
+                Uses only stored source excerpts in your workspace; makes no new search, directory,
                 contact, or outreach request.
               </p>
             </div>

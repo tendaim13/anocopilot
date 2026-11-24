@@ -163,7 +163,7 @@ export async function approvePersonSearchForConversation(
   const targetProvider = existingView.personSearch?.providerKey ?? "prospeo";
   if (targetProvider === "prospeo" && !prospeoConfiguration().available) {
     throw new PeoplePlaybookServiceError(
-      "Add PROSPEO_KEY on the server before running Prospeo person discovery.",
+      "Decision-maker directory discovery is not configured on this server.",
       "PROSPEO_NOT_CONFIGURED",
     );
   }
@@ -275,7 +275,7 @@ export async function prepareContactVerificationForConversation(
 
   if (!result.view) {
     throw new PeoplePlaybookServiceError(
-      `Ano could not prepare the selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verification preview.`,
+      "Ano could not prepare the email verification preview.",
     );
   }
 
@@ -295,13 +295,13 @@ export async function approveContactVerificationForConversation(
   const providerKey = existingView.verificationRun?.providerKey ?? "dropcontact";
   if (providerKey === "prospeo" && !prospeoConfiguration().available) {
     throw new PeoplePlaybookServiceError(
-      "Add PROSPEO_KEY on the server before running selective Prospeo email enrichment.",
+      "Work email verification is not configured on this server.",
       "PROSPEO_NOT_CONFIGURED",
     );
   }
   if (providerKey === "dropcontact" && !dropcontactConfiguration().available) {
     throw new PeoplePlaybookServiceError(
-      "Add DROPCONTACT_API_KEY on the server before running selective Dropcontact verification.",
+      "Work email verification is not configured on this server.",
       "DROPCONTACT_NOT_CONFIGURED",
     );
   }
@@ -338,7 +338,7 @@ export async function approveContactVerificationForConversation(
 
   if (!result.view) {
     throw new PeoplePlaybookServiceError(
-      `Ano could not run selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} email verification.`,
+      "Ano could not complete work email verification.",
     );
   }
 

@@ -75,7 +75,7 @@ export function TargetDecisionCard({
       </header>
 
       <p className="m3-artifact-lead">
-        This records your chosen market and industry only. It does not call Prospeo, search
+        This records your chosen market and industry only. It does not search companies, look up
         contacts, or start outreach.
       </p>
 

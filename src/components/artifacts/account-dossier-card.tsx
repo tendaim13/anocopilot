@@ -5,6 +5,7 @@ import type {
   AccountLifecycleState,
 } from "@/lib/ano/company-discovery";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
+import { maskVendorNamesForDisplay } from "@/lib/ano/research-conversation";
 import { MaterialButton } from "@/components/material/material-button";
 
 export interface AccountDossierCardProps {
@@ -57,7 +58,7 @@ export function AccountDossierCard({
           </p>
           <h2>{account.name}</h2>
           <p className="m3-helper-note">
-            {[account.location, account.industry, account.employeeBand]
+            {[account.location, account.industry ? maskVendorNamesForDisplay(account.industry) : null, account.employeeBand]
               .filter(Boolean)
               .join(" · ") || "Observed company attributes"}
           </p>
@@ -69,8 +70,9 @@ export function AccountDossierCard({
 
       {(account.description || targetMarketName || targetIndustryName) && (
         <p className="m3-artifact-lead">
-          {account.description ??
-            `Candidate discovered under ${targetMarketName ?? "locked market"} · ${targetIndustryName ?? "locked industry"}.`}
+          {account.description
+            ? maskVendorNamesForDisplay(account.description)
+            : `Candidate discovered under ${targetMarketName ?? "locked market"} · ${targetIndustryName ?? "locked industry"}.`}
         </p>
       )}
 
@@ -100,9 +102,9 @@ export function AccountDossierCard({
             <div key={signal.id} className="m3-evidence-source-item">
               <div className="m3-evidence-source-top">
                 <span className="m3-claim-pill">{signal.label}</span>
-                <span className="m3-source-tag">{signal.sourceAttribution}</span>
+                <span className="m3-source-tag">{maskVendorNamesForDisplay(signal.sourceAttribution)}</span>
               </div>
-              <p>{signal.explanation}</p>
+              <p>{maskVendorNamesForDisplay(signal.explanation)}</p>
               <small>
                 {signal.evidenceUrl ? (
                   <a href={signal.evidenceUrl} target="_blank" rel="noreferrer">
@@ -119,7 +121,7 @@ export function AccountDossierCard({
 
       <section className="m3-muted-callout">
         <strong>Market-level hypothesis boundary (Phase C claims)</strong>
-        <p className="m3-helper-note">{account.fit.industryHypothesisNote}</p>
+        <p className="m3-helper-note">{maskVendorNamesForDisplay(account.fit.industryHypothesisNote)}</p>
         {linkedClaims.length > 0 && (
           <ul className="m3-bullet-list">
             {linkedClaims.slice(0, 3).map((claim) => (
@@ -134,7 +136,7 @@ export function AccountDossierCard({
           <h3>Unknowns / validate next</h3>
           <ul className="m3-bullet-list">
             {account.unknowns.map((unknown) => (
-              <li key={unknown}>{unknown}</li>
+              <li key={unknown}>{maskVendorNamesForDisplay(unknown)}</li>
             ))}
           </ul>
         </section>

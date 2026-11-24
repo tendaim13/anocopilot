@@ -502,3 +502,37 @@ export function formatDisplayErrorMessage(
 
   return trimmed;
 }
+
+/**
+ * Masks backend vendor, search-engine, model, and environment variable names
+ * from user-facing text (including legacy persisted records and chat replies).
+ */
+export function maskVendorNamesForDisplay(
+  raw: string | null | undefined,
+): string {
+  const input = raw ?? "";
+  if (!input) return input;
+
+  return input
+    .replace(/\s*\((?:OpenStreetMap|OSM|Prospeo|Dropcontact|SearXNG)\)\s*/gi, " ")
+    .replace(/\bOpenStreetMap(?:\s+Nominatim)?\b/gi, "Local business directory")
+    .replace(/\b(?:Nominatim|Overpass|OSM)\b/gi, "local business directory")
+    .replace(/\b(?:Private\s+)?SearXNG\b/gi, "web research")
+    .replace(/\bTavily\b/gi, "web research")
+    .replace(
+      /\b(?:Prospeo\s+(?:or|and|\/)\s+Dropcontact|Dropcontact\s+(?:or|and|\/)\s+Prospeo)\b/gi,
+      "work email verification",
+    )
+    .replace(/\bProspeo\b/gi, "B2B directory")
+    .replace(/\bDropcontact\b/gi, "email verification")
+    .replace(/\bMercury(?:\s+CRM)?\b/gi, "CRM")
+    .replace(/\bSupabase(?:\s+Auth)?\b/gi, "authentication service")
+    .replace(/\b(?:Google AI Studio(?:\s+Gemini)?|Gemini|Amazon Bedrock|Bedrock|Ollama|LangGraph)\b/gi, "Ano")
+    .replace(
+      /\b(?:PROSPEO_KEY|DROPCONTACT_API_KEY|SEARXNG_BASE_URL|SEARXNG_GATEWAY_TOKEN|GEMINI_API_KEY|ANO_AGENT_MODE|OVERPASS_API_URL)\b/g,
+      "server configuration",
+    )
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}

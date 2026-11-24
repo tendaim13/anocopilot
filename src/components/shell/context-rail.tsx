@@ -65,7 +65,6 @@ export function ContextRail({
   peopleDiscovery = null,
   dropcontact = null,
   outreachExecution = null,
-  mercury = null,
   templatePack = null,
 }: ContextRailProps) {
   if (!open) return null;
@@ -113,9 +112,9 @@ export function ContextRail({
 
         <section className="ano-rail-card">
           <div className="ano-rail-card-head">
-            <h3>Provider budget</h3>
+            <h3>Research scope</h3>
             <span className={`ano-pill ${provider?.available ? "status-ready" : "status-muted"}`}>
-              {provider?.available ? "SearXNG ready" : "Not configured"}
+              {provider?.available ? "Web search ready" : "Not configured"}
             </span>
           </div>
           {research ? (
@@ -136,8 +135,8 @@ export function ContextRail({
           ) : (
             <p className="ano-rail-empty">
               {plan
-                ? `Planned ceiling: up to ${plan.budget.maximumSearches} searches and ${plan.budget.maximumFetches} fetches after separate Phase B approval.`
-                : "No external provider scope prepared."}
+                ? `Planned ceiling: up to ${plan.budget.maximumSearches} searches and ${plan.budget.maximumFetches} fetches after approval.`
+                : "No public web research scope prepared."}
             </p>
           )}
         </section>
@@ -185,15 +184,19 @@ export function ContextRail({
               {companySearch
                 ? runStatusLabel(companySearch.status)
                 : prospeo?.available
-                  ? "Prospeo ready"
-                  : "Prospeo unconfigured"}
+                  ? "Directory ready"
+                  : "Local discovery ready"}
             </span>
           </div>
           {companySearch ? (
             <dl className="ano-rail-dl">
               <div>
                 <dt>Discovery source</dt>
-                <dd>{companySearch.providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"}</dd>
+                <dd>
+                  {companySearch.providerKey === "openstreetmap"
+                    ? "Local business map"
+                    : "B2B company directory"}
+                </dd>
               </div>
               <div>
                 <dt>Target locations</dt>
@@ -214,8 +217,8 @@ export function ContextRail({
           ) : (
             <p className="ano-rail-empty">
               {synthesis?.decision?.status === "locked"
-                ? "Target locked. Prepare an OpenStreetMap local search or Prospeo B2B search."
-                : "Lock a Phase C market and industry route before preparing Phase D company discovery."}
+                ? "Target locked. Prepare a local business search or B2B company directory search."
+                : "Lock a market and industry route before preparing company discovery."}
             </p>
           )}
         </section>
@@ -228,18 +231,18 @@ export function ContextRail({
                 peopleDiscovery?.verificationRun?.status === "completed" ||
                 peopleDiscovery?.personSearch?.status === "completed"
                   ? "status-ready"
-                  : dropcontact?.available
+                  : prospeo?.available || dropcontact?.available
                     ? "status-neutral"
                     : "status-muted"
               }`}
             >
               {peopleDiscovery?.verificationRun
-                ? `${peopleDiscovery.verificationRun.providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} ${runStatusLabel(peopleDiscovery.verificationRun.status)}`
+                ? `Email verification ${runStatusLabel(peopleDiscovery.verificationRun.status)}`
                 : peopleDiscovery?.personSearch
                   ? runStatusLabel(peopleDiscovery.personSearch.status)
                   : prospeo?.available || dropcontact?.available
                     ? "Verifier ready"
-                    : "Verifier unconfigured"}
+                    : "Verifier unavailable"}
             </span>
           </div>
           {peopleDiscovery && (peopleDiscovery.contacts.length > 0 || peopleDiscovery.playbooks.length > 0 || peopleDiscovery.personSearch) ? (
@@ -265,7 +268,7 @@ export function ContextRail({
             </dl>
           ) : (
             <p className="ano-rail-empty">
-              Shortlist a company in Phase D to propose buyer roles, selectively verify contacts via Dropcontact, and compile factual playbooks.
+              Shortlist a company to propose buyer roles, selectively verify work emails, and compile factual playbooks.
             </p>
           )}
         </section>
@@ -301,7 +304,7 @@ export function ContextRail({
                 <dd>{templatePack.steps.length} steps</dd>
               </div>
               <div>
-                <dt>Phase C claims</dt>
+                <dt>Supporting claims</dt>
                 <dd>{templatePack.claimIds.length}</dd>
               </div>
             </dl>
@@ -314,7 +317,7 @@ export function ContextRail({
 
         <section className="ano-rail-card">
           <div className="ano-rail-card-head">
-            <h3>Outreach & Mercury</h3>
+            <h3>Outreach drafts</h3>
             <span
               className={`ano-pill ${
                 outreachExecution?.proposals.some((p) => p.status === "executed")
@@ -326,9 +329,7 @@ export function ContextRail({
             >
               {outreachExecution?.proposals.some((p) => p.status === "awaiting_approval")
                 ? "Approval awaiting"
-                : mercury?.available
-                  ? "Mercury preview"
-                  : "Per-action gated"}
+                : "Per-action gated"}
             </span>
           </div>
           {outreachExecution && (outreachExecution.drafts.length > 0 || outreachExecution.proposals.length > 0) ? (
@@ -356,7 +357,7 @@ export function ContextRail({
             </dl>
           ) : (
             <p className="ano-rail-empty">
-              Compile a Phase E playbook to prepare eligible outreach drafts and per-action Mercury proposals.
+              Compile an account playbook to prepare eligible outreach drafts and per-action approvals.
             </p>
           )}
         </section>

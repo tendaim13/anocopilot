@@ -1074,7 +1074,7 @@ export function ResearchConversationWorkbench({
       );
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(errorText(payload, "Ano could not complete OpenStreetMap discovery."));
+        throw new Error(errorText(payload, "Ano could not complete local business discovery."));
       }
       setCompanySearch((payload.companySearch ?? null) as CompanySearchView | null);
       if (payload.prospeo) setProspeo(payload.prospeo as ProspeoProviderState);
@@ -1083,7 +1083,7 @@ export function ResearchConversationWorkbench({
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "Ano could not complete OpenStreetMap discovery.",
+          : "Ano could not complete local business discovery.",
       );
     } finally {
       setIsWorking(false);
@@ -1375,15 +1375,13 @@ export function ResearchConversationWorkbench({
           onApprovePersonSearch={(personSearchId) =>
             void runPeopleDiscoveryAction(
               { action: "approve_person_search", personSearchId },
-              "Ano could not run the approved Prospeo person search.",
+              "Ano could not run the decision-maker search.",
             )
           }
           onPrepareContactVerification={(contactIds, providerKey) =>
             void runPeopleDiscoveryAction(
               { action: "prepare_verification", contactIds, providerKey },
-              `Ano could not prepare the selective ${
-                providerKey === "dropcontact" ? "Dropcontact" : "Prospeo"
-              } preview.`,
+              "Ano could not prepare the email verification preview.",
             )
           }
           onApproveContactVerification={(verificationRunId) =>

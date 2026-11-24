@@ -7,6 +7,7 @@ import {
   type AccountLifecycleState,
   type CompanySearchView,
 } from "@/lib/ano/company-discovery";
+import { maskVendorNamesForDisplay } from "@/lib/ano/research-conversation";
 import { MaterialButton } from "@/components/material/material-button";
 import { useMaterialWeb } from "@/components/material/register";
 
@@ -53,7 +54,7 @@ export function AccountCohortCard({
         <div>
           <p className="m3-artifact-kicker">
             COMPANY COHORT ARTIFACT ·{" "}
-            {companySearch.providerKey === "openstreetmap" ? "OPENSTREETMAP" : "PROSPEO"}
+            {companySearch.providerKey === "openstreetmap" ? "LOCAL BUSINESS" : "B2B DIRECTORY"}
           </p>
           <h2>
             {cohort.totalReturned} candidate account
@@ -65,7 +66,7 @@ export function AccountCohortCard({
         </Link>
       </header>
 
-      <p className="m3-artifact-lead">{cohort.cohortExplanation}</p>
+      <p className="m3-artifact-lead">{maskVendorNamesForDisplay(cohort.cohortExplanation)}</p>
 
       <div className="m3-metric-strip">
         <div>
@@ -160,7 +161,7 @@ export function AccountCohortCard({
 
       <section className="m3-reasoning-callout">
         <strong>Separation of evidence layers</strong>
-        <p className="m3-helper-note">{cohort.separationNote}</p>
+        <p className="m3-helper-note">{maskVendorNamesForDisplay(cohort.separationNote)}</p>
       </section>
 
       <footer className="m3-artifact-footer">

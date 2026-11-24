@@ -40,7 +40,7 @@ function errorResponse(error: unknown) {
       : { type: typeof error },
   );
   return NextResponse.json(
-    { error: "Ano could not safely complete that outreach or Mercury proposal action." },
+    { error: "Ano could not safely complete that outreach proposal action." },
     { status: 500 },
   );
 }

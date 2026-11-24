@@ -57,8 +57,8 @@ export function ReviewQueue() {
           <h1>{view === "active" ? "Active research" : "Needs review"}</h1>
           <p>
             {view === "active"
-              ? "Conversations actively running LangGraph planning, SearXNG discovery, or citation synthesis."
-              : "Actionable clarifications, research plans, bounded provider scopes, manual reviews, and target decisions."}
+              ? "Conversations actively running planning, public web discovery, or citation synthesis."
+              : "Actionable clarifications, research plans, search scopes, manual reviews, and target decisions."}
           </p>
         </div>
         <MaterialButton variant="filled" onClick={() => router.push("/research")}>

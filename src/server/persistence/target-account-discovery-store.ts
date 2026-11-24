@@ -297,8 +297,8 @@ function buildSearchViewFromRows(
     estimatedMaximumCredits: providerKey === "openstreetmap" ? 0 : 1,
     estimateDetail:
       providerKey === "openstreetmap"
-        ? "Free OpenStreetMap local discovery returns up to 25 physical businesses for 0 credits. Optional missing-website lookup uses your private SearXNG instance (max 10 lookups, 0 credits). No Prospeo credits are spent."
-        : "One first-page Prospeo request returns up to 25 companies and costs at most 1 credit only when at least one company matches; exact duplicate pages may be free for 30 days.",
+        ? "Local business discovery returns up to 25 physical businesses, with optional official website lookup (max 10 websites)."
+        : "B2B company directory search returns up to 25 matching companies matching your approved filters.",
     resultCount:
       typeof searchRow.result_count === "number" ? searchRow.result_count : null,
     providerReceipt: asRecord(searchRow.provider_receipt_json),
@@ -573,7 +573,7 @@ export async function saveCompanySearchPreview(
 
   if (actionError) {
     throw new TargetAccountDiscoveryPersistenceError(
-      `Ano could not record the zero-credit ${providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} preview request.`,
+      `Ano could not record the ${providerKey === "openstreetmap" ? "local business" : "B2B directory"} preview request.`,
     );
   }
 
@@ -640,7 +640,7 @@ export async function saveCompanySearchPreview(
 
   if (upsertError) {
     throw new TargetAccountDiscoveryPersistenceError(
-      `Ano could not save the ${providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo"} company-search preview.`,
+      `Ano could not save the ${providerKey === "openstreetmap" ? "local business" : "B2B directory"} company-search preview.`,
     );
   }
 
@@ -668,8 +668,8 @@ export async function saveCompanySearchPreview(
       label: "Company search preview prepared",
       detail:
         providerKey === "openstreetmap"
-          ? `Ano resolved OpenStreetMap areas (${canonicalLocations.join(", ")}) for free local discovery ($0 credits, max 25 businesses). Waiting for your explicit approval.`
-          : `Ano verified canonical Prospeo locations (${canonicalLocations.join(", ")}) with free suggestions. Waiting for your explicit 1-page (max 25 companies / max 1 credit) approval.`,
+          ? `Ano resolved target locations (${canonicalLocations.join(", ")}) for local business discovery (max 25 businesses). Waiting for your explicit approval.`
+          : `Ano verified target locations (${canonicalLocations.join(", ")}) for B2B directory discovery (max 25 companies). Waiting for your explicit approval.`,
     },
     { onConflict: "graph_run_id,event_key" },
   );
@@ -989,8 +989,8 @@ export async function executeApprovedProspeoSearch(
         label: "Company cohort discovered",
         detail:
           providerKey === "openstreetmap"
-            ? `OpenStreetMap returned ${dossiers.length} local candidate${dossiers.length === 1 ? "" : "s"} ($0 credits${searxngResolvedCount ? `; ${searxngResolvedCount} official website${searxngResolvedCount === 1 ? "" : "s"} resolved via SearXNG` : ""}) for ${context.market.name} · ${context.industry.name}. Named buyer search and contact verification remain locked.`
-            : `Prospeo returned ${dossiers.length} candidate companies on one approved page for ${context.market.name} · ${context.industry.name}. Named buyer search and contact verification remain locked.`,
+            ? `Local business search returned ${dossiers.length} candidate${dossiers.length === 1 ? "" : "s"}${searxngResolvedCount ? ` (${searxngResolvedCount} official website${searxngResolvedCount === 1 ? "" : "s"} resolved)` : ""} for ${context.market.name} · ${context.industry.name}.`
+            : `B2B company directory returned ${dossiers.length} candidate companies for ${context.market.name} · ${context.industry.name}.`,
       },
       { onConflict: "graph_run_id,event_key" },
     );
@@ -1003,11 +1003,13 @@ export async function executeApprovedProspeoSearch(
     const noResults = isKnownProviderError && error.code === "NO_RESULTS";
     const status = noResults ? "completed" : "requires_manual_review";
     const creditBearingRequest = providerKey === "prospeo";
+    const sourceLabel =
+      providerKey === "openstreetmap" ? "Local business discovery" : "B2B company directory";
     const message = noResults
-      ? `${providerLabel} returned no companies for this approved query.`
+      ? `${sourceLabel} returned no companies for this approved query.`
       : isKnownProviderError
         ? error.message
-        : `Ano could not complete the approved ${providerLabel} search safely and did not retry automatically.`;
+        : `Ano could not complete ${sourceLabel.toLowerCase()} safely and did not retry automatically.`;
     const failureCode =
       noResults
         ? null

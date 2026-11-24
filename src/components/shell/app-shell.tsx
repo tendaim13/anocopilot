@@ -124,7 +124,7 @@ function statusBadgeLabel(context: ShellActiveContext) {
   }
   if ((outreachExecution?.drafts.length ?? 0) > 0) return "Outreach drafts";
   if (peopleDiscovery?.playbooks && peopleDiscovery.playbooks.length > 0) return "Playbook ready";
-  if (peopleDiscovery?.verificationRun?.status === "awaiting_approval") return "Dropcontact approval";
+  if (peopleDiscovery?.verificationRun?.status === "awaiting_approval") return "Verification approval";
   if (peopleDiscovery?.verificationRun?.status === "running") return "Verifying contacts";
   if (peopleDiscovery?.verificationRun?.status === "completed") return "Contacts verified";
   if (peopleDiscovery?.personSearch?.status === "awaiting_approval") return "Person search approval";

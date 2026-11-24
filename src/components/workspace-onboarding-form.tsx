@@ -37,7 +37,7 @@ export function WorkspaceOnboardingForm() {
     const client = getBrowserSupabaseClient();
     if (!client) {
       setIsError(true);
-      setMessage("Ano is missing its public Supabase configuration.");
+      setMessage("Authentication service is temporarily unavailable.");
       return;
     }
 
@@ -94,7 +94,7 @@ export function WorkspaceOnboardingForm() {
     const client = getBrowserSupabaseClient();
     if (!client) {
       setIsError(true);
-      setMessage("Ano is missing its public Supabase configuration.");
+      setMessage("Authentication service is temporarily unavailable.");
       return;
     }
 

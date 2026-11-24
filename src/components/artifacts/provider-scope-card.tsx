@@ -38,14 +38,13 @@ export function ProviderScopeCard({
             <h2>Prepare a bounded public-research scope</h2>
           </div>
           <span className={`m3-status-badge ${providerAvailable ? "status-approved" : "status-declined"}`}>
-            {providerAvailable ? "Private SearXNG ready" : "SearXNG unavailable"}
+            {providerAvailable ? "Web search ready" : "Web search unavailable"}
           </span>
         </header>
 
         <p className="m3-artifact-lead">
-          Ano generates bounded search queries, while Ano’s server executes approved SearXNG
-          searches and retrieves only saved public source URLs. Prospeo, Dropcontact, outreach, and
-          CRM writes remain off.
+          Ano generates bounded search queries, executes approved web searches on its server, and
+          retrieves only saved public source URLs. Enrichment and outreach remain off.
         </p>
 
         <div className="m3-metric-strip">
@@ -66,7 +65,7 @@ export function ProviderScopeCard({
         <p className="m3-helper-note">
           {providerAvailable
             ? "Searches bounded public web sources and stores verified excerpts for market analysis."
-            : "Add SEARXNG_BASE_URL and SEARXNG_GATEWAY_TOKEN to the server environment, then reload."}
+            : "Public web search is currently unavailable on this server."}
         </p>
 
         <footer className="m3-artifact-footer">
@@ -87,12 +86,12 @@ export function ProviderScopeCard({
       <header className="m3-artifact-header">
         <div>
           <p className="m3-artifact-kicker">
-            PUBLIC EVIDENCE · {research.run.provider.toUpperCase()} · ATTEMPT {research.run.attemptNumber}
+            PUBLIC EVIDENCE · ATTEMPT {research.run.attemptNumber}
           </p>
           <h2>
             {research.run.status === "awaiting_provider_approval"
-              ? "Review and approve provider execution"
-              : "Approved provider scope"}
+              ? "Review and approve research scope"
+              : "Approved research scope"}
           </h2>
         </div>
         <span className={`m3-status-badge status-${research.run.status}`}>
@@ -136,7 +135,7 @@ export function ProviderScopeCard({
       {research.run.status === "awaiting_provider_approval" && (
         <footer className="m3-artifact-footer">
           <div className="m3-decision-copy">
-            <strong>Nothing has been sent to SearXNG or any website yet.</strong>
+            <strong>Nothing has been sent to external websites yet.</strong>
             <p>
               Approving runs bounded discovery and source extraction within the limits above.
               Ambiguous network requests are never retried automatically.

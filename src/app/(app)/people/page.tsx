@@ -103,8 +103,8 @@ function PeopleContent() {
           <p className="ano-rail-kicker">PIPELINE · PHASE E / 9C</p>
           <h1>People &amp; contact export</h1>
           <p>
-            Named buyers discovered for shortlisted companies alongside Prospeo, Dropcontact, and
-            $0 public website email status. Verify contacts inside a thread or export a CSV.
+            Named buyers discovered for shortlisted companies alongside verified work email and
+            public website email status. Verify contacts inside a thread or export a CSV.
           </p>
         </div>
         <div className="m3-action-row">
@@ -217,9 +217,7 @@ function PeopleContent() {
                 </header>
                 {contact.verifiedDetails?.email ? (
                   <p className="m3-verified-contact-line">
-                    {contact.verifiedDetails.provider === "prospeo"
-                      ? "Prospeo verified email:"
-                      : "Dropcontact verified email:"}{" "}
+                    Verified work email:{" "}
                     <strong>{contact.verifiedDetails.email}</strong>
                     {contact.verifiedDetails.emailQualification
                       ? ` (${contact.verifiedDetails.emailQualification})`
@@ -230,11 +228,11 @@ function PeopleContent() {
                   </p>
                 ) : contact.publicEmail ? (
                   <p className="m3-verified-contact-line">
-                    Website email (
+                    Public website email (
                     {contact.publicEmailKind === "direct_public"
                       ? "direct match"
-                      : "office inbox"}{" "}
-                    · $0): <strong>{contact.publicEmail}</strong>
+                      : "office inbox"}
+                    ): <strong>{contact.publicEmail}</strong>
                     {contact.publicPhone ? ` · Phone: ${contact.publicPhone}` : ""}
                     {contact.sourceUrl ? (
                       <>
@@ -255,8 +253,8 @@ function PeopleContent() {
                     {contact.roleRationale ??
                       (contact.discoveryProvider === "website_team" ||
                       contact.sourceKey.startsWith("website-team:")
-                        ? "Named candidate from company website. Open the research thread to request selective Prospeo or Dropcontact verification."
-                        : "Named candidate from Prospeo. Open the research thread to request selective Prospeo or Dropcontact verification.")}
+                        ? "Named candidate from company website. Open the research thread to verify their work email."
+                        : "Named candidate from B2B directory. Open the research thread to verify their work email.")}
                     {contact.publicPhone ? ` · Phone: ${contact.publicPhone}` : ""}
                     {contact.sourceUrl ? (
                       <>
@@ -287,7 +285,7 @@ function PeopleContent() {
           <p>
             {shell?.mode !== "supabase"
               ? "Authenticate with your Ano workspace account to browse discovered people and verification receipts."
-              : "Shortlist one or more companies in Phase D, then propose buyer roles and approve a 1-page Prospeo person search."}
+              : "Shortlist one or more companies, then propose buyer roles and approve a decision-maker search."}
           </p>
         </article>
       )}

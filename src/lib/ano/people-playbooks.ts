@@ -812,8 +812,8 @@ export function buildPersonSearchPreview(input: {
   const estimatedMaximumCredits = providerKey === "website_team" ? 0 : 1;
   const estimateDetail =
     providerKey === "website_team"
-      ? "Free website team-page discovery scans up to 10 shortlisted company websites (max 3 pages per site, $0 credits) to extract named owners, directors, and managers with cited source URLs. Email verification remains separate via Dropcontact."
-      : "One first-page Prospeo /search-person request returns up to 25 named buyers matching your Buying Committee filters across shortlisted companies (max 1 credit). Verified contact details require a separate selective Dropcontact approval.";
+      ? "Scans shortlisted company websites to extract named owners, directors, and managers with public contact details."
+      : "Searches for named buyers matching your Buying Committee criteria across shortlisted companies.";
 
   return personSearchViewSchema.parse({
     id: input.personSearchId,
@@ -934,7 +934,7 @@ export function normalizeDiscoveredPersonCandidate(
       (person.title
         ? providerKey === "website_team"
           ? `Extracted directly from ${context.account.name}'s public website.`
-          : `Returned by Prospeo person search at shortlisted company ${context.account.name}.`
+          : `Matched at shortlisted company ${context.account.name}.`
         : null),
     confidence,
     claimIds: context.account.claimIds,
@@ -976,9 +976,7 @@ export function formatContactForCohortTable(contact: ContactCandidateView): Peop
   const publicEmail = contact.publicEmail ?? null;
   const bestEmail = verifiedEmail ?? publicEmail;
   const emailSourceLabel = verifiedEmail
-    ? contact.verifiedDetails?.provider === "prospeo"
-      ? "Prospeo verified"
-      : "Dropcontact verified"
+    ? "Verified work email"
     : publicEmail
       ? contact.publicEmailKind === "direct_public"
         ? "Website (direct)"
@@ -993,7 +991,7 @@ export function formatContactForCohortTable(contact: ContactCandidateView): Peop
     seniority: contact.seniority ?? "Leadership",
     accountName: contact.accountName,
     accountDomain: contact.accountDomain,
-    sourceLabel: isWebsite ? "Company website" : "Prospeo",
+    sourceLabel: isWebsite ? "Company website" : "B2B directory",
     sourceUrl: contact.sourceUrl ?? null,
     linkedInUrl: contact.linkedInUrl ?? null,
     confidence: contact.confidence,
@@ -1019,12 +1017,12 @@ export function buildDropcontactVerificationPreview(input: {
   const providerKey: ContactVerificationProvider = input.providerKey ?? "dropcontact";
   if (input.selectedContacts.length === 0) {
     throw new Error(
-      `Select at least one named person before preparing a ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verification preview.`,
+      "Select at least one named person before preparing work email verification.",
     );
   }
   if (input.selectedContacts.length > 10) {
     throw new Error(
-      `Select at most 10 people per selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} enrichment batch.`,
+      "Select at most 10 people per email verification batch.",
     );
   }
 
@@ -1057,10 +1055,7 @@ export function buildDropcontactVerificationPreview(input: {
     });
   });
 
-  const estimateDetail =
-    providerKey === "prospeo"
-      ? `Prospeo will enrich ${previewPairs.length} selected contact${previewPairs.length === 1 ? "" : "s"} for verified work emails (max ${previewPairs.length} credit${previewPairs.length === 1 ? "" : "s"}; 0 credits on misses or 90-day repeats). No other contacts are submitted.`
-      : `Dropcontact will check ${previewPairs.length} selected name-and-company pair${previewPairs.length === 1 ? "" : "s"} (estimated ${previewPairs.length} Dropcontact credit${previewPairs.length === 1 ? "" : "s"}). No other discovered contacts are submitted.`;
+  const estimateDetail = `Work email verification will check ${previewPairs.length} selected contact${previewPairs.length === 1 ? "" : "s"}. No other discovered contacts are submitted.`;
 
   return contactVerificationRunViewSchema.parse({
     id: input.verificationRunId,
@@ -1121,7 +1116,7 @@ export function compileFactualAccountPlaybook(input: {
       kind: "research_claim",
       refId: claim.id,
       statement: claim.statement,
-      attribution: `Phase C ${claim.kind}`,
+      attribution: `Market research (${claim.kind})`,
     });
   }
 
@@ -1133,24 +1128,22 @@ export function compileFactualAccountPlaybook(input: {
     const isWebsiteSource =
       contact.discoveryProvider === "website_team" ||
       contact.sourceKey.startsWith("website-team:");
-    const sourceLabel = isWebsiteSource ? "Company website" : "Prospeo";
-    const verifyProviderLabel =
-      contact.verifiedDetails?.provider === "prospeo" ? "Prospeo" : "Dropcontact";
+    const sourceLabel = isWebsiteSource ? "Company website" : "B2B directory";
     evidenceBackedPoints.push({
       kind: "contact_record",
       refId: contact.id,
       statement:
         contact.verificationStatus === "verified" && contact.verifiedDetails?.email
-          ? `${contact.fullName}${contact.title ? ` (${contact.title})` : ""} — verified email ${contact.verifiedDetails.email} via ${verifyProviderLabel}.`
+          ? `${contact.fullName}${contact.title ? ` (${contact.title})` : ""} — verified work email ${contact.verifiedDetails.email}.`
           : contact.publicEmail
             ? `${contact.fullName}${contact.title ? ` (${contact.title})` : ""} — named via ${sourceLabel}; public website email ${contact.publicEmail} (${contact.publicEmailKind === "direct_public" ? "direct" : "office inbox"}) unverified.`
             : `${contact.fullName}${contact.title ? ` (${contact.title})` : ""} — named via ${sourceLabel}; contact details not yet verified.`,
       attribution:
         contact.verificationStatus === "verified"
-          ? `${sourceLabel} + ${verifyProviderLabel}`
+          ? `${sourceLabel} + Verified work email`
           : isWebsiteSource
             ? "Company website team extraction"
-            : "Prospeo person search",
+            : "Decision-maker directory",
     });
   }
 
@@ -1158,8 +1151,8 @@ export function compileFactualAccountPlaybook(input: {
     evidenceBackedPoints.push({
       kind: "company_signal",
       refId: `${account.id}:shortlisted`,
-      statement: `${account.name} was shortlisted from Prospeo results in ${input.targetMarketName}.`,
-      attribution: "Prospeo company search",
+      statement: `${account.name} was shortlisted in ${input.targetMarketName}.`,
+      attribution: "B2B company directory",
     });
   }
 
@@ -1211,10 +1204,10 @@ export function compileFactualAccountPlaybook(input: {
       ...account.unknowns,
       ...(accountContacts.every((c) => c.verificationStatus !== "verified")
         ? [
-            "No verified email address exists yet for contacts at this account until selective Prospeo or Dropcontact verification completes.",
+            "No verified email address exists yet for contacts at this account until work email verification completes.",
           ]
         : []),
-      "Industry operational problems from Phase C research remain hypotheses until confirmed on a first conversation.",
+      "Industry operational challenges from market research remain hypotheses until confirmed on a first conversation.",
     ],
     8,
   );
@@ -1229,8 +1222,8 @@ export function compileFactualAccountPlaybook(input: {
     targetIndustryName: industry.name,
     status: "ready",
     headline: `Outreach playbook for ${account.name} (${industry.name})`,
-    accountThesis: `${account.name} scored ${account.fit.totalScore}/100 (${account.fit.confidence} fit) based on ${account.signals.length} Prospeo company signal${account.signals.length === 1 ? "" : "s"}. Outreach remains gated until Phase 8 draft & approval.`,
-    industryContext: `${industry.summary} Operational hypothesis from ${relevantClaims.length} cited Phase C claim${relevantClaims.length === 1 ? "" : "s"}: ${industry.operationalProblems[0] ?? "segment fit under evaluation"}.`,
+    accountThesis: `${account.name} scored ${account.fit.totalScore}/100 (${account.fit.confidence} fit) based on ${account.signals.length} company signal${account.signals.length === 1 ? "" : "s"}. Outreach remains gated until review & approval.`,
+    industryContext: `${industry.summary} Operational hypothesis from ${relevantClaims.length} cited finding${relevantClaims.length === 1 ? "" : "s"}: ${industry.operationalProblems[0] ?? "segment fit under evaluation"}.`,
     selectedContactIds: accountContacts
       .filter((item) => item.selectedForVerification || item.verificationStatus === "verified")
       .map((item) => item.id),

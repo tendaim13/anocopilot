@@ -21,10 +21,10 @@ function formatAuthError(
   const lowerMessage = message.toLowerCase();
 
   if (code === "over_email_send_rate_limit" || error.status === 429 || lowerMessage.includes("rate limit")) {
-    return "Supabase Auth's email rate limit was reached (default SMTP allows 2 emails per hour). Wait a minute, configure custom SMTP in Supabase Auth, or sign in with your password.";
+    return "Too many sign-in emails were requested recently. Wait a minute or sign in with your password.";
   }
   if (code === "otp_disabled" || lowerMessage.includes("signups not allowed for otp")) {
-    return "New-user magic-link signups are disabled in Supabase Auth for this address. Create an account or sign in with your password.";
+    return "New-user magic-link signups are disabled for this address. Create an account or sign in with your password.";
   }
   if (code === "invalid_credentials" || lowerMessage.includes("invalid login credentials")) {
     return "Invalid email or password. Double-check your credentials or create an account.";
@@ -36,8 +36,8 @@ function formatAuthError(
   const detail = [code, message].filter(Boolean).join(": ");
   if (mode === "otp") {
     return detail
-      ? `Ano could not send a sign-in link (${detail}). Check Supabase Auth Redirect URLs and SMTP settings.`
-      : "Ano could not send a sign-in link. Check the Auth configuration and try again.";
+      ? `Ano could not send a sign-in link (${detail}). Please try again or use your password.`
+      : "Ano could not send a sign-in link. Please try again in a moment.";
   }
   return detail
     ? `Ano could not sign you in (${detail}).`
@@ -66,7 +66,7 @@ export function LoginForm() {
     const callbackError = params.get("error");
     if (callbackError === "configuration") {
       setIsError(true);
-      setMessage("Ano is missing its public Supabase configuration.");
+      setMessage("Authentication service is temporarily unavailable.");
     } else if (callbackError === "callback") {
       setIsError(true);
       setMessage("That sign-in or confirmation link was invalid or expired. Try signing in with your password or requesting a new link.");
@@ -105,7 +105,7 @@ export function LoginForm() {
     const client = getBrowserSupabaseClient();
     if (!client) {
       setIsError(true);
-      setMessage("Ano is missing its public Supabase configuration.");
+      setMessage("Authentication service is temporarily unavailable.");
       return;
     }
 
@@ -156,7 +156,7 @@ export function LoginForm() {
     const client = getBrowserSupabaseClient();
     if (!client) {
       setIsError(true);
-      setMessage("Ano is missing its public Supabase configuration.");
+      setMessage("Authentication service is temporarily unavailable.");
       return;
     }
 

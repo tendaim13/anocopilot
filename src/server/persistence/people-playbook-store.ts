@@ -1268,8 +1268,8 @@ export async function executeApprovedProspeoPersonSearch(
         label: "Named buyer candidates saved",
         detail:
           providerKey === "website_team"
-            ? `Company website scan ($0 credits) returned ${rowsToUpsert.length} decision-makers across ${String(receipt.companies_scanned ?? context.shortlistedAccounts.length)} shortlisted sites${backfilledCount > 0 ? ` and enriched ${backfilledCount} existing contact(s) with public website details` : ""}.`
-            : `Prospeo returned ${rowsToUpsert.length} named people for shortlisted accounts${websiteFailsafeRan && (websiteFailsafeAdded > 0 || backfilledCount > 0) ? `, and automatic $0 website failsafe added ${websiteFailsafeAdded} contact(s) and updated ${backfilledCount} contact(s) with public website emails` : ""}. Contact verification remains separately tracked.`,
+            ? `Company website scan returned ${rowsToUpsert.length} decision-makers across ${String(receipt.companies_scanned ?? context.shortlistedAccounts.length)} shortlisted sites${backfilledCount > 0 ? ` and enriched ${backfilledCount} existing contact(s) with public website details` : ""}.`
+            : `B2B directory returned ${rowsToUpsert.length} named people for shortlisted accounts${websiteFailsafeRan && (websiteFailsafeAdded > 0 || backfilledCount > 0) ? `, and website scan added ${websiteFailsafeAdded} contact(s) and updated ${backfilledCount} contact(s) with public website emails` : ""}.`,
       },
       { onConflict: "graph_run_id,event_key" },
     );
@@ -1315,8 +1315,8 @@ export async function executeApprovedProspeoPersonSearch(
     const status = noResults ? "completed" : "requires_manual_review";
     const message = noResults
       ? failsafeAdded > 0 || failsafeBackfilled > 0
-        ? `Prospeo returned 0 matches; automatic $0 website failsafe added ${failsafeAdded} contact(s) and updated ${failsafeBackfilled} contact(s).`
-        : "Prospeo returned no named people for the approved roles and shortlisted companies."
+        ? `Directory returned 0 matches; company website scan added ${failsafeAdded} contact(s) and updated ${failsafeBackfilled} contact(s).`
+        : "Directory returned no named people for the approved roles and shortlisted companies."
       : error instanceof ProspeoClientError
         ? error.message
         : "Ano could not complete the approved person search safely and did not retry automatically.";
@@ -1418,7 +1418,7 @@ export async function saveDropcontactVerificationPreview(
   const selectedContacts = view.contacts.filter((contact) => selectedSet.has(contact.id));
   if (selectedContacts.length === 0) {
     throw new PeoplePlaybookPersistenceError(
-      `Select at least one named person before preparing a ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verification preview.`,
+      "Select at least one named person before preparing an email verification preview.",
       "NO_CONTACTS_SELECTED",
     );
   }
@@ -1501,7 +1501,7 @@ export async function saveDropcontactVerificationPreview(
 
   if (upsertRunError) {
     throw new PeoplePlaybookPersistenceError(
-      `Ano could not save the selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verification preview.`,
+      "Ano could not save the selective email verification preview.",
     );
   }
 
@@ -1549,11 +1549,8 @@ export async function saveDropcontactVerificationPreview(
       workspace_id: session.workspace.id,
       graph_run_id: context.graphRunId,
       event_key: `phase-e-dc-preview:${verificationRunId}`,
-      label:
-        providerKey === "prospeo"
-          ? "Prospeo email enrichment preview ready"
-          : "Dropcontact verification preview ready",
-      detail: `Selected ${preview.previewPairs.length} contact${preview.previewPairs.length === 1 ? "" : "s"} for selective ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} preview. Waiting for explicit approval.`,
+      label: "Work email verification preview ready",
+      detail: `Selected ${preview.previewPairs.length} contact${preview.previewPairs.length === 1 ? "" : "s"} for selective email verification. Waiting for explicit approval.`,
     },
     { onConflict: "graph_run_id,event_key" },
   );
@@ -1850,7 +1847,7 @@ export async function executeApprovedDropcontactVerification(
         graph_run_id: context.graphRunId,
         event_key: `phase-e-dc-verify:${verificationRunId}`,
         label: "Selective contact verification completed",
-        detail: `${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verified ${verifiedCount} of ${pairs.length} selected contact${pairs.length === 1 ? "" : "s"}${websiteFailsafeBackfilled > 0 ? `; automatic $0 website fallback added public contact details for ${websiteFailsafeBackfilled} unverified contact(s)` : ""}. Outreach remains gated until explicit per-action approval.`,
+        detail: `Verified ${verifiedCount} of ${pairs.length} selected contact${pairs.length === 1 ? "" : "s"}${websiteFailsafeBackfilled > 0 ? `; company website fallback added public contact details for ${websiteFailsafeBackfilled} unverified contact(s)` : ""}.`,
       },
       { onConflict: "graph_run_id,event_key" },
     );
@@ -1861,7 +1858,7 @@ export async function executeApprovedDropcontactVerification(
     const message =
       error instanceof DropcontactClientError || error instanceof ProspeoClientError
         ? error.message
-        : `Ano could not confirm the ${providerKey === "prospeo" ? "Prospeo" : "Dropcontact"} verification batch safely and did not retry automatically.`;
+        : "Ano could not confirm the work email verification batch safely and did not retry automatically.";
 
     await session.client
       .from("contact_candidates")

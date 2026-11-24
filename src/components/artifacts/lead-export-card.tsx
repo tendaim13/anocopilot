@@ -107,8 +107,7 @@ export function LeadExportCard({
 
       <p className="m3-artifact-lead">
         Download RFC-4180 formula-safe CSV files formatted for external email blasters, spreadsheets,
-        or manual outreach — no Mercury connection required. Keeps verified vs public-website email
-        provenance honest in every row.
+        or manual outreach. Keeps verified vs public-website email provenance honest in every row.
       </p>
 
       <div className="m3-metric-strip">

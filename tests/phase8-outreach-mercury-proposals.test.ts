@@ -396,5 +396,5 @@ test("Phase F message parts and work queue classify pending outreach and Mercury
   });
 
   assert.equal(workItem?.category, "provider_scope_approval_required");
-  assert.equal(workItem?.label, "Approve outreach / Mercury proposal");
+  assert.equal(workItem?.label, "Approve outbound proposal");
 });

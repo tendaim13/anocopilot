@@ -28,6 +28,7 @@ import {
   conversationPatchSchema,
   formatDisplayErrorMessage,
   graphResumeSchema,
+  maskVendorNamesForDisplay,
   needsFriendlyTitleRefresh,
   type ConversationMessageMetadata,
   type GraphResume,
@@ -782,7 +783,7 @@ export async function continueResearchConversation(
           meta.verificationRunId = updatedPeopleDiscovery.verificationRun?.id;
           meta.awaitingVerificationApproval = false;
           meta.verifiedEmailCount = verifiedContacts.length;
-          meta.actionSummary = `${vProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification finished: ${verifiedContacts.length} verified email${verifiedContacts.length === 1 ? "" : "s"}.`;
+          meta.actionSummary = `Work email verification finished: ${verifiedContacts.length} verified email${verifiedContacts.length === 1 ? "" : "s"}.`;
           hasMetadata = true;
           executionNotes.push(
             verifiedContacts.length > 0
@@ -794,8 +795,8 @@ export async function continueResearchConversation(
                   return withAnyEmail.length > 0
                     ? `Verification found 0 additional work emails, and ${withAnyEmail.length} contact(s) now have public website email addresses:\n${formatContactBullets(withAnyEmail)}`
                     : vProvider === "prospeo" && updatedDropcontact.available
-                      ? `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "try Dropcontact on unverified contacts" or "scan shortlisted company websites" to check your other email sources.`
-                      : `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "scan shortlisted company websites" to pull public clinic contact pages.`;
+                      ? `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "try another verification pass on unverified contacts" or "scan shortlisted company websites" to check your other email sources.`
+                      : `Email verification finished (${updatedPeopleDiscovery.verificationRun?.status ?? "completed"}), with 0 newly verified emails. Reply "scan shortlisted company websites" to pull public company contact pages.`;
                 })(),
           );
         } else if (
@@ -821,20 +822,25 @@ export async function continueResearchConversation(
           meta.awaitingPersonCreditApproval = false;
           meta.actionSummary =
             pStatus === "completed"
-              ? `${pProvider === "prospeo" ? "Prospeo" : "Website team"} person search finished: ${count} contacts.`
-              : updatedPeopleDiscovery.personSearch?.failureMessage ?? "Person search needs review.";
+              ? `${pProvider === "prospeo" ? "B2B directory" : "Website team"} person search finished: ${count} contacts.`
+              : maskVendorNamesForDisplay(
+                  updatedPeopleDiscovery.personSearch?.failureMessage ??
+                    "Person search needs review.",
+                );
           hasMetadata = true;
           if (pStatus !== "completed") {
             executionErrors.push(
-              updatedPeopleDiscovery.personSearch?.failureMessage ??
-                "Person search could not complete cleanly.",
+              maskVendorNamesForDisplay(
+                updatedPeopleDiscovery.personSearch?.failureMessage ??
+                  "Person search could not complete cleanly.",
+              ),
             );
           } else if (count > 0) {
             const withAnyEmailCount = updatedPeopleDiscovery.contacts.filter(
               (c) => Boolean(c.verifiedDetails?.email || c.publicEmail),
             ).length;
             executionNotes.push(
-              `Saved ${count} decision-maker${count === 1 ? "" : "s"} (${withAnyEmailCount} with email found):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}\n\nReply "verify emails via Prospeo" to look up direct work emails or "scan shortlisted company websites" for website contacts.`,
+              `Saved ${count} decision-maker${count === 1 ? "" : "s"} (${withAnyEmailCount} with email found):\n${formatContactBullets(updatedPeopleDiscovery.contacts)}\n\nReply "verify emails" to look up direct work emails or "scan shortlisted company websites" for website contacts.`,
             );
           } else {
             executionNotes.push(
@@ -863,12 +869,16 @@ export async function continueResearchConversation(
           meta.awaitingCreditApproval = false;
           meta.actionSummary =
             updatedCompanySearch.status === "completed"
-              ? `Approved ${cProvider === "prospeo" ? "Prospeo" : "OpenStreetMap"} search: ${count} companies.`
-              : updatedCompanySearch.failureMessage ?? "Company search needs review.";
+              ? `Approved ${cProvider === "prospeo" ? "B2B directory" : "local business"} search: ${count} companies.`
+              : maskVendorNamesForDisplay(
+                  updatedCompanySearch.failureMessage ?? "Company search needs review.",
+                );
           hasMetadata = true;
           if (updatedCompanySearch.status !== "completed") {
             executionErrors.push(
-              updatedCompanySearch.failureMessage ?? "Approved company search needs review.",
+              maskVendorNamesForDisplay(
+                updatedCompanySearch.failureMessage ?? "Approved company search needs review.",
+              ),
             );
           } else if (count > 0) {
             executionNotes.push(
@@ -1083,21 +1093,25 @@ export async function continueResearchConversation(
           meta.awaitingCreditApproval = false;
           meta.actionSummary =
             updatedCompanySearch.status === "completed"
-              ? `Updated OpenStreetMap cohort: ${count} companies.`
-              : updatedCompanySearch.failureMessage ?? "OpenStreetMap search needs review.";
+              ? `Updated local business cohort: ${count} companies.`
+              : maskVendorNamesForDisplay(
+                  updatedCompanySearch.failureMessage ?? "Local business search needs review.",
+                );
           hasMetadata = true;
           if (updatedCompanySearch.status !== "completed") {
             executionErrors.push(
-              updatedCompanySearch.failureMessage ??
-                "OpenStreetMap could not complete the updated search.",
+              maskVendorNamesForDisplay(
+                updatedCompanySearch.failureMessage ??
+                  "Local business search could not complete cleanly.",
+              ),
             );
           } else if (count > 0) {
             executionNotes.push(
-              `Updated the Company Cohort via OpenStreetMap (${count} companies):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
+              `Updated the Company Cohort via local business search (${count} companies):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
             );
           } else {
             executionNotes.push(
-              "OpenStreetMap returned 0 companies for those filters. Try a specific city or switch to Prospeo B2B directory search.",
+              "Local business search returned 0 companies for those filters. Try a specific city or switch to B2B company directory search.",
             );
           }
         } else {
@@ -1139,21 +1153,25 @@ export async function continueResearchConversation(
             meta.awaitingCreditApproval = false;
             meta.actionSummary =
               updatedCompanySearch.status === "completed"
-                ? `Executed Prospeo company search: ${count} companies.`
-                : updatedCompanySearch.failureMessage ?? "Prospeo search needs review.";
+                ? `Executed B2B company search: ${count} companies.`
+                : maskVendorNamesForDisplay(
+                    updatedCompanySearch.failureMessage ?? "Company search needs review.",
+                  );
             hasMetadata = true;
             if (updatedCompanySearch.status !== "completed") {
               executionErrors.push(
-                updatedCompanySearch.failureMessage ??
-                  "Prospeo could not complete the approved company search.",
+                maskVendorNamesForDisplay(
+                  updatedCompanySearch.failureMessage ??
+                    "Ano could not complete the approved company search.",
+                ),
               );
             } else if (count > 0) {
               executionNotes.push(
-                `Ran Prospeo company search for [${updatedCompanySearch.canonicalLocations.join(", ")}] (${count} companies saved):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
+                `Ran B2B company directory search for [${updatedCompanySearch.canonicalLocations.join(", ")}] (${count} companies saved):\n${formatCompanyBullets(updatedCompanySearch.accounts)}`,
               );
             } else {
               executionNotes.push(
-                `Prospeo returned 0 companies for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Try broadening keywords or switching to OpenStreetMap.`,
+                `B2B directory returned 0 companies for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Try broadening keywords or switching to local business search.`,
               );
             }
           } else {
@@ -1161,10 +1179,10 @@ export async function continueResearchConversation(
             meta.companySearchProvider = "prospeo";
             meta.companySearchId = updatedCompanySearch.id;
             meta.awaitingCreditApproval = true;
-            meta.actionSummary = "Prepared updated Prospeo company search preview.";
+            meta.actionSummary = "Prepared updated B2B company search preview.";
             hasMetadata = true;
             executionNotes.push(
-              `Prepared updated Prospeo company search preview for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Click "Run Prospeo company search" below or reply "yes, go ahead" to run it.`,
+              `Prepared updated B2B company search preview for [${updatedCompanySearch.canonicalLocations.join(", ")}]. Click "Run company search" below or reply "yes, go ahead" to run it.`,
             );
           }
         }
@@ -1557,22 +1575,26 @@ export async function continueResearchConversation(
               meta.awaitingPersonCreditApproval = false;
               meta.actionSummary =
                 searchStatus === "completed"
-                  ? `Executed Prospeo person search: ${count} named buyers.`
-                  : updatedPeopleDiscovery.personSearch?.failureMessage ??
-                    "Prospeo person search needs review.";
+                  ? `Executed decision-maker search: ${count} named buyers.`
+                  : maskVendorNamesForDisplay(
+                      updatedPeopleDiscovery.personSearch?.failureMessage ??
+                        "Person search needs review.",
+                    );
               hasMetadata = true;
               if (searchStatus !== "completed") {
                 executionErrors.push(
-                  updatedPeopleDiscovery.personSearch?.failureMessage ??
-                    "Prospeo person search could not complete cleanly.",
+                  maskVendorNamesForDisplay(
+                    updatedPeopleDiscovery.personSearch?.failureMessage ??
+                      "Decision-maker search could not complete cleanly.",
+                  ),
                 );
               } else if (count > 0) {
                 executionNotes.push(
-                  `Ran Prospeo person search, saving ${count} named buyer${count === 1 ? "" : "s"}:\n${formatContactBullets(updatedPeopleDiscovery.contacts)}`,
+                  `Ran B2B directory person search, saving ${count} named buyer${count === 1 ? "" : "s"}:\n${formatContactBullets(updatedPeopleDiscovery.contacts)}`,
                 );
               } else {
                 executionNotes.push(
-                  "Prospeo returned 0 matching people for those shortlisted companies and titles. Try broadening target roles or shortlisting more companies.",
+                  "The directory returned 0 matching people for those shortlisted companies and titles. Try broadening target roles or shortlisting more companies.",
                 );
               }
             } else {
@@ -1580,10 +1602,10 @@ export async function continueResearchConversation(
               meta.peopleSearchProvider = "prospeo";
               meta.peopleSearchId = updatedPeopleDiscovery.personSearch?.id;
               meta.awaitingPersonCreditApproval = true;
-              meta.actionSummary = "Prepared updated Prospeo Buying Committee preview.";
+              meta.actionSummary = "Prepared updated decision-maker search preview.";
               hasMetadata = true;
               executionNotes.push(
-                `Prepared the Prospeo Buying Committee search for ${shortlistedAccounts.map((a) => a.name).join(", ")}. Click "Run Prospeo people search" below or reply "yes, go ahead" to run it.`,
+                `Prepared the Buying Committee search for ${shortlistedAccounts.map((a) => a.name).join(", ")}. Click "Run decision-maker search" below or reply "yes, go ahead" to run it.`,
               );
             }
           }
@@ -1718,7 +1740,7 @@ export async function continueResearchConversation(
         const requestedProvider = requestedVerificationProvider;
         if (requestedProvider === "dropcontact" && !updatedDropcontact.available) {
           executionErrors.push(
-            "Dropcontact is not configured on the server yet. Add DROPCONTACT_API_KEY as a Vercel Production Secret (and in .env.local for local dev) to enable Dropcontact, or reply \"scan shortlisted company websites\" to pull public clinic emails now.",
+            "Work email verification is not available right now. Reply \"scan shortlisted company websites\" to pull public company emails instead.",
           );
         } else {
           try {
@@ -1755,7 +1777,7 @@ export async function continueResearchConversation(
               meta.verificationRunId = updatedPeopleDiscovery.verificationRun?.id;
               meta.awaitingVerificationApproval = false;
               meta.verifiedEmailCount = verifiedContacts.length;
-              meta.actionSummary = `${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification completed: ${verifiedContacts.length} verified email${verifiedContacts.length === 1 ? "" : "s"}.`;
+              meta.actionSummary = `Work email verification completed: ${verifiedContacts.length} verified email${verifiedContacts.length === 1 ? "" : "s"}.`;
               hasMetadata = true;
               executionNotes.push(
                 verifiedContacts.length > 0
@@ -1765,10 +1787,10 @@ export async function continueResearchConversation(
                         Boolean(c.verifiedDetails?.email || c.publicEmail),
                       );
                       return withAnyEmail.length > 0
-                        ? `Verification returned 0 additional provider emails, and ${withAnyEmail.length} contact(s) now carry public website email addresses:\n${formatContactBullets(withAnyEmail)}`
+                        ? `Verification returned 0 additional work emails, and ${withAnyEmail.length} contact(s) now carry public website email addresses:\n${formatContactBullets(withAnyEmail)}`
                         : requestedProvider === "prospeo" && updatedDropcontact.available
-                          ? "Verification finished with 0 newly verified emails. Reply \"try Dropcontact on unverified contacts\" or \"scan shortlisted company websites\" to pull public clinic emails from their websites."
-                          : "Verification finished with 0 newly verified emails. Reply \"scan shortlisted company websites\" to pull public clinic emails from their websites.";
+                          ? "Verification finished with 0 newly verified emails. Reply \"try another verification pass on unverified contacts\" or \"scan shortlisted company websites\" to pull public company emails from their websites."
+                          : "Verification finished with 0 newly verified emails. Reply \"scan shortlisted company websites\" to pull public company emails from their websites.";
                     })(),
               );
             } else {
@@ -1777,10 +1799,10 @@ export async function continueResearchConversation(
                 updatedPeopleDiscovery.verificationRun?.providerKey ?? requestedProvider;
               meta.verificationRunId = runId;
               meta.awaitingVerificationApproval = true;
-              meta.actionSummary = `Prepared ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification for ${selectedContacts.length} contact(s).`;
+              meta.actionSummary = `Prepared work email verification for ${selectedContacts.length} contact(s).`;
               hasMetadata = true;
               executionNotes.push(
-                `Prepared ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification for ${selectedContacts.length} contact${selectedContacts.length === 1 ? "" : "s"} (not executed yet). Click "Approve ${requestedProvider === "prospeo" ? "Prospeo" : "Dropcontact"} email verification" below or reply "yes, approved".`,
+                `Prepared work email verification for ${selectedContacts.length} contact${selectedContacts.length === 1 ? "" : "s"} (not executed yet). Click "Verify contacts" below or reply "yes, approved".`,
               );
             }
           } catch (verifyError) {

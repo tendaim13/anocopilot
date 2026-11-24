@@ -209,7 +209,7 @@ test("resolveLeadEmailProvenance, scope filtering, and buildLeadsCsv format blas
     },
   );
 
-  assert.equal(resolveLeadEmailProvenance(prospeoVerified).emailSource, "prospeo_verified");
+  assert.equal(resolveLeadEmailProvenance(prospeoVerified).emailSource, "verified_work_email");
   assert.equal(resolveLeadEmailProvenance(publicInbox).emailSource, "public_website_shared_inbox");
   assert.equal(resolveLeadEmailProvenance(namedOnlyAdversarial).emailStatus, "missing");
 
@@ -227,7 +227,7 @@ test("resolveLeadEmailProvenance, scope filtering, and buildLeadsCsv format blas
   const lines = csvWithEmail.csv.split("\r\n");
   assert.equal(lines.length, 3);
   assert.equal(lines[0], LEADS_CSV_HEADERS.join(","));
-  assert.ok(lines[1].includes("mei.tan@melbournedental.example,verified,prospeo_verified,'+61 3 9000 1111"));
+  assert.ok(lines[1].includes("mei.tan@melbournedental.example,verified,verified_work_email,'+61 3 9000 1111"));
   assert.ok(lines[1].includes("Dental Clinic,Melbourne,Australia"));
   assert.ok(lines[2].includes("info@melbournedental.example,unverified_public,public_website_shared_inbox"));
 

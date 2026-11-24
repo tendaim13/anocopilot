@@ -222,8 +222,8 @@ function CompaniesContent() {
           </h2>
           <p>
             {shell?.mode !== "supabase"
-              ? "Authenticate with your Ano workspace account to preview and save Prospeo company cohorts."
-              : "Lock a Phase C target market and industry in any research thread, then approve a 1-page Prospeo company search."}
+              ? "Authenticate with your Ano workspace account to preview and save company cohorts."
+              : "Lock a target market and industry in any research thread, then approve a company discovery search."}
           </p>
         </article>
       )}

@@ -653,8 +653,8 @@ export function buildTargetCompanySearchPreview(input: {
   ) {
     throw new Error(
       providerKey === "openstreetmap"
-        ? "OpenStreetMap could not resolve every requested location. Enter a specific city, state, or region."
-        : "Prospeo could not verify every canonical location. Ano will not create a chargeable query with an ambiguous location.",
+        ? "Ano could not resolve every requested location. Enter a specific city, state, or region."
+        : "Ano could not verify every requested location. Enter a specific country, state, or city.",
     );
   }
 
@@ -678,7 +678,7 @@ export function buildTargetCompanySearchPreview(input: {
         : deriveOsmTagFilters(input.industry.name, industryKeywords);
     if (osmTags.length === 0) {
       throw new Error(
-        "OpenStreetMap discovery requires at least one physical business tag.",
+        "Local business discovery requires at least one physical business category.",
       );
     }
 
@@ -695,17 +695,17 @@ export function buildTargetCompanySearchPreview(input: {
       resolve_missing_websites_via_searxng: Boolean(input.resolveWebsites),
     };
     const criteria = [
-      clipText(`Locked market route: ${input.market.name} (${areaLabels.join(", ")})`, 280),
-      clipText(`Target segment context: ${input.industry.name}`, 280),
+      clipText(`Target market: ${input.market.name} (${areaLabels.join(", ")})`, 280),
+      clipText(`Target segment: ${input.industry.name}`, 280),
       clipText(
-        `OpenStreetMap POI tags: ${osmTags.map((tag) => `${tag.key}=${tag.value}`).join(", ")}`,
+        `Category tags: ${osmTags.map((tag) => `${tag.key}=${tag.value}`).join(", ")}`,
         280,
       ),
-      "Strict 25-business cap ($0 credits — OpenStreetMap)",
+      "Local physical business search (up to 25 businesses)",
     ];
     if (input.resolveWebsites) {
       criteria.push(
-        "Bounded private SearXNG website lookup for up to 10 businesses missing an OSM website ($0)",
+        "Automatic official website lookup for businesses missing a listed domain",
       );
     }
     if (excludedCategories.length > 0) {
@@ -734,7 +734,7 @@ export function buildTargetCompanySearchPreview(input: {
       maximumResults: 25,
       estimatedMaximumCredits: 0,
       estimateDetail:
-        "Free OpenStreetMap local discovery returns up to 25 physical businesses for 0 credits. Optional missing-website lookup uses your private SearXNG instance (max 10 lookups, 0 credits). No Prospeo credits are spent.",
+        "Finds local physical businesses matching your target geography and category filters, with optional official-website lookup.",
       resultCount: null,
       providerReceipt: {
         source: "openstreetmap",
@@ -779,18 +779,17 @@ export function buildTargetCompanySearchPreview(input: {
   }
 
   const criteria = [
-    clipText(`Locked market route: ${input.market.name} (${input.canonicalLocations.join(", ")})`, 280),
-    clipText(`Target segment context: ${input.industry.name}`, 280),
+    clipText(`Target market: ${input.market.name} (${input.canonicalLocations.join(", ")})`, 280),
+    clipText(`Target segment: ${input.industry.name}`, 280),
   ];
   if (canonicalIndustries.length > 0) {
-    criteria.push(clipText(`Prospeo industry filter: ${canonicalIndustries.join(", ")}`, 280));
+    criteria.push(clipText(`Industry filter: ${canonicalIndustries.join(", ")}`, 280));
   }
   if (industryKeywords.length > 0) {
     criteria.push(
-      clipText(`Profile-only company keywords (OR match): ${industryKeywords.join(", ")}`, 280),
+      clipText(`Company profile keywords: ${industryKeywords.join(", ")}`, 280),
     );
   }
-  criteria.push("Strict 1-page ceiling (maximum 25 companies, maximum 1 Prospeo credit)");
   if (excludedCategories.length > 0) {
     criteria.push(
       clipText(`Excluded keywords / categories: ${excludedCategories.join(", ")}`, 280),
@@ -817,7 +816,7 @@ export function buildTargetCompanySearchPreview(input: {
     maximumResults: 25,
     estimatedMaximumCredits: 1,
     estimateDetail:
-      "One first-page Prospeo request returns up to 25 companies and costs at most 1 credit only when at least one company matches; exact duplicate pages may be free for 30 days.",
+      "Finds matching B2B organizations using your verified location and industry profile filters.",
     resultCount: null,
     providerReceipt: {
       suggestion_requests: input.canonicalLocations.length,
@@ -889,18 +888,18 @@ export function scoreAndBuildAccountDossier(
     Boolean(locationLower.trim()) &&
     canonicalTokens.some((token) => locationLower.includes(token));
 
+  const sourceDisplay = isOsm ? "Local business directory" : "B2B company directory";
+
   signals.push({
     id: `${company.id}:location_match`,
     signalType: "location_match",
     label: explicitLocationMatch
-      ? isOsm
-        ? "Verified map area match"
-        : "Canonical location match"
+      ? "Verified location match"
       : "Query location cohort",
     explanation: formattedLocation
-      ? `${isOsm ? "OpenStreetMap" : "Prospeo"} lists location as ${company.address ?? formattedLocation} under approved query ${context.canonicalLocations.join(", ")}.`
-      : `Returned by ${isOsm ? "OpenStreetMap" : "Prospeo"} inside approved location filter ${context.canonicalLocations.join(", ")}.`,
-    sourceAttribution: isOsm ? "OpenStreetMap" : "Prospeo company search",
+      ? `${sourceDisplay} lists location as ${company.address ?? formattedLocation} under query ${context.canonicalLocations.join(", ")}.`
+      : `Matched within location filter ${context.canonicalLocations.join(", ")}.`,
+    sourceAttribution: sourceDisplay,
     evidenceUrl: isOsm ? websiteUrl ?? osmUrl : websiteUrl,
     capturedAt: context.capturedAt,
   });
@@ -959,16 +958,16 @@ export function scoreAndBuildAccountDossier(
     signals.push({
       id: `${company.id}:industry_match`,
       signalType: "industry_match",
-      label: "OpenStreetMap category match",
-      explanation: `OpenStreetMap lists structured POI tags (${osmTagEntries.map(([k, v]) => `${k}=${v}`).slice(0, 4).join(", ")}), directly matching ${context.targetIndustryName}.`,
-      sourceAttribution: "OpenStreetMap",
+      label: "Local category match",
+      explanation: `Local business directory lists matching category tags (${osmTagEntries.map(([k, v]) => `${k}=${v}`).slice(0, 4).join(", ")}) for ${context.targetIndustryName}.`,
+      sourceAttribution: "Local business directory",
       evidenceUrl: websiteUrl ?? osmUrl,
       capturedAt: context.capturedAt,
     });
   } else if (company.industry || hasRelevanceMatch) {
     const matchReasons: string[] = [];
     if (explicitCanonicalIndustryMatch && company.industry) {
-      matchReasons.push(`canonical industry "${company.industry}"`);
+      matchReasons.push(`industry "${company.industry}"`);
     }
     if (matchedKeywords.length > 0) {
       matchReasons.push(`keywords: ${matchedKeywords.join(", ")}`);
@@ -980,8 +979,8 @@ export function scoreAndBuildAccountDossier(
       label: hasRelevanceMatch ? "Target segment relevance match" : "Off-target industry category",
       explanation: hasRelevanceMatch
         ? `Matches ${context.targetIndustryName} (${matchReasons.join(" · ")}).`
-        : `Prospeo classifies this company under "${company.industry}". It did not match any target keywords (${industryKeywords.join(", ") || context.targetIndustryName}).`,
-      sourceAttribution: isOsm ? "OpenStreetMap" : "Prospeo company search",
+        : `Directory lists this company under "${company.industry}". It did not match any target keywords (${industryKeywords.join(", ") || context.targetIndustryName}).`,
+      sourceAttribution: isOsm ? "Local business directory" : "B2B company directory",
       evidenceUrl: isOsm ? websiteUrl ?? osmUrl : websiteUrl,
       capturedAt: context.capturedAt,
     });
@@ -995,13 +994,11 @@ export function scoreAndBuildAccountDossier(
       signals.push({
         id: `${company.id}:domain_verified`,
         signalType: "domain_verified",
-        label: fromSearxng
-          ? "Official website resolved (SearXNG)"
-          : "Official website listed on OpenStreetMap",
+        label: "Official website resolved",
         explanation: fromSearxng
-          ? `Resolved official website domain ${company.domain ?? websiteUrl} via bounded SearXNG lookup for downstream website inspection or Phase E contact discovery.`
-          : `OpenStreetMap lists primary domain ${company.domain ?? websiteUrl} for website verification or Phase E buyer discovery.`,
-        sourceAttribution: fromSearxng ? "SearXNG website lookup" : "OpenStreetMap",
+          ? `Resolved official website domain ${company.domain ?? websiteUrl} via web lookup for decision-maker discovery.`
+          : `Listed primary domain ${company.domain ?? websiteUrl} for decision-maker discovery.`,
+        sourceAttribution: fromSearxng ? "Official website lookup" : "Local business directory",
         evidenceUrl: websiteUrl,
         capturedAt: context.capturedAt,
       });
@@ -1015,9 +1012,9 @@ export function scoreAndBuildAccountDossier(
       signals.push({
         id: `${company.id}:digital_presence`,
         signalType: "digital_presence",
-        label: "Public contact & map profile",
-        explanation: `Observed OpenStreetMap listing${company.phone ? ` · phone ${company.phone}` : ""}${company.address ? ` · ${company.address}` : ""}.`,
-        sourceAttribution: "OpenStreetMap",
+        label: "Public contact & business profile",
+        explanation: `Observed business listing${company.phone ? ` · phone ${company.phone}` : ""}${company.address ? ` · ${company.address}` : ""}.`,
+        sourceAttribution: "Local business directory",
         evidenceUrl: websiteUrl ?? osmUrl,
         capturedAt: context.capturedAt,
       });
@@ -1044,7 +1041,7 @@ export function scoreAndBuildAccountDossier(
             ? `Employee band ${company.employeeRange}.`
             : typeof company.employeeCount === "number"
               ? `${company.employeeCount} employees reported.`
-              : `OpenStreetMap records ${[
+              : `Business profile notes ${[
                   company.osmTags?.["operator"] ? `operator ${company.osmTags["operator"]}` : null,
                   company.osmTags?.["brand"] ? `brand ${company.osmTags["brand"]}` : null,
                   company.osmTags?.["branch"] ? `branch ${company.osmTags["branch"]}` : null,
@@ -1052,7 +1049,7 @@ export function scoreAndBuildAccountDossier(
                 ]
                   .filter(Boolean)
                   .join(", ")}.`,
-        sourceAttribution: "OpenStreetMap",
+        sourceAttribution: "Local business directory",
         evidenceUrl: websiteUrl ?? osmUrl,
         capturedAt: context.capturedAt,
       });
@@ -1065,12 +1062,12 @@ export function scoreAndBuildAccountDossier(
         id: `${company.id}:headcount_fit`,
         signalType: "headcount_fit",
         label: "Headcount band observed",
-        explanation: `Prospeo reports ${
+        explanation: `Directory reports ${
           company.employeeRange
             ? `employee band ${company.employeeRange}`
             : `${company.employeeCount} employees`
         }.`,
-        sourceAttribution: "Prospeo company search",
+        sourceAttribution: "B2B company directory",
         evidenceUrl: websiteUrl,
         capturedAt: context.capturedAt,
       });
@@ -1082,8 +1079,8 @@ export function scoreAndBuildAccountDossier(
         id: `${company.id}:domain_verified`,
         signalType: "domain_verified",
         label: "Primary company domain",
-        explanation: `Prospeo returned domain ${company.domain} for downstream website inspection or Phase 7 contact verification.`,
-        sourceAttribution: "Prospeo company search",
+        explanation: `Primary domain ${company.domain} identified for website and contact verification.`,
+        sourceAttribution: "B2B company directory",
         evidenceUrl: websiteUrl,
         capturedAt: context.capturedAt,
       });
@@ -1101,7 +1098,7 @@ export function scoreAndBuildAccountDossier(
         ]
           .filter(Boolean)
           .join(" and ")}).`,
-        sourceAttribution: "Prospeo company search",
+        sourceAttribution: "B2B company directory",
         evidenceUrl: websiteUrl ?? linkedInUrl,
         capturedAt: context.capturedAt,
       });
@@ -1118,30 +1115,30 @@ export function scoreAndBuildAccountDossier(
         : "low";
 
   const unknowns: string[] = [
-    "Named decision-makers have not been searched yet (requires Phase 7 role & person approval).",
-    "Contact email and phone details remain unverified until selective Phase 7 Dropcontact approval.",
-    `Confirm whether the Phase C ${context.targetIndustryName} operational problem exists at this specific company.`,
+    "Named decision-makers have not been searched yet.",
+    "Contact email and phone details remain unverified until email verification runs.",
+    `Confirm whether the ${context.targetIndustryName} operational need exists at this specific company.`,
   ];
   if (isOsm) {
     unknowns.push(
-      "Headcount, chair/provider count, and patient-recall workflow need confirmation on the clinic website or in Phase E.",
+      "Headcount and workflow details should be confirmed on the company website or during outreach.",
     );
     if (!websiteUrl && !company.domain) {
       unknowns.unshift(
-        "Neither OpenStreetMap nor SearXNG confirmed an official clinic website domain yet (add or verify website before Phase E domain person search).",
+        "Official company website domain could not be confirmed yet.",
       );
     }
   } else {
     if (industryScore === 0) {
       unknowns.unshift(
-        `No target segment keyword or canonical industry match was found in Prospeo's profile (${company.industry ?? "unspecified industry"}).`,
+        `No target segment keyword or industry match was found in the directory profile (${company.industry ?? "unspecified industry"}).`,
       );
     }
     if (!company.industry) {
-      unknowns.push("Prospeo did not return an industry classification for this company.");
+      unknowns.push("Industry classification was not listed for this company.");
     }
     if (!company.domain && !websiteUrl) {
-      unknowns.push("Prospeo did not return a primary domain or website URL.");
+      unknowns.push("Primary domain or website URL was not listed for this company.");
     }
   }
 
@@ -1178,9 +1175,9 @@ export function scoreAndBuildAccountDossier(
       totalScore,
       confidence,
       rationale: isOsm
-        ? `Scored ${totalScore}/100 from OpenStreetMap business attributes (${locationScore}/40 location, ${industryScore}/35 OSM category match, ${signalScore}/25 profile completeness).`
-        : `Scored ${totalScore}/100 from company-level Prospeo signals (${locationScore}/40 location, ${industryScore}/35 industry match, ${signalScore}/25 profile completeness).`,
-      industryHypothesisNote: `Linked Phase C claims explain why ${context.targetIndustryName} in ${context.targetMarketName} was targeted; they are market-level hypotheses, not confirmed facts about ${company.name}.`,
+        ? `Scored ${totalScore}/100 from local business attributes (${locationScore}/40 location, ${industryScore}/35 category match, ${signalScore}/25 profile completeness).`
+        : `Scored ${totalScore}/100 from company profile signals (${locationScore}/40 location, ${industryScore}/35 industry match, ${signalScore}/25 profile completeness).`,
+      industryHypothesisNote: `Research findings explain why ${context.targetIndustryName} in ${context.targetMarketName} was targeted; individual company details are verified separately.`,
     },
     signals,
     claimIds: context.linkedClaimIds,
@@ -1235,7 +1232,8 @@ export function summarizeAccountCohort(
 
   const averageFitScore =
     accounts.length > 0 ? Math.round((totalFit / accounts.length) * 10) / 10 : 0;
-  const sourceName = providerKey === "openstreetmap" ? "OpenStreetMap" : "Prospeo";
+  const sourceName =
+    providerKey === "openstreetmap" ? "Local business search" : "B2B directory search";
 
   return accountCohortSummarySchema.parse({
     totalReturned: accounts.length,
@@ -1248,7 +1246,8 @@ export function summarizeAccountCohort(
     cohortExplanation:
       accounts.length > 0
         ? `${sourceName} returned ${accounts.length} candidate${accounts.length === 1 ? "" : "s"} for ${targetMarketName} · ${targetIndustryName} (average fit ${averageFitScore}/100).`
-        : `${sourceName} returned 0 companies for this approved query in ${targetMarketName}. Ano did not retry or relax filters automatically.`,
-    separationNote: `Industry-level claims come from Phase C public sources and explain why this segment was selected. Company-level signals above reflect only observed ${sourceName}${providerKey === "openstreetmap" ? " / SearXNG" : ""} attributes for each candidate.`,
+        : `${sourceName} returned 0 companies for ${targetMarketName}. Try broadening keywords or adjusting the target location.`,
+    separationNote:
+      "Market insights explain why this segment was selected; company signals reflect observed attributes for each candidate.",
   });
 }

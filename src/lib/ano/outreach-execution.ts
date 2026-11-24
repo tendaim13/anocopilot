@@ -182,7 +182,7 @@ export function evaluateContactEligibility(
       canProposeCallTask: true,
       canProposeMercurySync: true,
       reasons: [
-        "No named contact is linked yet; only Mercury CRM review tasks or manual call tasks may be proposed.",
+        "No named contact is linked yet; only CRM review tasks or manual call tasks may be proposed.",
       ],
     });
   }
@@ -197,7 +197,7 @@ export function evaluateContactEligibility(
       canProposeCallTask: false,
       canProposeMercurySync: false,
       reasons: [
-        `${email} matches a workspace opt-out or suppression record; all outreach and sync proposals are blocked.`,
+        `${email} matches a workspace opt-out or suppression record; all outreach proposals are blocked.`,
       ],
     });
   }
@@ -214,7 +214,7 @@ export function evaluateContactEligibility(
       canProposeCallTask: true,
       canProposeMercurySync: true,
       reasons: [
-        `${contact.fullName} does not have a provider-verified email yet; autonomous email send and calendar scheduling stay blocked until Prospeo or Dropcontact verification succeeds.${publicHint}`,
+        `${contact.fullName} does not have a verified work email yet; autonomous email send and calendar scheduling stay blocked until email verification succeeds.${publicHint}`,
       ],
     });
   }
@@ -227,13 +227,11 @@ export function evaluateContactEligibility(
       canProposeCallTask: true,
       canProposeMercurySync: true,
       reasons: [
-        "LinkedIn drafts are review-only for manual seller copy or Mercury draft sync; Ano never automates LinkedIn sends.",
+        "LinkedIn drafts are review-only for manual seller copy; Ano never automates LinkedIn sends.",
       ],
     });
   }
 
-  const verifyProviderLabel =
-    contact.verifiedDetails?.provider === "prospeo" ? "Prospeo" : "Dropcontact";
   return contactEligibilityCheckSchema.parse({
     status: "eligible",
     canProposeEmailSend: true,
@@ -241,7 +239,7 @@ export function evaluateContactEligibility(
     canProposeCallTask: true,
     canProposeMercurySync: true,
     reasons: [
-      `${verifyProviderLabel}-verified email (${email}) passed suppression checks and is eligible for per-action approval.`,
+      `Verified work email (${email}) passed suppression checks and is eligible for per-action approval.`,
     ],
   });
 }
@@ -365,7 +363,7 @@ export function assertDraftCanCreateProposal(
   if (proposalType === "email_send" && !draft.eligibility.canProposeEmailSend) {
     throw new Error(
       draft.eligibility.reasons[0] ??
-        "Email send proposals require an eligible, Dropcontact-verified email draft.",
+        "Email send proposals require an eligible, verified email draft.",
     );
   }
   if (proposalType === "calendar_schedule" && !draft.eligibility.canProposeCalendarSchedule) {
@@ -383,7 +381,7 @@ export function assertDraftCanCreateProposal(
       proposalType === "mercury_update") &&
     !draft.eligibility.canProposeMercurySync
   ) {
-    throw new Error("Mercury CRM proposal was blocked by contact suppression rules.");
+    throw new Error("CRM proposal was blocked by contact suppression rules.");
   }
 }
 
@@ -403,10 +401,10 @@ export function proposalSummaryFor(
     return `Create manual call task for ${draft.accountName} using approved call script v${draft.version}`;
   }
   if (proposalType === "mercury_task") {
-    return `Stage Mercury CRM follow-up task for ${draft.accountName}`;
+    return `Stage CRM follow-up task for ${draft.accountName}`;
   }
   if (proposalType === "mercury_draft") {
-    return `Stage Mercury CRM outreach draft v${draft.version} for ${recipient}`;
+    return `Stage CRM outreach draft v${draft.version} for ${recipient}`;
   }
-  return `Propose Mercury account context update for ${draft.accountName}`;
+  return `Propose CRM account context update for ${draft.accountName}`;
 }

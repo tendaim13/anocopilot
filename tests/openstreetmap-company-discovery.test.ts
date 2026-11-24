@@ -395,7 +395,7 @@ test("OpenStreetMap preview, LangGraph flow, dossier scoring, and cohort summary
   assert.equal(dossier.fit.industryScore, 35);
   assert.equal(dossier.fit.totalScore, 100);
   assert.equal(dossier.fit.confidence, "high");
-  assert.ok(dossier.signals.some((s) => s.sourceAttribution === "SearXNG website lookup"));
+  assert.ok(dossier.signals.some((s) => s.sourceAttribution === "Official website lookup"));
 
   const cohort = summarizeAccountCohort(
     [dossier],
@@ -404,5 +404,5 @@ test("OpenStreetMap preview, LangGraph flow, dossier scoring, and cohort summary
     12,
     "openstreetmap",
   );
-  assert.ok(cohort.cohortExplanation.includes("OpenStreetMap returned 1 candidate"));
+  assert.ok(cohort.cohortExplanation.includes("Local business search returned 1 candidate"));
 });

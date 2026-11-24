@@ -174,7 +174,7 @@ export async function resolveOsmLocation(
 ): Promise<OsmResolvedArea> {
   const clean = query.trim();
   if (!clean) {
-    throw new OsmClientError("LOCATION_NOT_FOUND", "Enter a location for OpenStreetMap search.");
+    throw new OsmClientError("LOCATION_NOT_FOUND", "Enter a city or region for local business search.");
   }
 
   const controller = new AbortController();
@@ -197,13 +197,13 @@ export async function resolveOsmLocation(
     if (response.status === 429) {
       throw new OsmClientError(
         "RATE_LIMITED",
-        "OpenStreetMap Nominatim rate-limited this location lookup. Wait a moment before trying again.",
+        "The local directory geocoder rate-limited this lookup. Wait a moment before trying again.",
       );
     }
     if (!response.ok) {
       throw new OsmClientError(
         "SERVICE_UNAVAILABLE",
-        `OpenStreetMap Nominatim returned HTTP ${response.status} for "${clean}".`,
+        `Local directory geocoder returned HTTP ${response.status} for "${clean}".`,
       );
     }
 
@@ -211,7 +211,7 @@ export async function resolveOsmLocation(
     if (!Array.isArray(payload)) {
       throw new OsmClientError(
         "INVALID_RESPONSE",
-        "OpenStreetMap Nominatim returned an unexpected response.",
+        "The local directory geocoder returned an unexpected response.",
       );
     }
 
@@ -224,7 +224,7 @@ export async function resolveOsmLocation(
     if (valid.length === 0) {
       throw new OsmClientError(
         "LOCATION_NOT_FOUND",
-        `OpenStreetMap could not resolve "${clean}" as a geographic place or region.`,
+        `Could not resolve "${clean}" as a geographic place or region.`,
       );
     }
 
@@ -258,11 +258,11 @@ export async function resolveOsmLocation(
         : error instanceof DOMException && error.name === "AbortError"
           ? new OsmClientError(
               "TIMEOUT",
-              `OpenStreetMap Nominatim timed out while resolving "${clean}".`,
+              `Local directory geocoding timed out while resolving "${clean}".`,
             )
           : new OsmClientError(
               "NETWORK_ERROR",
-              `Ano could not reach OpenStreetMap Nominatim to resolve "${clean}".`,
+              `Ano could not reach the local directory geocoder to resolve "${clean}".`,
             );
     recordInternalApiUsage({
       provider: "openstreetmap",
@@ -402,20 +402,20 @@ function extractAreaCountryFallback(displayName: string) {
 
 function inferIndustryFromOsmTags(tags: Record<string, string>) {
   if (tags.amenity === "dentist" || tags.healthcare === "dentist") {
-    return "Dental Clinic (OpenStreetMap)";
+    return "Dental Clinic";
   }
   if (tags.amenity === "clinic" || tags.healthcare === "clinic") {
-    return "Medical Clinic (OpenStreetMap)";
+    return "Medical Clinic";
   }
   if (tags.amenity === "doctors" || tags.healthcare === "doctor") {
-    return "Medical Practice (OpenStreetMap)";
+    return "Medical Practice";
   }
-  if (tags.healthcare) return `Healthcare · ${tags.healthcare} (OpenStreetMap)`;
-  if (tags.craft) return `Local Trade · ${tags.craft} (OpenStreetMap)`;
-  if (tags.office) return `Professional Practice · ${tags.office} (OpenStreetMap)`;
-  if (tags.amenity) return `Local Business · ${tags.amenity} (OpenStreetMap)`;
-  if (tags.shop) return `Local Shop · ${tags.shop} (OpenStreetMap)`;
-  return "OpenStreetMap Local Business";
+  if (tags.healthcare) return `Healthcare · ${tags.healthcare}`;
+  if (tags.craft) return `Local Trade · ${tags.craft}`;
+  if (tags.office) return `Professional Practice · ${tags.office}`;
+  if (tags.amenity) return `Local Business · ${tags.amenity}`;
+  if (tags.shop) return `Local Shop · ${tags.shop}`;
+  return "Local Business";
 }
 
 function normaliseNominatimPoi(
@@ -614,7 +614,7 @@ export async function searchOsmBusinesses(
   if (input.areas.length === 0 || input.tags.length === 0) {
     throw new OsmClientError(
       "LOCATION_NOT_FOUND",
-      "OpenStreetMap discovery needs at least one resolved area and one category tag.",
+      "Local business discovery needs at least one resolved area and one category tag.",
     );
   }
 
@@ -675,19 +675,19 @@ export async function searchOsmBusinesses(
           if (response.status === 429) {
             throw new OsmClientError(
               "RATE_LIMITED",
-              "OpenStreetMap Overpass rate-limited this search. Ano did not retry automatically.",
+              "The local business directory rate-limited this search. Ano did not retry automatically.",
             );
           }
           if (response.status === 504 || response.status === 408) {
             throw new OsmClientError(
               "TIMEOUT",
-              `OpenStreetMap Overpass timed out querying "${area.displayName}". Try a narrower city or region.`,
+              `Local business search timed out querying "${area.displayName}". Try a narrower city or region.`,
             );
           }
           if (!response.ok) {
             throw new OsmClientError(
               "SERVICE_UNAVAILABLE",
-              `OpenStreetMap Overpass returned HTTP ${response.status}. Ano did not retry automatically.`,
+              `Local business search returned HTTP ${response.status}. Ano did not retry automatically.`,
             );
           }
           payload = await response.json().catch(() => null);
@@ -696,12 +696,12 @@ export async function searchOsmBusinesses(
           if (error instanceof DOMException && error.name === "AbortError") {
             throw new OsmClientError(
               "TIMEOUT",
-              `OpenStreetMap Overpass timed out for "${area.displayName}". Try querying a specific city.`,
+              `Local business search timed out for "${area.displayName}". Try querying a specific city.`,
             );
           }
           throw new OsmClientError(
             "NETWORK_ERROR",
-            "Ano could not reach OpenStreetMap Overpass. No automatic retry was attempted.",
+            "Ano could not reach the local business directory. No automatic retry was attempted.",
           );
         } finally {
           clearTimeout(timer);
@@ -755,19 +755,19 @@ export async function searchOsmBusinesses(
           if (response.status === 429) {
             throw new OsmClientError(
               "RATE_LIMITED",
-              "OpenStreetMap Nominatim rate-limited this search. Wait a moment before running again; Ano did not retry automatically.",
+              "The local business directory rate-limited this search. Wait a moment before running again; Ano did not retry automatically.",
             );
           }
           if (response.status === 504 || response.status === 408) {
             throw new OsmClientError(
               "TIMEOUT",
-              `OpenStreetMap Nominatim timed out querying "${area.displayName}".`,
+              `Local business search timed out querying "${area.displayName}".`,
             );
           }
           if (!response.ok) {
             throw new OsmClientError(
               "SERVICE_UNAVAILABLE",
-              `OpenStreetMap Nominatim returned HTTP ${response.status}. Ano did not retry automatically.`,
+              `Local business search returned HTTP ${response.status}. Ano did not retry automatically.`,
             );
           }
 
@@ -777,12 +777,12 @@ export async function searchOsmBusinesses(
           if (error instanceof DOMException && error.name === "AbortError") {
             throw new OsmClientError(
               "TIMEOUT",
-              `OpenStreetMap Nominatim timed out while searching "${area.displayName}".`,
+              `Local business search timed out while searching "${area.displayName}".`,
             );
           }
           throw new OsmClientError(
             "NETWORK_ERROR",
-            "Ano could not reach OpenStreetMap Nominatim. No automatic retry was attempted.",
+            "Ano could not reach the local business directory. No automatic retry was attempted.",
           );
         } finally {
           clearTimeout(timer);
@@ -791,7 +791,7 @@ export async function searchOsmBusinesses(
         if (!Array.isArray(payload)) {
           throw new OsmClientError(
             "INVALID_RESPONSE",
-            "OpenStreetMap Nominatim returned a response Ano could not verify.",
+            "The local business directory returned a response Ano could not verify.",
           );
         }
 
@@ -810,7 +810,7 @@ export async function searchOsmBusinesses(
     if (ranked.length === 0) {
       throw new OsmClientError(
         "NO_RESULTS",
-        "OpenStreetMap returned no matching businesses inside that area for the selected tags.",
+        "Local business search returned no matching businesses inside that area for the selected categories.",
       );
     }
 
