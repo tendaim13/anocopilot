@@ -595,14 +595,14 @@ export async function saveCompanySearchPreview(
         provider_receipt_json:
           providerKey === "openstreetmap"
             ? {
-                source: "openstreetmap",
-                resolved_areas: osmAreas.length || canonicalLocations.length,
-                credit_bearing_request: false,
-              }
+              source: "openstreetmap",
+              resolved_areas: osmAreas.length || canonicalLocations.length,
+              credit_bearing_request: false,
+            }
             : {
-                suggestion_requests: canonicalLocations.length,
-                credit_bearing_request: false,
-              },
+              suggestion_requests: canonicalLocations.length,
+              credit_bearing_request: false,
+            },
         created_by: session.actorId,
         approved_by: session.actorId,
         approved_at: now,
@@ -970,20 +970,20 @@ export async function executeApprovedProspeoSearch(
     const receipt =
       providerKey === "openstreetmap"
         ? {
-            free: true,
-            provider: "openstreetmap",
-            result_count: dossiers.length,
-            total_count: totalCount ?? dossiers.length,
-            searxng_websites_resolved: searxngResolvedCount,
-            credit_bearing_request: false,
-          }
+          free: true,
+          provider: "openstreetmap",
+          result_count: dossiers.length,
+          total_count: totalCount ?? dossiers.length,
+          searxng_websites_resolved: searxngResolvedCount,
+          credit_bearing_request: false,
+        }
         : {
-            free: isFree,
-            result_count: dossiers.length,
-            total_count: totalCount ?? dossiers.length,
-            rate_limit: rateLimit,
-            credit_bearing_request: true,
-          };
+          free: isFree,
+          result_count: dossiers.length,
+          total_count: totalCount ?? dossiers.length,
+          rate_limit: rateLimit,
+          credit_bearing_request: true,
+        };
 
     await session.client
       .from("provider_action_requests")
@@ -1052,9 +1052,9 @@ export async function executeApprovedProspeoSearch(
     const message = noResults
       ? `${sourceLabel} returned no companies for this approved query.`
       : sanitizeDownstreamErrorMessage(
-          isKnownProviderError ? error.message : error,
-          `Ano could not complete ${sourceLabel.toLowerCase()} safely and did not retry automatically.`,
-        );
+        isKnownProviderError ? error.message : error,
+        `Ano could not complete ${sourceLabel.toLowerCase()} safely and did not retry automatically.`,
+      );
     const failureCode =
       noResults
         ? null
