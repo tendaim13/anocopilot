@@ -419,73 +419,81 @@ export function ResearchConversationWorkbench({
     if (!activeId || autopilotRun?.status !== "running") return;
 
     let cancelled = false;
-    async function runLoop() {
-      while (!cancelled) {
-        try {
-          const response = await fetch(`/api/v1/conversations/${activeId}/autopilot/step`, {
-            method: "POST",
-          });
-          const payload = await response.json().catch(() => ({}));
-          if (cancelled) return;
-          if (!response.ok) {
-            lastRetryActionRef.current = () => resumeAutopilot();
-            setError(errorText(payload, "Ano paused the autonomous pipeline cleanly."));
-            return;
-          }
-          const record =
-            payload && typeof payload === "object"
-              ? (payload as Record<string, unknown>)
-              : {};
+    let inFlight = false;
 
-          if ("autopilotRun" in record) {
-            setAutopilotRun((record.autopilotRun ?? null) as AutopilotRunView | null);
-          }
-          if ("conversation" in record && record.conversation) {
-            setConversation(record.conversation as ResearchConversationView);
-          }
-          if ("research" in record) {
-            setResearch((record.research ?? null) as EvidenceResearchView | null);
-          }
-          if ("synthesis" in record) {
-            setSynthesis((record.synthesis ?? null) as MarketSynthesis | null);
-          }
-          if ("companySearch" in record) {
-            setCompanySearch((record.companySearch ?? null) as CompanySearchView | null);
-          }
-          if ("peopleDiscovery" in record) {
-            setPeopleDiscovery((record.peopleDiscovery ?? null) as PeopleDiscoveryView | null);
-          }
-          if ("templatePack" in record) {
-            setTemplatePack((record.templatePack ?? null) as OutreachTemplatePackView | null);
-          }
-
-          const nextRun = ("autopilotRun" in record
-            ? record.autopilotRun
-            : null) as AutopilotRunView | null;
-          if (!nextRun || nextRun.status !== "running") {
-            if (embeddedInShell) void refreshShellConversations?.();
-            return;
-          }
-
-          if (record.skippedBecauseInFlight === true) {
-            await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, 2_500);
-            });
-          }
-        } catch {
-          if (!cancelled) {
-            setError(
-              "Connection interrupted while stepping autopilot. Click Resume autopilot to continue.",
-            );
-          }
+    async function pollStatus() {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch(`/api/v1/conversations/${activeId}/autopilot/status`, {
+          cache: "no-store",
+        });
+        if (cancelled) return;
+        if (!response.ok) {
+          // Transient gateway/network errors keep observing silently while the server worker continues.
           return;
         }
+        const payload = await response.json().catch(() => null);
+        if (cancelled || !payload || typeof payload !== "object") return;
+
+        const record = payload as Record<string, unknown>;
+        if ("autopilotRun" in record) {
+          setAutopilotRun((record.autopilotRun ?? null) as AutopilotRunView | null);
+        }
+        if ("conversation" in record && record.conversation) {
+          setConversation(record.conversation as ResearchConversationView);
+        }
+        if ("research" in record) {
+          setResearch((record.research ?? null) as EvidenceResearchView | null);
+        }
+        if ("synthesis" in record) {
+          setSynthesis((record.synthesis ?? null) as MarketSynthesis | null);
+        }
+        if ("companySearch" in record) {
+          setCompanySearch((record.companySearch ?? null) as CompanySearchView | null);
+        }
+        if ("peopleDiscovery" in record) {
+          setPeopleDiscovery((record.peopleDiscovery ?? null) as PeopleDiscoveryView | null);
+        }
+        if ("outreachExecution" in record) {
+          setOutreachExecution((record.outreachExecution ?? null) as OutreachExecutionView | null);
+        }
+        if ("templatePack" in record) {
+          setTemplatePack((record.templatePack ?? null) as OutreachTemplatePackView | null);
+        }
+
+        const nextRun = ("autopilotRun" in record
+          ? record.autopilotRun
+          : null) as AutopilotRunView | null;
+        if (nextRun && nextRun.status !== "running") {
+          if (embeddedInShell) void refreshShellConversations?.();
+        }
+      } catch {
+        // Offline/network drops do not interrupt server-side execution; polling retries on reconnect.
+      } finally {
+        inFlight = false;
       }
     }
 
-    void runLoop();
+    const initialTimer = window.setTimeout(() => {
+      void pollStatus();
+    }, 600);
+    const interval = window.setInterval(() => {
+      void pollStatus();
+    }, 2_500);
+    const handleResumeSignal = () => {
+      if (document.visibilityState === "hidden") return;
+      void pollStatus();
+    };
+    window.addEventListener("online", handleResumeSignal);
+    document.addEventListener("visibilitychange", handleResumeSignal);
+
     return () => {
       cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+      window.removeEventListener("online", handleResumeSignal);
+      document.removeEventListener("visibilitychange", handleResumeSignal);
     };
   }, [
     conversation?.conversation.id,

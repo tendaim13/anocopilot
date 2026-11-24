@@ -934,7 +934,12 @@ export async function prepareEvidenceResearchRun(
   await updateConnectionState(session, "connected");
   const existingId = await getRunForConversation(session, conversation.conversation.id);
   const existing = existingId ? await getRun(session, existingId) : null;
-  if (existing && ["awaiting_provider_approval", "running", "sources_ready"].includes(String(existing.status))) {
+  if (
+    existing &&
+    (["awaiting_provider_approval", "running", "sources_ready"].includes(String(existing.status)) ||
+      (String(existing.status) === "requires_manual_review" &&
+        String(existing.research_plan_id) === plan.id))
+  ) {
     return readEvidenceResearchView(session, conversation.conversation.id);
   }
   const { data: priorAttempts, error: attemptsError } = await session.client

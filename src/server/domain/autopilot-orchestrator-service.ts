@@ -3,6 +3,8 @@ import "server-only";
 import type { WorkspaceSession } from "@/contracts/ano";
 import {
   buildAutopilotExecutiveSummaryMarkdown,
+  describeAutopilotStageProgress,
+  formatAutopilotOutcomeMessage,
   isOpenMarketRecommendationIntent,
   rankAccountsForAutopilotShortlist,
   resolveAutopilotAuthorityScope,
@@ -23,10 +25,11 @@ import type { EvidenceResearchView } from "@/lib/ano/evidence-research";
 import type { MarketSynthesis } from "@/lib/ano/market-synthesis";
 import type { OutreachTemplatePackView } from "@/lib/ano/outreach-templates";
 import type { PeopleDiscoveryView } from "@/lib/ano/people-playbooks";
-import type {
-  ResearchBrief,
-  ResearchConversationView,
-  ResearchPlan,
+import {
+  buildConversationMessageParts,
+  type ResearchBrief,
+  type ResearchConversationView,
+  type ResearchPlan,
 } from "@/lib/ano/research-conversation";
 import { getActivePlannerConfig } from "@/server/agents/bedrock";
 import { createAutopilotIntakePlanningModel } from "@/server/agents/research-planning-model";
@@ -41,6 +44,9 @@ import {
   getMarketSynthesisForConversation,
   lockMarketRouteForConversation,
 } from "@/server/domain/market-synthesis-service";
+import {
+  getOutreachExecutionForConversation,
+} from "@/server/domain/outreach-execution-service";
 import {
   generateOutreachTemplatePackForConversation,
   getOutreachTemplatePackForConversation,
@@ -63,12 +69,14 @@ import {
 } from "@/server/domain/target-account-discovery-service";
 import { formatProductSourcesForPrompt } from "@/server/ingestion/product-source-ingestor";
 import {
+  AUTOPILOT_HEARTBEAT_INTERVAL_MS,
   AutopilotPersistenceError,
   cancelAutopilotRun,
   claimAutopilotStageLease,
   completeAutopilotStageLease,
   failAutopilotStageLease,
   readAutopilotRun,
+  renewAutopilotStageLease,
   startOrResumeAutopilotRun,
 } from "@/server/persistence/autopilot-store";
 import { ensureAutopilotFallbackResearchRun } from "@/server/persistence/evidence-research-store";
@@ -122,6 +130,7 @@ export interface AutopilotOrchestratorDeps {
     },
   ) => Promise<AutopilotRunView>;
   claimAutopilotStageLease: typeof claimAutopilotStageLease;
+  renewAutopilotStageLease?: typeof renewAutopilotStageLease;
   completeAutopilotStageLease: typeof completeAutopilotStageLease;
   failAutopilotStageLease: typeof failAutopilotStageLease;
   cancelAutopilotRun: typeof cancelAutopilotRun;
@@ -319,6 +328,7 @@ export function createDefaultAutopilotDeps(): AutopilotOrchestratorDeps {
     readAutopilotRun,
     startOrResumeAutopilotRun,
     claimAutopilotStageLease,
+    renewAutopilotStageLease,
     completeAutopilotStageLease,
     failAutopilotStageLease,
     cancelAutopilotRun,
@@ -396,15 +406,13 @@ export function createDefaultAutopilotDeps(): AutopilotOrchestratorDeps {
   };
 }
 
+type StageProgressReporter = (
+  progressDetail: string,
+  checkpoint?: Record<string, unknown>,
+) => Promise<void>;
+
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function safeErrorText(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.replace(/\s+/g, " ").trim().slice(0, 320);
-  }
-  return fallback;
 }
 
 async function runStageBriefAndPlan(
@@ -463,6 +471,7 @@ async function runStageMarketResearch(
   conversationId: string,
   deps: AutopilotOrchestratorDeps,
   authorityScope: AutopilotAuthorityScope,
+  reportProgress?: StageProgressReporter,
 ): Promise<AutopilotStageSummary> {
   const existing = await deps.getEvidenceResearch(session, conversationId).catch(() => null);
   if (existing && existing.run.status === "sources_ready" && existing.run.sourceCount > 0) {
@@ -490,6 +499,10 @@ async function runStageMarketResearch(
 
   if (searxngAllowed) {
     try {
+      await reportProgress?.(describeAutopilotStageProgress("market_research", { wave: 1, maxWaves: 3 }), {
+        waveNumber: existing?.run.currentWave ?? 0,
+        savedSources: existing?.run.sourceCount ?? 0,
+      });
       const prepared = await deps.prepareEvidenceResearch(session, conversationId, {
         maximumSearches: authorityScope.maxPublicSearches,
         maximumFetches: authorityScope.maxSourceFetches,
@@ -499,6 +512,16 @@ async function runStageMarketResearch(
           prepared.run.status === "awaiting_provider_approval" ||
           prepared.run.status === "requires_manual_review"
         ) {
+          if (prepared.run.status === "requires_manual_review") {
+            await reportProgress?.(
+              describeAutopilotStageProgress("market_research", { recovered: true }),
+              {
+                waveNumber: prepared.run.currentWave,
+                savedSources: prepared.run.sourceCount,
+                recovered: true,
+              },
+            );
+          }
           view = await deps.startEvidenceResearch(session, conversationId, prepared.run.id, {
             maxWaves: 3,
           });
@@ -721,7 +744,7 @@ async function runStageCompanyDiscovery(
           }
         } catch (error) {
           warnings.push(
-            `Primary B2B company lookup had an issue (${safeErrorText(error, "provider unavailable")}).`,
+            `Primary B2B company lookup had an issue (${formatAutopilotOutcomeMessage(error, { stage: "company_discovery", kind: "warning", fallback: "directory temporarily unavailable" })}).`,
           );
         }
       } else {
@@ -729,7 +752,7 @@ async function runStageCompanyDiscovery(
           companySearch = await deps.runOsmSearch(session, conversationId);
         } catch (error) {
           warnings.push(
-            `Local map company lookup had an issue (${safeErrorText(error, "local category unresolved")}).`,
+            `Local map company lookup had an issue (${formatAutopilotOutcomeMessage(error, { stage: "company_discovery", kind: "warning", fallback: "local category unavailable" })}).`,
           );
         }
       }
@@ -1077,8 +1100,24 @@ export async function executeAutopilotStepWithDeps(
   session: WorkspaceSession,
   conversationId: string,
   deps: AutopilotOrchestratorDeps,
+  options?: {
+    workerId?: string;
+    leaseDurationMs?: number;
+    heartbeatIntervalMs?: number;
+    now?: () => number;
+  },
 ): Promise<AutopilotStepResult> {
-  const claim = await deps.claimAutopilotStageLease(session, conversationId);
+  const claimOptions = options
+    ? {
+        workerId: options.workerId,
+        leaseDurationMs: options.leaseDurationMs,
+        now: options.now?.(),
+      }
+    : undefined;
+  const claim = claimOptions
+    ? await deps.claimAutopilotStageLease(session, conversationId, claimOptions)
+    : await deps.claimAutopilotStageLease(session, conversationId);
+
   if (!claim.claimed || !claim.run || !claim.leaseToken) {
     if (claim.reason === "not_found") {
       throw new AutopilotOrchestratorError(
@@ -1106,6 +1145,41 @@ export async function executeAutopilotStepWithDeps(
   const leaseToken = claim.leaseToken;
   const authorityScope = resolveAutopilotAuthorityScope(run.authorityScope);
 
+  const reportProgress: StageProgressReporter = async (progressDetail, checkpoint) => {
+    if (!deps.renewAutopilotStageLease) return;
+    await deps
+      .renewAutopilotStageLease(session, {
+        runId: run.id,
+        conversationId,
+        leaseToken,
+        leaseDurationMs: options?.leaseDurationMs,
+        progressDetail,
+        checkpoint,
+        now: options?.now?.(),
+      })
+      .catch(() => undefined);
+  };
+
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  if (deps.renewAutopilotStageLease) {
+    const intervalMs = Math.max(
+      100,
+      options?.heartbeatIntervalMs ?? AUTOPILOT_HEARTBEAT_INTERVAL_MS,
+    );
+    heartbeatTimer = setInterval(() => {
+      void deps
+        .renewAutopilotStageLease?.(session, {
+          runId: run.id,
+          conversationId,
+          leaseToken,
+          leaseDurationMs: options?.leaseDurationMs,
+          now: options?.now?.(),
+        })
+        .catch(() => undefined);
+    }, intervalMs);
+    heartbeatTimer.unref?.();
+  }
+
   try {
     const summary = await deps.runWithUsageContext(
       { session, conversationId, autopilotRunId: run.id },
@@ -1114,7 +1188,13 @@ export async function executeAutopilotStepWithDeps(
           case "brief_and_plan":
             return runStageBriefAndPlan(session, conversationId, deps);
           case "market_research":
-            return runStageMarketResearch(session, conversationId, deps, authorityScope);
+            return runStageMarketResearch(
+              session,
+              conversationId,
+              deps,
+              authorityScope,
+              reportProgress,
+            );
           case "synthesis_and_lock":
             return runStageSynthesisAndLock(session, conversationId, deps);
           case "company_discovery":
@@ -1142,10 +1222,10 @@ export async function executeAutopilotStepWithDeps(
       skippedBecauseInFlight: false,
     };
   } catch (error) {
-    const message = safeErrorText(
-      error,
-      `Autonomous pipeline stopped safely during stage "${stage}".`,
-    );
+    const message = formatAutopilotOutcomeMessage(error, {
+      stage,
+      kind: "error",
+    });
     await deps
       .failAutopilotStageLease(session, {
         runId: run.id,
@@ -1162,7 +1242,66 @@ export async function executeAutopilotStepWithDeps(
       throw error;
     }
     throw new AutopilotOrchestratorError(message, "AUTOPILOT_STAGE_FAILED");
+  } finally {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
   }
+}
+
+export async function getAutopilotStatusSnapshotForConversation(
+  session: WorkspaceSession,
+  conversationId: string,
+) {
+  const [
+    autopilotRun,
+    conversation,
+    research,
+    synthesis,
+    companyRes,
+    peopleRes,
+    outreachRes,
+    templateRes,
+  ] = await Promise.all([
+    readAutopilotRun(session, conversationId).catch(() => null),
+    getResearchConversation(session, conversationId),
+    getEvidenceResearchForConversation(session, conversationId).catch(() => null),
+    getMarketSynthesisForConversation(session, conversationId).catch(() => null),
+    getCompanySearchForConversation(session, conversationId).catch(() => ({
+      companySearch: null,
+    })),
+    getPeopleDiscoveryForConversation(session, conversationId).catch(() => ({
+      peopleDiscovery: null,
+    })),
+    getOutreachExecutionForConversation(session, conversationId).catch(() => ({
+      outreachExecution: null,
+    })),
+    getOutreachTemplatePackForConversation(session, conversationId).catch(() => ({
+      templatePack: null,
+    })),
+  ]);
+
+  const messageParts = buildConversationMessageParts(
+    conversation,
+    research,
+    synthesis,
+    companyRes.companySearch,
+    peopleRes.peopleDiscovery,
+    outreachRes.outreachExecution,
+    templateRes.templatePack,
+  );
+
+  return {
+    autopilotRun,
+    conversation,
+    research,
+    synthesis,
+    companySearch: companyRes.companySearch,
+    peopleDiscovery: peopleRes.peopleDiscovery,
+    outreachExecution: outreachRes.outreachExecution,
+    templatePack: templateRes.templatePack,
+    messageParts,
+  };
 }
 
 export async function getAutopilotRunForConversation(

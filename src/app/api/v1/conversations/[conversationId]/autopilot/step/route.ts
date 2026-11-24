@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { formatAutopilotOutcomeMessage } from "@/lib/ano/autopilot";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
 import {
   AutopilotOrchestratorError,
@@ -11,6 +12,7 @@ import { ResearchConversationPersistenceError } from "@/server/persistence/resea
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function errorResponse(error: unknown) {
   if (error instanceof WorkspaceSessionError) {
@@ -25,7 +27,10 @@ function errorResponse(error: unknown) {
     const code =
       "code" in error && typeof error.code === "string" ? error.code : "AUTOPILOT_STEP_FAILED";
     const status = code === "AUTH_REQUIRED" ? 401 : 422;
-    return NextResponse.json({ error: error.message, code }, { status });
+    return NextResponse.json(
+      { error: formatAutopilotOutcomeMessage(error.message, { kind: "error" }), code },
+      { status },
+    );
   }
   console.error(
     "Ano autopilot step route failed",

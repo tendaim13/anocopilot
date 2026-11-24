@@ -4,6 +4,7 @@ import {
   AUTOPILOT_STAGE_METADATA,
   AUTOPILOT_STAGES,
   DEFAULT_AUTOPILOT_AUTHORITY_SCOPE,
+  formatAutopilotOutcomeMessage,
   resolveAutopilotAuthorityScope,
   type AutopilotAuthorityScope,
   type AutopilotRunView,
@@ -184,6 +185,7 @@ export function AutopilotProgressCard({
           {activeScope.maxPublicSearches} searches · {activeScope.maxSourceFetches} excerpts ·{" "}
           {activeScope.maxCompanyCandidates} companies · {activeScope.maxNamedContactEnrichments}{" "}
           named verifications · Drafts only
+          {isRunning ? " · Runs in the background — safe to refresh or close this tab." : ""}
         </p>
       </div>
 
@@ -227,7 +229,10 @@ export function AutopilotProgressCard({
                 {summary
                   ? `${summary.headline} — ${summary.detail}`
                   : isActive
-                    ? item.activeHint
+                    ? formatAutopilotOutcomeMessage(
+                        autopilotRun.progressDetail || item.activeHint,
+                        { stage: item.stage, kind: "progress", fallback: item.activeHint },
+                      )
                     : "Waiting for earlier stages."}
               </p>
             </li>
@@ -240,7 +245,7 @@ export function AutopilotProgressCard({
           <strong>Pipeline notes</strong>
           <ul className="m3-bullet-list">
             {autopilotRun.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
+              <li key={warning}>{formatAutopilotOutcomeMessage(warning, { kind: "warning" })}</li>
             ))}
           </ul>
         </div>
@@ -249,7 +254,13 @@ export function AutopilotProgressCard({
       {autopilotRun.lastError && (
         <div className="m3-warning-callout" role="status">
           <strong>Autopilot paused after an issue</strong>
-          <p>{autopilotRun.lastError}</p>
+          <p>
+            {formatAutopilotOutcomeMessage(autopilotRun.lastError, {
+              stage:
+                autopilotRun.currentStage === "done" ? undefined : autopilotRun.currentStage,
+              kind: "error",
+            })}
+          </p>
         </div>
       )}
 

@@ -7,6 +7,8 @@ import {
   autopilotRunViewSchema,
   autopilotStageSummarySchema,
   computePartialRerunState,
+  describeAutopilotStageProgress,
+  formatAutopilotOutcomeMessage,
   nextPendingAutopilotStage,
   resolveAutopilotAuthorityScope,
   stagesBefore,
@@ -16,8 +18,11 @@ import {
   type AutopilotStage,
   type AutopilotStageSummary,
 } from "@/lib/ano/autopilot";
+import { readEvidenceResearchView } from "@/server/persistence/evidence-research-store";
 
-export const AUTOPILOT_STAGE_LEASE_TIMEOUT_MS = 180_000;
+export const AUTOPILOT_STAGE_LEASE_TIMEOUT_MS = 90_000;
+export const AUTOPILOT_HEARTBEAT_INTERVAL_MS = 20_000;
+export const AUTOPILOT_MAX_RECOVERIES = 3;
 
 export class AutopilotPersistenceError extends Error {
   constructor(
@@ -91,7 +96,9 @@ function parseWarnings(value: unknown): string[] {
   const out: string[] = [];
   for (const item of value) {
     if (typeof item !== "string") continue;
-    const clean = item.replace(/\s+/g, " ").trim().slice(0, 400);
+    const raw = item.replace(/\s+/g, " ").trim();
+    if (!raw) continue;
+    const clean = formatAutopilotOutcomeMessage(raw, { kind: "warning" }).slice(0, 400);
     if (!clean || seen.has(clean)) continue;
     seen.add(clean);
     out.push(clean);
@@ -102,6 +109,12 @@ function parseWarnings(value: unknown): string[] {
 
 function isLeaseActive(row: Row, now = Date.now()): boolean {
   if (!row.stage_lease_token) return false;
+  if (row.lease_expires_at) {
+    const expiresMs = new Date(String(row.lease_expires_at)).getTime();
+    if (Number.isFinite(expiresMs)) {
+      return expiresMs > now;
+    }
+  }
   const rawTimestamp = row.stage_started_at ?? row.heartbeat_at ?? row.updated_at;
   const ms = rawTimestamp ? new Date(String(rawTimestamp)).getTime() : 0;
   if (!Number.isFinite(ms)) return false;
@@ -115,7 +128,22 @@ function parseAuthorityScope(value: unknown): AutopilotAuthorityScope {
   return resolveAutopilotAuthorityScope(value as Partial<AutopilotAuthorityScope>);
 }
 
+function parseExecutableStage(value: unknown): AutopilotExecutableStage | undefined {
+  const parsed = autopilotExecutableStageSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function mapAutopilotRow(row: Row): AutopilotRunView {
+  const currentStage = parseExecutableStage(row.current_stage);
+  const rawLastError =
+    typeof row.last_error === "string" && row.last_error.trim()
+      ? row.last_error.trim().slice(0, 600)
+      : null;
+  const rawProgressDetail =
+    typeof row.progress_detail === "string" && row.progress_detail.trim()
+      ? row.progress_detail.trim().slice(0, 320)
+      : null;
+
   return autopilotRunViewSchema.parse({
     id: String(row.id),
     conversationId: String(row.conversation_id),
@@ -124,11 +152,19 @@ function mapAutopilotRow(row: Row): AutopilotRunView {
     completedStages: parseCompletedStages(row.completed_stages_json),
     stageSummaries: parseStageSummaries(row.stage_summaries_json),
     warnings: parseWarnings(row.warnings_json),
-    lastError:
-      typeof row.last_error === "string" && row.last_error.trim()
-        ? row.last_error.trim().slice(0, 600)
-        : null,
+    lastError: rawLastError
+      ? formatAutopilotOutcomeMessage(rawLastError, { stage: currentStage, kind: "error" })
+      : null,
     stageInFlight: isLeaseActive(row),
+    leaseExpiresAt: optionalIso(row.lease_expires_at),
+    activeJobId: typeof row.active_job_id === "string" ? row.active_job_id : null,
+    recoveryCount:
+      typeof row.recovery_count === "number" && Number.isFinite(row.recovery_count)
+        ? Math.max(0, Math.floor(row.recovery_count))
+        : 0,
+    progressDetail: rawProgressDetail
+      ? formatAutopilotOutcomeMessage(rawProgressDetail, { stage: currentStage, kind: "progress" }).slice(0, 320)
+      : null,
     authorityScope: parseAuthorityScope(row.authority_scope_json),
     authorizedAt: optionalIso(row.authorized_at),
     authorizedBy: typeof row.authorized_by === "string" ? row.authorized_by : null,
@@ -138,6 +174,102 @@ function mapAutopilotRow(row: Row): AutopilotRunView {
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   });
+}
+
+async function fetchActiveAutopilotJob(
+  session: SupabaseWorkspaceSession,
+  conversationId: string,
+): Promise<Row | null> {
+  const { data, error } = await session.client
+    .from("autopilot_jobs")
+    .select("*")
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", conversationId)
+    .in("status", ["queued", "leased"])
+    .maybeSingle();
+
+  if (error) {
+    throw new AutopilotPersistenceError("Ano could not read the queued background job.");
+  }
+  return (data as Row | null) ?? null;
+}
+
+export async function enqueueOrReuseAutopilotJob(
+  session: SupabaseWorkspaceSession,
+  input: {
+    runId: string;
+    conversationId: string;
+    requestedBy: string;
+    fromStage?: AutopilotExecutableStage | null;
+    idempotencyKey?: string;
+    nowMs?: number;
+  },
+): Promise<string> {
+  const nowMs = input.nowMs ?? Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const existingJob = await fetchActiveAutopilotJob(session, input.conversationId);
+
+  let jobId: string | null = null;
+  if (existingJob) {
+    jobId = String(existingJob.id);
+    const jobLeaseMs = existingJob.lease_expires_at
+      ? new Date(String(existingJob.lease_expires_at)).getTime()
+      : 0;
+    const isJobLeaseLive =
+      String(existingJob.status) === "leased" && Number.isFinite(jobLeaseMs) && jobLeaseMs > nowMs;
+
+    if (!isJobLeaseLive) {
+      await session.client
+        .from("autopilot_jobs")
+        .update({
+          status: "queued",
+          from_stage: input.fromStage ?? existingJob.from_stage ?? null,
+          worker_id: null,
+          lease_token: null,
+          lease_expires_at: null,
+          available_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq("workspace_id", session.workspace.id)
+        .eq("id", jobId)
+        .in("status", ["queued", "leased"]);
+    }
+  } else {
+    const newId = crypto.randomUUID();
+    const { data: inserted, error: insertError } = await session.client
+      .from("autopilot_jobs")
+      .insert({
+        id: newId,
+        workspace_id: session.workspace.id,
+        conversation_id: input.conversationId,
+        autopilot_run_id: input.runId,
+        requested_by: input.requestedBy,
+        idempotency_key: input.idempotencyKey ?? `run:${input.runId}:${crypto.randomUUID()}`,
+        status: "queued",
+        from_stage: input.fromStage ?? null,
+        available_at: nowIso,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (insertError) {
+      const raced = await fetchActiveAutopilotJob(session, input.conversationId);
+      if (!raced) {
+        throw new AutopilotPersistenceError("Ano could not queue the background pipeline job.");
+      }
+      jobId = String(raced.id);
+    } else {
+      jobId = String(inserted?.id ?? newId);
+    }
+  }
+
+  await session.client
+    .from("autopilot_runs")
+    .update({ active_job_id: jobId, updated_at: nowIso })
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", input.runId);
+
+  return jobId;
 }
 
 async function fetchAutopilotRow(
@@ -187,7 +319,19 @@ export async function startOrResumeAutopilotRun(
     );
   }
   const existing = await fetchAutopilotRow(session, conversationId);
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  if (!options?.fromStage && existing && String(existing.status) === "running" && isLeaseActive(existing, nowMs)) {
+    const requestedBy = String(existing.authorized_by ?? existing.created_by ?? session.actorId);
+    const activeJobId = await enqueueOrReuseAutopilotJob(session, {
+      runId: String(existing.id),
+      conversationId,
+      requestedBy,
+      nowMs,
+    });
+    return mapAutopilotRow({ ...existing, active_job_id: existing.active_job_id ?? activeJobId });
+  }
+
   const authorityScope = resolveAutopilotAuthorityScope(
     options.authorityScope ?? parseAuthorityScope(existing?.authority_scope_json),
   );
@@ -218,6 +362,8 @@ export async function startOrResumeAutopilotRun(
         ? "completed_with_warnings"
         : "completed"
       : "running";
+  const progressDetail =
+    nextStage === "done" ? null : describeAutopilotStageProgress(nextStage);
 
   const { data, error } = await session.client
     .from("autopilot_runs")
@@ -233,6 +379,9 @@ export async function startOrResumeAutopilotRun(
         warnings_json: warnings,
         stage_lease_token: null,
         stage_started_at: null,
+        lease_expires_at: null,
+        worker_id: null,
+        progress_detail: progressDetail,
         last_error: null,
         authority_scope_json: authorityScope,
         authorized_at: authorizedAt,
@@ -254,6 +403,18 @@ export async function startOrResumeAutopilotRun(
     );
   }
 
+  let savedRow = data as Row;
+  if (nextStatus === "running") {
+    const activeJobId = await enqueueOrReuseAutopilotJob(session, {
+      runId: String(savedRow.id),
+      conversationId,
+      requestedBy: authorizedBy,
+      fromStage: options?.fromStage ?? null,
+      nowMs,
+    });
+    savedRow = { ...savedRow, active_job_id: activeJobId };
+  }
+
   await session.client.from("audit_logs").insert({
     workspace_id: session.workspace.id,
     actor_id: session.actorId,
@@ -264,15 +425,22 @@ export async function startOrResumeAutopilotRun(
       from_stage: options?.fromStage ?? null,
       next_stage: nextStage,
       authority_scope: authorityScope,
+      active_job_id: savedRow.active_job_id ?? null,
     },
   });
 
-  return mapAutopilotRow(data as Row);
+  return mapAutopilotRow(savedRow);
 }
 
 export async function claimAutopilotStageLease(
   session: WorkspaceSession,
   conversationId: string,
+  options?: {
+    workerId?: string;
+    leaseDurationMs?: number;
+    now?: number;
+    maxRecoveries?: number;
+  },
 ): Promise<{
   claimed: boolean;
   run: AutopilotRunView | null;
@@ -281,6 +449,14 @@ export async function claimAutopilotStageLease(
   reason?: "not_found" | "not_running" | "already_done" | "in_flight";
 }> {
   requireLiveSession(session);
+  const nowMs = options?.now ?? Date.now();
+  const leaseDurationMs = Math.max(
+    5_000,
+    options?.leaseDurationMs ?? AUTOPILOT_STAGE_LEASE_TIMEOUT_MS,
+  );
+  const maxRecoveries = Math.max(1, options?.maxRecoveries ?? AUTOPILOT_MAX_RECOVERIES);
+  const workerId = options?.workerId?.trim() || `worker:${crypto.randomUUID().slice(0, 8)}`;
+
   const row = await fetchAutopilotRow(session, conversationId);
   if (!row) {
     return {
@@ -305,7 +481,7 @@ export async function claimAutopilotStageLease(
 
   const nextStage = nextPendingAutopilotStage(runView.completedStages);
   if (nextStage === "done") {
-    const now = new Date().toISOString();
+    const nowIso = new Date(nowMs).toISOString();
     const finalStatus =
       runView.warnings.length > 0 ? "completed_with_warnings" : "completed";
     const { data: finalized } = await session.client
@@ -315,14 +491,31 @@ export async function claimAutopilotStageLease(
         current_stage: "done",
         stage_lease_token: null,
         stage_started_at: null,
-        completed_at: runView.completedAt ?? now,
-        heartbeat_at: now,
-        updated_at: now,
+        lease_expires_at: null,
+        worker_id: null,
+        progress_detail: null,
+        completed_at: runView.completedAt ?? nowIso,
+        heartbeat_at: nowIso,
+        updated_at: nowIso,
       })
       .eq("workspace_id", session.workspace.id)
       .eq("id", runView.id)
       .select("*")
       .maybeSingle();
+
+    await session.client
+      .from("autopilot_jobs")
+      .update({
+        status: "completed",
+        lease_token: null,
+        lease_expires_at: null,
+        worker_id: null,
+        completed_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("conversation_id", conversationId)
+      .in("status", ["queued", "leased"]);
 
     return {
       claimed: false,
@@ -333,7 +526,7 @@ export async function claimAutopilotStageLease(
     };
   }
 
-  if (isLeaseActive(row)) {
+  if (isLeaseActive(row, nowMs)) {
     return {
       claimed: false,
       run: runView,
@@ -343,18 +536,92 @@ export async function claimAutopilotStageLease(
     };
   }
 
-  const now = new Date().toISOString();
+  const nowIso = new Date(nowMs).toISOString();
+  const staleTakeover = Boolean(row.stage_lease_token);
+  const currentRecoveries =
+    typeof row.recovery_count === "number" && Number.isFinite(row.recovery_count)
+      ? Math.max(0, Math.floor(row.recovery_count))
+      : 0;
+
+  if (staleTakeover && currentRecoveries >= maxRecoveries) {
+    const pauseMessage =
+      "Autopilot paused safely after repeated interruptions. Completed stages are saved and ready to resume.";
+    const { data: pausedRow } = await session.client
+      .from("autopilot_runs")
+      .update({
+        status: "paused",
+        stage_lease_token: null,
+        stage_started_at: null,
+        lease_expires_at: null,
+        worker_id: null,
+        progress_detail: null,
+        last_error: pauseMessage,
+        heartbeat_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", runView.id)
+      .eq("status", "running")
+      .eq("stage_lease_token", String(row.stage_lease_token))
+      .select("*")
+      .maybeSingle();
+
+    await session.client
+      .from("autopilot_jobs")
+      .update({
+        status: "paused",
+        lease_token: null,
+        lease_expires_at: null,
+        worker_id: null,
+        outcome_note: pauseMessage,
+        completed_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("conversation_id", conversationId)
+      .in("status", ["queued", "leased"]);
+
+    await session.client.from("audit_logs").insert({
+      workspace_id: session.workspace.id,
+      actor_id: session.actorId,
+      event_type: "autopilot.paused_max_recoveries",
+      outcome: "paused",
+      details_json: {
+        conversation_id: conversationId,
+        stage: nextStage,
+        recovery_count: currentRecoveries,
+      },
+    });
+
+    return {
+      claimed: false,
+      run: pausedRow ? mapAutopilotRow(pausedRow as Row) : await readAutopilotRun(session, conversationId),
+      stage: nextStage,
+      leaseToken: null,
+      reason: "not_running",
+    };
+  }
+
   const leaseToken = crypto.randomUUID();
+  const leaseExpiresAt = new Date(nowMs + leaseDurationMs).toISOString();
+  const nextRecoveryCount = staleTakeover ? currentRecoveries + 1 : currentRecoveries;
+  const progressDetail = describeAutopilotStageProgress(nextStage, {
+    recovered: staleTakeover,
+  });
 
   let updateQuery = session.client
     .from("autopilot_runs")
     .update({
       stage_lease_token: leaseToken,
-      stage_started_at: now,
-      heartbeat_at: now,
+      stage_started_at: nowIso,
+      lease_expires_at: leaseExpiresAt,
+      worker_id: workerId,
+      heartbeat_at: nowIso,
+      recovery_count: nextRecoveryCount,
+      progress_detail: progressDetail,
       current_stage: nextStage,
       last_error: null,
-      updated_at: now,
+      updated_at: nowIso,
     })
     .eq("workspace_id", session.workspace.id)
     .eq("id", runView.id)
@@ -384,11 +651,141 @@ export async function claimAutopilotStageLease(
     };
   }
 
+  const requestedBy = String(row.authorized_by ?? row.created_by ?? session.actorId);
+  const jobId =
+    typeof row.active_job_id === "string"
+      ? row.active_job_id
+      : await enqueueOrReuseAutopilotJob(session, {
+          runId: runView.id,
+          conversationId,
+          requestedBy,
+          nowMs,
+        });
+
+  const existingJob = await fetchActiveAutopilotJob(session, conversationId);
+  const nextAttemptCount = existingJob
+    ? Math.min(10, Number(existingJob.attempt_count ?? 0) + (staleTakeover ? 1 : existingJob.started_at ? 0 : 1))
+    : 1;
+
+  await session.client
+    .from("autopilot_jobs")
+    .update({
+      status: "leased",
+      worker_id: workerId,
+      lease_token: leaseToken,
+      lease_expires_at: leaseExpiresAt,
+      heartbeat_at: nowIso,
+      started_at: existingJob?.started_at ? String(existingJob.started_at) : nowIso,
+      attempt_count: nextAttemptCount,
+      checkpoint_json: {
+        currentStage: nextStage,
+        progressDetail,
+        recovered: staleTakeover,
+      },
+      updated_at: nowIso,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", jobId);
+
+  if (staleTakeover) {
+    await session.client.from("audit_logs").insert({
+      workspace_id: session.workspace.id,
+      actor_id: session.actorId,
+      event_type: "autopilot.lease_recovered",
+      outcome: "running",
+      details_json: {
+        conversation_id: conversationId,
+        stage: nextStage,
+        recovery_count: nextRecoveryCount,
+        worker_id: workerId,
+      },
+    });
+  }
+
   return {
     claimed: true,
-    run: mapAutopilotRow(claimedRow as Row),
+    run: mapAutopilotRow({ ...(claimedRow as Row), active_job_id: jobId }),
     stage: nextStage,
     leaseToken,
+  };
+}
+
+export async function renewAutopilotStageLease(
+  session: WorkspaceSession,
+  input: {
+    runId: string;
+    conversationId: string;
+    leaseToken: string;
+    leaseDurationMs?: number;
+    progressDetail?: string | null;
+    checkpoint?: Record<string, unknown>;
+    now?: number;
+  },
+): Promise<{ renewed: boolean; run: AutopilotRunView | null }> {
+  requireLiveSession(session);
+  const nowMs = input.now ?? Date.now();
+  const leaseDurationMs = Math.max(
+    5_000,
+    input.leaseDurationMs ?? AUTOPILOT_STAGE_LEASE_TIMEOUT_MS,
+  );
+  const nowIso = new Date(nowMs).toISOString();
+  const leaseExpiresAt = new Date(nowMs + leaseDurationMs).toISOString();
+
+  const patch: Record<string, unknown> = {
+    heartbeat_at: nowIso,
+    lease_expires_at: leaseExpiresAt,
+    updated_at: nowIso,
+  };
+  if (input.progressDetail !== undefined) {
+    patch.progress_detail = input.progressDetail
+      ? formatAutopilotOutcomeMessage(input.progressDetail, { kind: "progress" }).slice(0, 320)
+      : null;
+  }
+
+  const { data, error } = await session.client
+    .from("autopilot_runs")
+    .update(patch)
+    .eq("workspace_id", session.workspace.id)
+    .eq("id", input.runId)
+    .eq("stage_lease_token", input.leaseToken)
+    .eq("status", "running")
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    throw new AutopilotPersistenceError("Ano could not refresh the active pipeline lease.");
+  }
+
+  if (!data) {
+    return {
+      renewed: false,
+      run: await readAutopilotRun(session, input.conversationId).catch(() => null),
+    };
+  }
+
+  const jobPatch: Record<string, unknown> = {
+    heartbeat_at: nowIso,
+    lease_expires_at: leaseExpiresAt,
+    updated_at: nowIso,
+  };
+  if (input.checkpoint || input.progressDetail !== undefined) {
+    jobPatch.checkpoint_json = {
+      ...(input.checkpoint ?? {}),
+      ...(patch.progress_detail ? { progressDetail: patch.progress_detail } : {}),
+      currentStage: String((data as Row).current_stage),
+    };
+  }
+
+  await session.client
+    .from("autopilot_jobs")
+    .update(jobPatch)
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", input.conversationId)
+    .eq("lease_token", input.leaseToken);
+
+  return {
+    renewed: true,
+    run: mapAutopilotRow(data as Row),
   };
 }
 
@@ -432,6 +829,10 @@ export async function completeAutopilotStageLease(
       : String(current.status) === "paused" || String(current.status) === "cancelled"
         ? String(current.status)
         : "running";
+  const nextProgressDetail =
+    nextStage === "done" || nextStatus !== "running"
+      ? null
+      : describeAutopilotStageProgress(nextStage);
 
   const { data, error } = await session.client
     .from("autopilot_runs")
@@ -443,6 +844,9 @@ export async function completeAutopilotStageLease(
       warnings_json: mergedWarnings,
       stage_lease_token: null,
       stage_started_at: null,
+      lease_expires_at: null,
+      worker_id: null,
+      progress_detail: nextProgressDetail,
       last_error: null,
       heartbeat_at: now,
       completed_at: nextStage === "done" ? now : null,
@@ -465,6 +869,31 @@ export async function completeAutopilotStageLease(
     throw new AutopilotPersistenceError("Autopilot stage lease expired before completion.");
   }
 
+  await session.client
+    .from("autopilot_jobs")
+    .update({
+      status:
+        nextStage === "done"
+          ? "completed"
+          : nextStatus === "paused" || nextStatus === "cancelled"
+            ? nextStatus
+            : "queued",
+      lease_token: null,
+      lease_expires_at: null,
+      worker_id: null,
+      heartbeat_at: now,
+      completed_at: nextStage === "done" ? now : null,
+      outcome_note: nextStage === "done" ? input.summary.headline : null,
+      checkpoint_json: {
+        currentStage: nextStage,
+        ...(nextProgressDetail ? { progressDetail: nextProgressDetail } : {}),
+      },
+      updated_at: now,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", input.conversationId)
+    .in("status", ["queued", "leased"]);
+
   return mapAutopilotRow(data as Row);
 }
 
@@ -479,7 +908,10 @@ export async function failAutopilotStageLease(
 ): Promise<AutopilotRunView> {
   requireLiveSession(session);
   const now = new Date().toISOString();
-  const cleanError = input.errorMessage.replace(/\s+/g, " ").trim().slice(0, 600);
+  const cleanError = formatAutopilotOutcomeMessage(input.errorMessage, { kind: "error" }).slice(
+    0,
+    600,
+  );
 
   const { data, error } = await session.client
     .from("autopilot_runs")
@@ -487,6 +919,9 @@ export async function failAutopilotStageLease(
       status: "failed",
       stage_lease_token: null,
       stage_started_at: null,
+      lease_expires_at: null,
+      worker_id: null,
+      progress_detail: null,
       last_error: cleanError || "Autonomous pipeline stopped safely.",
       heartbeat_at: now,
       updated_at: now,
@@ -507,6 +942,21 @@ export async function failAutopilotStageLease(
     if (refreshed) return refreshed;
     throw new AutopilotPersistenceError("Autopilot run could not be updated.");
   }
+
+  await session.client
+    .from("autopilot_jobs")
+    .update({
+      status: "failed",
+      lease_token: null,
+      lease_expires_at: null,
+      worker_id: null,
+      outcome_note: cleanError,
+      completed_at: now,
+      updated_at: now,
+    })
+    .eq("workspace_id", session.workspace.id)
+    .eq("conversation_id", input.conversationId)
+    .in("status", ["queued", "leased"]);
 
   return mapAutopilotRow(data as Row);
 }
@@ -538,6 +988,9 @@ export async function cancelAutopilotRun(
       status: nextStatus,
       stage_lease_token: null,
       stage_started_at: null,
+      lease_expires_at: null,
+      worker_id: null,
+      progress_detail: null,
       heartbeat_at: now,
       updated_at: now,
     })
@@ -548,6 +1001,22 @@ export async function cancelAutopilotRun(
 
   if (error || !data) {
     throw new AutopilotPersistenceError("Ano could not pause or cancel the autopilot run.");
+  }
+
+  if (nextStatus === "paused" || nextStatus === "cancelled") {
+    await session.client
+      .from("autopilot_jobs")
+      .update({
+        status: nextStatus,
+        lease_token: null,
+        lease_expires_at: null,
+        worker_id: null,
+        completed_at: now,
+        updated_at: now,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("conversation_id", conversationId)
+      .in("status", ["queued", "leased"]);
   }
 
   await session.client.from("audit_logs").insert({
@@ -587,7 +1056,12 @@ export async function scheduleAutopilotPartialRerun(
     input.stagesToRerun,
     input.completedStageSummary,
   );
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const progressDetail =
+    next.nextStage === "done" || next.nextStatus !== "running"
+      ? null
+      : describeAutopilotStageProgress(next.nextStage);
 
   const { data, error } = await session.client
     .from("autopilot_runs")
@@ -599,6 +1073,9 @@ export async function scheduleAutopilotPartialRerun(
       warnings_json: next.warnings,
       stage_lease_token: null,
       stage_started_at: null,
+      lease_expires_at: null,
+      worker_id: null,
+      progress_detail: progressDetail,
       last_error: null,
       heartbeat_at: now,
       started_at: next.nextStatus === "running" ? now : existing.started_at ?? now,
@@ -616,6 +1093,19 @@ export async function scheduleAutopilotPartialRerun(
     );
   }
 
+  let savedRow = data as Row;
+  if (next.nextStatus === "running") {
+    const requestedBy = String(existing.authorized_by ?? existing.created_by ?? session.actorId);
+    const activeJobId = await enqueueOrReuseAutopilotJob(session, {
+      runId: parsedExisting.id,
+      conversationId,
+      requestedBy,
+      fromStage: next.nextStage === "done" ? null : next.nextStage,
+      nowMs,
+    });
+    savedRow = { ...savedRow, active_job_id: activeJobId };
+  }
+
   await session.client.from("audit_logs").insert({
     workspace_id: session.workspace.id,
     actor_id: session.actorId,
@@ -629,7 +1119,185 @@ export async function scheduleAutopilotPartialRerun(
     },
   });
 
-  return mapAutopilotRow(data as Row);
+  return mapAutopilotRow(savedRow);
+}
+
+export async function recoverStaleAutopilotRuns(
+  session: WorkspaceSession,
+  options?: {
+    conversationId?: string;
+    now?: number;
+    maxRecoveries?: number;
+  },
+): Promise<{
+  recoveredConversationIds: string[];
+  pausedConversationIds: string[];
+}> {
+  if (session.kind === "demo") {
+    return { recoveredConversationIds: [], pausedConversationIds: [] };
+  }
+
+  const nowMs = options?.now ?? Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const maxRecoveries = Math.max(1, options?.maxRecoveries ?? AUTOPILOT_MAX_RECOVERIES);
+
+  let query = session.client
+    .from("autopilot_runs")
+    .select("*")
+    .eq("workspace_id", session.workspace.id)
+    .eq("status", "running");
+
+  if (options?.conversationId) {
+    query = query.eq("conversation_id", options.conversationId);
+  }
+
+  const { data: rows, error } = await query;
+  if (error) {
+    throw new AutopilotPersistenceError(
+      "Ano could not inspect interrupted pipeline runs for recovery.",
+    );
+  }
+
+  const recoveredConversationIds: string[] = [];
+  const pausedConversationIds: string[] = [];
+
+  for (const rawRow of (rows ?? []) as Row[]) {
+    const convId = String(rawRow.conversation_id);
+    if (isLeaseActive(rawRow, nowMs)) {
+      continue;
+    }
+
+    const updatedMs = new Date(String(rawRow.heartbeat_at ?? rawRow.updated_at)).getTime();
+    const isUnleasedStale =
+      !rawRow.stage_lease_token &&
+      (!rawRow.active_job_id ||
+        (Number.isFinite(updatedMs) && nowMs - updatedMs >= AUTOPILOT_STAGE_LEASE_TIMEOUT_MS));
+
+    if (!rawRow.stage_lease_token && !isUnleasedStale) {
+      continue;
+    }
+
+    if (String(rawRow.current_stage) === "market_research") {
+      await readEvidenceResearchView(session, convId).catch(() => null);
+    }
+
+    const runId = String(rawRow.id);
+    const currentRecoveries =
+      typeof rawRow.recovery_count === "number" && Number.isFinite(rawRow.recovery_count)
+        ? Math.max(0, Math.floor(rawRow.recovery_count))
+        : 0;
+    const currentStage = parseExecutableStage(rawRow.current_stage) ?? "brief_and_plan";
+
+    if (rawRow.stage_lease_token && currentRecoveries >= maxRecoveries) {
+      const pauseMessage =
+        "Autopilot paused safely after repeated interruptions. Completed stages are saved and ready to resume.";
+      const { data: paused } = await session.client
+        .from("autopilot_runs")
+        .update({
+          status: "paused",
+          stage_lease_token: null,
+          stage_started_at: null,
+          lease_expires_at: null,
+          worker_id: null,
+          progress_detail: null,
+          last_error: pauseMessage,
+          heartbeat_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq("workspace_id", session.workspace.id)
+        .eq("id", runId)
+        .eq("status", "running")
+        .eq("stage_lease_token", String(rawRow.stage_lease_token))
+        .select("id")
+        .maybeSingle();
+
+      if (paused) {
+        await session.client
+          .from("autopilot_jobs")
+          .update({
+            status: "paused",
+            lease_token: null,
+            lease_expires_at: null,
+            worker_id: null,
+            outcome_note: pauseMessage,
+            completed_at: nowIso,
+            updated_at: nowIso,
+          })
+          .eq("workspace_id", session.workspace.id)
+          .eq("conversation_id", convId)
+          .in("status", ["queued", "leased"]);
+
+        await session.client.from("audit_logs").insert({
+          workspace_id: session.workspace.id,
+          actor_id: session.actorId,
+          event_type: "autopilot.paused_max_recoveries",
+          outcome: "paused",
+          details_json: {
+            conversation_id: convId,
+            stage: currentStage,
+            recovery_count: currentRecoveries,
+          },
+        });
+        pausedConversationIds.push(convId);
+      }
+      continue;
+    }
+
+    const nextRecoveryCount = rawRow.stage_lease_token
+      ? currentRecoveries + 1
+      : currentRecoveries;
+    const progressDetail = describeAutopilotStageProgress(currentStage, {
+      recovered: Boolean(rawRow.stage_lease_token),
+    });
+
+    let recoverQuery = session.client
+      .from("autopilot_runs")
+      .update({
+        stage_lease_token: null,
+        stage_started_at: null,
+        lease_expires_at: null,
+        worker_id: null,
+        recovery_count: nextRecoveryCount,
+        progress_detail: progressDetail,
+        heartbeat_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("workspace_id", session.workspace.id)
+      .eq("id", runId)
+      .eq("status", "running");
+
+    if (rawRow.stage_lease_token) {
+      recoverQuery = recoverQuery.eq("stage_lease_token", String(rawRow.stage_lease_token));
+    } else {
+      recoverQuery = recoverQuery.is("stage_lease_token", null);
+    }
+
+    const { data: recovered } = await recoverQuery.select("id").maybeSingle();
+    if (!recovered) continue;
+
+    const requestedBy = String(rawRow.authorized_by ?? rawRow.created_by ?? session.actorId);
+    await enqueueOrReuseAutopilotJob(session, {
+      runId,
+      conversationId: convId,
+      requestedBy,
+      nowMs,
+    });
+
+    await session.client.from("audit_logs").insert({
+      workspace_id: session.workspace.id,
+      actor_id: session.actorId,
+      event_type: "autopilot.stale_lease_recovered",
+      outcome: "queued",
+      details_json: {
+        conversation_id: convId,
+        stage: currentStage,
+        recovery_count: nextRecoveryCount,
+      },
+    });
+    recoveredConversationIds.push(convId);
+  }
+
+  return { recoveredConversationIds, pausedConversationIds };
 }
 
 export async function recordAutopilotStageSummary(

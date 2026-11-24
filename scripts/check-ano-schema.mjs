@@ -21,6 +21,7 @@ const requiredTables = [
   "outreach_template_packs",
   "conversation_product_sources",
   "autopilot_runs",
+  "autopilot_jobs",
   "workspace_invites",
 ];
 const requiredMigrations = [
@@ -52,6 +53,7 @@ const requiredMigrations = [
   "20261124_000026_autopilot_runs",
   "20261124_000027_workspace_invite_links",
   "20261124_000028_autopilot_explicit_authority",
+  "20261124_000029_durable_autopilot_jobs",
 ];
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
@@ -209,8 +211,14 @@ try {
     [["authority_scope_json", "authorized_at", "authorized_by"]],
   );
   const phase13bAuthorityReady = phase13bAuthorityColumns.rows.length === 3;
+  const phase13cDurableColumns = await client.query(
+    "select column_name from information_schema.columns where table_schema = 'public' and table_name = 'autopilot_runs' and column_name = any($1::text[])",
+    [["lease_expires_at", "worker_id", "active_job_id", "recovery_count", "progress_detail"]],
+  );
+  const phase13cDurableJobsReady =
+    present.has("autopilot_jobs") && phase13cDurableColumns.rows.length === 5;
   console.log(JSON.stringify({
-    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady && phase13bAuthorityReady,
+    migrationReady: missing.length === 0 && missingMigrations.length === 0 && missingCheckpoints.length === 0 && attemptConstraintReady && searxngProviderReady && deepResearchLimitsReady && runEventUpdateReady && durableLeasesReady && recommendationReportsReady && phaseDCompanyDiscoveryReady && phaseEPeoplePlaybooksReady && phaseFOutreachProposalsReady && phase9bTemplatesReady && internalUsageLedgerReady && phase10bProductIntakeReady && phase10cAutopilotReady && phase11WorkspaceInvitesReady && phase13bAuthorityReady && phase13cDurableJobsReady,
     present: present.size,
     required: requiredTables.length,
     missing,
@@ -231,8 +239,9 @@ try {
     phase10cAutopilotReady,
     phase11WorkspaceInvitesReady,
     phase13bAuthorityReady,
+    phase13cDurableJobsReady,
   }));
-  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady || !phase13bAuthorityReady) process.exitCode = 1;
+  if (missing.length > 0 || missingMigrations.length > 0 || missingCheckpoints.length > 0 || !attemptConstraintReady || !searxngProviderReady || !deepResearchLimitsReady || !runEventUpdateReady || !durableLeasesReady || !recommendationReportsReady || !phaseDCompanyDiscoveryReady || !phaseEPeoplePlaybooksReady || !phaseFOutreachProposalsReady || !phase9bTemplatesReady || !internalUsageLedgerReady || !phase10bProductIntakeReady || !phase10cAutopilotReady || !phase11WorkspaceInvitesReady || !phase13bAuthorityReady || !phase13cDurableJobsReady) process.exitCode = 1;
 } finally {
   await client.end().catch(() => undefined);
 }

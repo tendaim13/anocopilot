@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
 import { continueResearchConversation, ResearchConversationServiceError } from "@/server/domain/research-conversation-service";
+import { scheduleAutopilotBackgroundExecution } from "@/server/jobs/autopilot-worker";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
 import { runWithInternalUsageContext } from "@/server/telemetry/internal-api-usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function idempotencyKey(request: Request) {
   const supplied = request.headers.get("x-ano-idempotency-key");
@@ -20,11 +22,16 @@ export async function POST(request: Request, context: { params: Promise<{ conver
   try {
     const session = await requireWorkspaceSession();
     const { conversationId } = await context.params;
-    return NextResponse.json(
-      await runWithInternalUsageContext({ session, conversationId }, () =>
-        continueResearchConversation(session, conversationId, message, idempotencyKey(request)),
-      ),
+    const result = await runWithInternalUsageContext({ session, conversationId }, () =>
+      continueResearchConversation(session, conversationId, message, idempotencyKey(request)),
     );
+    if (
+      result.autopilotRun?.status === "running" &&
+      !result.autopilotRun.stageInFlight
+    ) {
+      await scheduleAutopilotBackgroundExecution(session, conversationId);
+    }
+    return NextResponse.json(result);
   } catch (error) {
     if (error instanceof WorkspaceSessionError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof ResearchConversationServiceError || error instanceof ResearchConversationPersistenceError) return NextResponse.json({ error: error.message, code: "RESEARCH_CONVERSATION_UNAVAILABLE" }, { status: 422 });

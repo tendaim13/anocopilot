@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
 
-import { autopilotStartRequestSchema } from "@/lib/ano/autopilot";
+import { autopilotStartRequestSchema, formatAutopilotOutcomeMessage } from "@/lib/ano/autopilot";
 import { requireWorkspaceSession, WorkspaceSessionError } from "@/server/auth/workspace-session";
 import {
   AutopilotOrchestratorError,
   startAutopilotForConversation,
 } from "@/server/domain/autopilot-orchestrator-service";
 import { ResearchConversationServiceError } from "@/server/domain/research-conversation-service";
+import { scheduleAutopilotBackgroundExecution } from "@/server/jobs/autopilot-worker";
 import { AutopilotPersistenceError } from "@/server/persistence/autopilot-store";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function errorResponse(error: unknown) {
   if (error instanceof WorkspaceSessionError) {
@@ -26,7 +28,10 @@ function errorResponse(error: unknown) {
     const code =
       "code" in error && typeof error.code === "string" ? error.code : "AUTOPILOT_UNAVAILABLE";
     const status = code === "AUTH_REQUIRED" ? 401 : 422;
-    return NextResponse.json({ error: error.message, code }, { status });
+    return NextResponse.json(
+      { error: formatAutopilotOutcomeMessage(error.message, { kind: "error" }), code },
+      { status },
+    );
   }
   console.error(
     "Ano autopilot start route failed",
@@ -64,6 +69,9 @@ export async function POST(
       explicitApproval: parsed.data.explicitApproval,
       authorityScope: parsed.data.authorityScope,
     });
+    if (autopilotRun.status === "running") {
+      await scheduleAutopilotBackgroundExecution(session, conversationId);
+    }
     return NextResponse.json({ autopilotRun });
   } catch (error) {
     return errorResponse(error);

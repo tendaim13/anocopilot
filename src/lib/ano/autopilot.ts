@@ -9,7 +9,11 @@ import type {
 } from "./market-synthesis";
 import type { OutreachTemplatePackView } from "./outreach-templates";
 import type { ContactCandidateView } from "./people-playbooks";
-import type { ResearchBrief } from "./research-conversation";
+import {
+  formatDisplayErrorMessage,
+  maskVendorNamesForDisplay,
+  type ResearchBrief,
+} from "./research-conversation";
 
 export const AUTOPILOT_STAGES = [
   "brief_and_plan",
@@ -86,6 +90,43 @@ export function resolveAutopilotAuthorityScope(
   return { ...DEFAULT_AUTOPILOT_AUTHORITY_SCOPE };
 }
 
+export const autopilotJobStatusSchema = z.enum([
+  "queued",
+  "leased",
+  "completed",
+  "paused",
+  "cancelled",
+  "failed",
+]);
+export type AutopilotJobStatus = z.infer<typeof autopilotJobStatusSchema>;
+
+export const autopilotJobCheckpointSchema = z.object({
+  currentStage: autopilotStageSchema.optional(),
+  waveNumber: z.number().int().min(0).optional(),
+  maxWaves: z.number().int().min(1).optional(),
+  savedSources: z.number().int().min(0).optional(),
+  progressDetail: z.string().trim().max(320).optional(),
+  recovered: z.boolean().optional(),
+});
+export type AutopilotJobCheckpoint = z.infer<typeof autopilotJobCheckpointSchema>;
+
+export const autopilotJobViewSchema = z.object({
+  id: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  autopilotRunId: z.string().uuid(),
+  status: autopilotJobStatusSchema,
+  fromStage: autopilotExecutableStageSchema.nullable().optional(),
+  attemptCount: z.number().int().nonnegative(),
+  maxAttempts: z.number().int().positive(),
+  leaseExpiresAt: z.string().datetime().nullable().optional(),
+  heartbeatAt: z.string().datetime().nullable().optional(),
+  checkpoint: autopilotJobCheckpointSchema.default({}),
+  outcomeNote: z.string().trim().max(400).nullable().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type AutopilotJobView = z.infer<typeof autopilotJobViewSchema>;
+
 export const autopilotRunViewSchema = z.object({
   id: z.string().uuid(),
   conversationId: z.string().uuid(),
@@ -98,6 +139,10 @@ export const autopilotRunViewSchema = z.object({
   warnings: z.array(z.string().trim().min(1).max(400)).max(20).default([]),
   lastError: z.string().trim().max(600).nullable(),
   stageInFlight: z.boolean().default(false),
+  leaseExpiresAt: z.string().datetime().nullable().optional(),
+  activeJobId: z.string().uuid().nullable().optional(),
+  recoveryCount: z.number().int().nonnegative().optional(),
+  progressDetail: z.string().trim().max(320).nullable().optional(),
   authorityScope: autopilotAuthorityScopeSchema.optional(),
   authorizedAt: z.string().datetime().nullable().optional(),
   authorizedBy: z.string().uuid().nullable().optional(),
@@ -210,6 +255,110 @@ const INTERNAL_CREDIT_VALUE_PATTERN =
 
 function scrubInternalTelemetryText(value: string): string {
   return value.replace(INTERNAL_CREDIT_VALUE_PATTERN, "").replace(/\s{2,}/g, " ").trim();
+}
+
+const TECHNICAL_ERROR_PATTERN =
+  /\b(?:TypeError|SyntaxError|ReferenceError|RangeError|Error:|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|EPIPE|UND_ERR_[A-Z_]+|fetch failed|socket hang up|postgres|pgrst\d*|\bsql\b|stage_lease_token|lease_token|autopilot_runs|autopilot_jobs|check_internal_usage_budget|brief_and_plan|market_research|synthesis_and_lock|company_discovery|people_and_emails|outreach_templates)\b|\bHTTP\s*[45]\d{2}\b|\bstatus\s*(?:code)?\s*[45]\d{2}\b|\bat\s+[A-Za-z0-9_$.<>]+\s*\([^)]+\)|\b(?:gemini-[0-9a-z.-]+|qwen[0-9a-z.:-]+|claude-[0-9a-z.-]+|anthropic\.[0-9a-z.:-]+)\b|\b[A-Z][A-Z0-9_]{2,}_(?:KEY|TOKEN|SECRET|URL|LIMIT|ID|MODE)\b/i;
+
+const TRANSIENT_NETWORK_OR_QUOTA_PATTERN =
+  /\b(?:timed?\s*out|timeout|ETIMEDOUT|ECONNRESET|socket hang up|fetch failed|429|503|rate limit|high demand|overloaded|quota)\b/i;
+
+const RAW_STAGE_DESCRIPTIONS: Record<AutopilotExecutableStage, string> = {
+  brief_and_plan: "analyzing your product brief",
+  market_research: "market research",
+  synthesis_and_lock: "target market selection",
+  company_discovery: "company matching",
+  people_and_emails: "decision-maker and email lookup",
+  outreach_templates: "outreach drafting",
+};
+
+export function describeAutopilotStageProgress(
+  stage: AutopilotExecutableStage,
+  detail?: {
+    wave?: number;
+    maxWaves?: number;
+    savedSources?: number;
+    recovered?: boolean;
+  },
+): string {
+  const meta = AUTOPILOT_STAGE_METADATA.find((item) => item.stage === stage);
+  const baseHint = meta?.activeHint ?? "Working on the next research milestone…";
+
+  if (detail?.recovered) {
+    return `Continuing from saved progress: ${baseHint}`;
+  }
+
+  if (stage === "market_research" && detail?.wave && detail.wave > 0) {
+    const waveText = detail.maxWaves
+      ? `wave ${detail.wave} of ${detail.maxWaves}`
+      : `wave ${detail.wave}`;
+    const sourceText =
+      typeof detail.savedSources === "number" && detail.savedSources > 0
+        ? ` · ${detail.savedSources} source${detail.savedSources === 1 ? "" : "s"} saved`
+        : "";
+    return `Collecting public market evidence (${waveText}${sourceText})…`;
+  }
+
+  return baseHint;
+}
+
+export function formatAutopilotOutcomeMessage(
+  raw: unknown,
+  options?: {
+    stage?: AutopilotExecutableStage;
+    kind?: "error" | "warning" | "progress";
+    fallback?: string;
+  },
+): string {
+  const stageLabel = options?.stage ? RAW_STAGE_DESCRIPTIONS[options.stage] : "this stage";
+  const kind = options?.kind ?? "error";
+  const rawMessage =
+    raw instanceof Error
+      ? raw.message
+      : typeof raw === "string"
+        ? raw
+        : "";
+  const normalized = rawMessage.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    if (options?.fallback) return options.fallback;
+    if (kind === "warning") {
+      return `Some details during ${stageLabel} were unavailable; completed work is saved.`;
+    }
+    if (kind === "progress" && options?.stage) {
+      return describeAutopilotStageProgress(options.stage);
+    }
+    return `Ano paused safely during ${stageLabel}. Completed stages are saved and ready to resume.`;
+  }
+
+  if (TECHNICAL_ERROR_PATTERN.test(normalized)) {
+    if (options?.fallback) return options.fallback;
+    if (kind === "warning") {
+      return "External lookup was temporarily unavailable; saved progress is preserved.";
+    }
+    if (TRANSIENT_NETWORK_OR_QUOTA_PATTERN.test(normalized)) {
+      return `Ano paused during ${stageLabel} because an external source took too long to respond. Completed stages are saved and ready to resume.`;
+    }
+    return `Ano paused safely during ${stageLabel}. Completed stages are saved and ready to resume.`;
+  }
+
+  const sanitized = scrubInternalTelemetryText(
+    maskVendorNamesForDisplay(
+      formatDisplayErrorMessage(
+        normalized,
+        options?.fallback ??
+          `Ano paused safely during ${stageLabel}. Completed stages are saved and ready to resume.`,
+      ),
+    ),
+  );
+
+  if (!sanitized) {
+    return (
+      options?.fallback ??
+      `Ano paused safely during ${stageLabel}. Completed stages are saved and ready to resume.`
+    );
+  }
+  return sanitized.slice(0, 400);
 }
 
 export function sanitizeAutopilotStageSummariesForChat(run: AutopilotRunView): string {

@@ -2,6 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "functions": {
+    "src/app/api/v1/conversations/[conversationId]/route.ts": {
+      "maxDuration": 300
+    },
     "src/app/api/v1/conversations/[conversationId]/research-run/start/route.ts": {
       "maxDuration": 300
     },
@@ -18,9 +21,18 @@
       "maxDuration": 120
     },
     "src/app/api/v1/conversations/[conversationId]/messages/route.ts": {
-      "maxDuration": 120
+      "maxDuration": 300
+    },
+    "src/app/api/v1/conversations/[conversationId]/autopilot/start/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/v1/conversations/[conversationId]/autopilot/status/route.ts": {
+      "maxDuration": 300
     },
     "src/app/api/v1/conversations/[conversationId]/autopilot/step/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/internal/jobs/autopilot/route.ts": {
       "maxDuration": 300
     }
   },

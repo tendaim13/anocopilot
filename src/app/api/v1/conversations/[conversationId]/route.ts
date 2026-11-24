@@ -39,10 +39,12 @@ import { OutreachTemplatePersistenceError } from "@/server/persistence/outreach-
 import { PeoplePlaybookPersistenceError } from "@/server/persistence/people-playbook-store";
 import { ResearchConversationPersistenceError } from "@/server/persistence/research-conversation-store";
 import { TargetAccountDiscoveryPersistenceError } from "@/server/persistence/target-account-discovery-store";
+import { ensureAutopilotWorkerProgress } from "@/server/jobs/autopilot-worker";
 import { searxngConfiguration } from "@/server/research/searxng-provider";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function errorResponse(error: unknown) {
   if (error instanceof WorkspaceSessionError) {
@@ -106,6 +108,10 @@ export async function GET(
       })),
       getAutopilotRunForConversation(session, conversationId).catch(() => null),
     ]);
+    const activeAutopilotRun =
+      autopilotRun?.status === "running" && !autopilotRun.stageInFlight
+        ? await ensureAutopilotWorkerProgress(session, conversationId).catch(() => autopilotRun)
+        : autopilotRun;
     const provider = searxngConfiguration();
     const messageParts = buildConversationMessageParts(
       conversation,
@@ -128,7 +134,7 @@ export async function GET(
       outreachExecution: outreachState.outreachExecution,
       mercury: outreachState.mercury,
       templatePack: templateState.templatePack,
-      autopilotRun,
+      autopilotRun: activeAutopilotRun ?? autopilotRun,
       messageParts,
     });
   } catch (error) {
